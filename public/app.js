@@ -31,6 +31,13 @@ const store = {
   mentionItems: [], // 当前补全列表
   mentionAt: -1, // 补全列表当前高亮项
   mentionRange: null, // 正在补全的 @token 在输入框里的 [start, end)
+  commands: new Map(), // directory -> [{ name, description, panel }]服务端真实命令(按工程缓存)
+  cmdItems: [], // 命令面板当前展示项
+  cmdAt: -1, // 命令面板当前高亮项
+  cmdRange: null, // 正在补全的 /token 在输入框里的 [start, end)
+  history: new Map(), // sessionID -> [已发送文本](↑/↓ 取用,每会话独立)
+  histAt: -1, // 历史游标;-1 = 不在历史里(停在草稿)
+  histDraft: '', // 进入历史前暂存的草稿
 };
 
 const $ = (s) => document.querySelector(s);
@@ -967,6 +974,9 @@ function clearSelection() {
   $('#chatMeta').textContent = '';
   clearAttachments();
   closeMentions();
+  closeCommands();
+  store.histAt = -1;
+  store.histDraft = '';
   store.mentionHits.clear();
   renderAsks();
   renderInbox();
@@ -1166,6 +1176,10 @@ async function selectSession(id) {
   store.forceBottom = !rs;
   clearAttachments(); // 待发送附件属于上一个会话,不带过去(H 组 6)
   closeMentions();
+  closeCommands();
+  // 输入历史是每会话独立的(I 组):切走后不再把游标留在上一条
+  store.histAt = -1;
+  store.histDraft = '';
   store.mentionHits.clear();
   renderSessions();
   const s = store.sessions.get(id);
@@ -2796,6 +2810,8 @@ function mentionKey(e) {
     return true;
   }
   if (e.key === 'Escape') {
+    // 标记「已消费」:全局 Esc 处理器据此不再往下走(否则会顺手把回合中断掉)
+    if (e.preventDefault) e.preventDefault();
     closeMentions();
     return true;
   }
@@ -2831,11 +2847,26 @@ function setupAttachments() {
       if (it) acceptMention(Number(it.dataset.i));
     });
   }
+  const cmdBox = $('#cmds');
+  if (cmdBox) {
+    cmdBox.addEventListener('click', (e) => {
+      const it = e.target.closest('.mention-item');
+      if (it) acceptCommand(Number(it.dataset.i));
+    });
+  }
   if (inp) {
     inp.addEventListener('input', () => {
       renderAttachments();
       clearTimeout(mentionTimer);
-      mentionTimer = setTimeout(openMentions, 120);
+      // 行首敲 / 走命令面板,否则才看 @ 文件补全
+      mentionTimer = setTimeout(() => {
+        if (cmdQuery()) {
+          closeMentions();
+          openCommands();
+        } else {
+          openMentions();
+        }
+      }, 120);
     });
     // 粘贴:截图 / 复制的文件直接进待发送列表(普通文本照旧)
     inp.addEventListener('paste', (e) => {
@@ -2858,6 +2889,464 @@ function setupAttachments() {
   }
 }
 
+/* ================= I 组:命令面板(与 TUI 的 / 命令一致)与 TUI 键位 ================= */
+
+const CMD_LIMIT = 12;
+const HISTORY_LIMIT = 50;
+
+// TUI 里是内置动作、但服务端没有对应 command 接口的,由面板映射到已有动作/接口。
+// 与服务端命令同名时以服务端为准(见 mergedCommands)。
+const PANEL_COMMANDS = [
+  { name: 'new', description: '新建会话', run: () => openNew() },
+  { name: 'compact', description: '压缩当前会话的上下文', run: (sid) => runCompact(sid) },
+  { name: 'interrupt', description: '中断当前正在执行的回合', run: () => interrupt() },
+  { name: 'undo', description: '撤销到最后一条用户消息(含该轮文件改动)', run: (sid) => runUndo(sid) },
+  { name: 'redo', description: '重做:清除已暂存的撤销', run: (sid) => runRedo(sid) },
+  { name: 'rename', description: '重命名当前会话', run: (sid) => onAction('rename', sid) },
+  { name: 'delete', description: '删除当前会话(需确认)', run: (sid) => onAction('del', sid) },
+  { name: 'export', description: '导出当前会话为 JSON', run: () => openExport() },
+  { name: 'archive', description: '归档 / 取消归档当前会话', run: (sid) => toggleArchive(sid) },
+  { name: 'tui', description: '在 TUI 中打开当前会话', run: () => openTui() },
+  { name: 'copy', description: '复制「在 TUI 打开」的命令', run: () => copyTui() },
+  { name: 'sessions', description: '跳到会话列表搜索框', run: () => focusEl('#search') },
+  { name: 'models', description: '跳到模型选择', run: () => focusEl('#modelSel') },
+  { name: 'agents', description: '跳到智能体选择', run: () => focusEl('#agentSel') },
+  { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
+  { name: 'help', description: '命令与快捷键', run: () => openHelp() },
+];
+
+const HELP_KEYS = [
+  { sec: '命令' },
+  { k: '/', d: '输入框里敲 / 打开命令面板' },
+  { k: 'Ctrl+P', d: '随时打开命令面板(对应 TUI command.palette.show)' },
+  { k: '↑ / ↓', d: '面板里移动;光标在首行/末行时取输入历史' },
+  { k: 'Enter / Tab', d: '选中面板项' },
+  { sec: '会话' },
+  { k: 'Esc', d: '关命令面板 → 关 @ 补全 → 中断当前回合(对应 TUI session.interrupt)' },
+  { k: 'Shift+Tab', d: '切换到下一个智能体(对应 TUI agent.cycle)' },
+  { k: 'Enter', d: '发送(Shift+Enter 换行)' },
+  { k: '@', d: '补全工程内的文件' },
+];
+
+function focusEl(sel) {
+  const el = $(sel);
+  if (!el) return;
+  if (el.focus) el.focus();
+  if (el.select) el.select();
+}
+
+function clearInput() {
+  const el = $('#input');
+  if (el) el.value = '';
+  closeCommands();
+  closeMentions();
+  renderAttachments();
+}
+
+function openHelp() {
+  const box = $('#helpKeys');
+  if (box) {
+    // 小节标题自己跨满两列;不要再补空格子,否则后面每一行都会整体错一格
+    box.innerHTML = HELP_KEYS.map((r) =>
+      r.sec
+        ? '<div class="keys-sec">' + esc(r.sec) + '</div>'
+        : '<kbd>' + esc(r.k) + '</kbd><div>' + esc(r.d) + '</div>'
+    ).join('');
+  }
+  openDlg($('#dlgHelp'));
+}
+
+function commandsOpen() {
+  const b = $('#cmds');
+  return !!b && !b.hidden;
+}
+
+function mentionsOpen() {
+  const b = $('#mentions');
+  return !!b && !b.hidden;
+}
+
+// 光标前最后一个 /token(必须在行首)→ 它在输入框里的 [start, end) 与查询词。
+// 嵌套命令名里本来就带 /(如 team/review),所以查询词允许再出现 /。
+function cmdQuery() {
+  const el = $('#input');
+  if (!el) return null;
+  const caret = el.selectionStart == null ? el.value.length : el.selectionStart;
+  const before = el.value.slice(0, caret);
+  const m = /(^|\n)\/([^\s]{0,120})$/.exec(before);
+  if (!m) return null;
+  return { start: caret - m[2].length - 1, end: caret, query: m[2] };
+}
+
+function closeCommands() {
+  const box = $('#cmds');
+  if (box) {
+    box.hidden = true;
+    box.innerHTML = '';
+  }
+  store.cmdItems = [];
+  store.cmdAt = -1;
+  store.cmdRange = null;
+}
+
+// 服务端命令 + 面板动作;同名时服务端优先
+function mergedCommands(dir) {
+  const srv = (store.commands.get(dir) || []).map((c) => ({
+    name: c.name,
+    description: c.description || '',
+    panel: false,
+  }));
+  const taken = new Set(srv.map((c) => c.name));
+  const panel = PANEL_COMMANDS.filter((c) => !taken.has(c.name)).map((c) => ({
+    name: c.name,
+    description: c.description,
+    panel: true,
+  }));
+  return srv.concat(panel);
+}
+
+// 只拉一次,按工程目录缓存(命令是随工程走的)
+async function loadCommands(dir) {
+  if (!dir) return [];
+  if (store.commands.has(dir)) return store.commands.get(dir);
+  let j = null;
+  try {
+    j = await api('/api/command?' + new URLSearchParams({ 'location[directory]': dir }).toString());
+  } catch (_) {
+    return [];
+  }
+  const list = j && Array.isArray(j.data) ? j.data : [];
+  store.commands.set(dir, list);
+  return list;
+}
+
+function renderCommands() {
+  const box = $('#cmds');
+  if (!box) return;
+  if (!store.cmdItems.length) {
+    box.innerHTML = '<div class="mention-empty">没有匹配的命令</div>';
+    box.hidden = false;
+    return;
+  }
+  box.innerHTML = store.cmdItems
+    .map((it, i) =>
+      '<div class="cmd-item mention-item' + (i === store.cmdAt ? ' active' : '') + '" role="option" data-i="' + i + '">' +
+      '<span class="mi-path"><span class="mi-name">/' + esc(it.name) + '</span></span>' +
+      (it.description ? '<span class="mi-dir">' + esc(it.description) + '</span>' : '') +
+      (it.panel ? '<span class="cmd-tag">面板</span>' : '') +
+      '</div>'
+    )
+    .join('');
+  box.hidden = false;
+  const act = box.querySelector('.mention-item.active');
+  if (act && act.scrollIntoView) {
+    try {
+      act.scrollIntoView({ block: 'nearest' });
+    } catch (_) {}
+  }
+}
+
+let cmdTimer = null;
+
+// force=true 用于 Ctrl+P(输入框非空也开)
+async function openCommands(opts) {
+  opts = opts || {};
+  const el = $('#input');
+  const sid = store.selected;
+  if (!el || !sid) return closeCommands();
+  const tok = cmdQuery();
+  if (!tok && !opts.force) return closeCommands();
+  const dir = sessionDir(sid);
+  await loadCommands(dir);
+  if (store.selected !== sid) return; // 期间切了会话
+  const caret = el.selectionStart == null ? el.value.length : el.selectionStart;
+  if (tok) {
+    const now = cmdQuery();
+    if (!now || now.start !== tok.start || now.end !== caret) return; // 期间又敲了键,等下一次
+  }
+  const range = tok ? { start: tok.start, end: tok.end } : { start: caret, end: caret };
+  const q = (tok ? tok.query : '').toLowerCase();
+  const hits = mergedCommands(dir).filter((c) => !q || c.name.toLowerCase().includes(q));
+  // 前缀命中的排前面,其余按名字
+  hits.sort((a, b) => {
+    const pa = a.name.toLowerCase().startsWith(q) ? 0 : 1;
+    const pb = b.name.toLowerCase().startsWith(q) ? 0 : 1;
+    return pa - pb || a.name.localeCompare(b.name);
+  });
+  store.cmdItems = hits.slice(0, CMD_LIMIT);
+  store.cmdRange = range;
+  store.cmdAt = store.cmdItems.length ? 0 : -1;
+  renderCommands();
+}
+
+function findCommand(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return null;
+  return mergedCommands(sessionDir(store.selected)).find((c) => c.name.toLowerCase() === n) || null;
+}
+
+function acceptCommand(i) {
+  const idx = i == null ? store.cmdAt : i;
+  const it = store.cmdItems[idx];
+  const range = store.cmdRange;
+  const el = $('#input');
+  if (!it || !range || !el) {
+    closeCommands();
+    return null;
+  }
+  const inserted = '/' + it.name + ' ';
+  el.value = el.value.slice(0, range.start) + inserted + el.value.slice(range.end);
+  const caret = range.start + inserted.length;
+  if (el.setSelectionRange) el.setSelectionRange(caret, caret);
+  closeCommands();
+  el.focus();
+  renderAttachments();
+  return it;
+}
+
+// 面板开着时,把方向键/Enter/Tab/Esc 抢过来;返回 true 表示已消费
+function commandKey(e) {
+  const box = $('#cmds');
+  if (!box || box.hidden || !store.cmdItems.length) return false;
+  const n = store.cmdItems.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    store.cmdAt = (store.cmdAt + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    renderCommands();
+    return true;
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    if (e.preventDefault) e.preventDefault();
+    acceptCommand();
+    return true;
+  }
+  if (e.key === 'Escape') {
+    if (e.preventDefault) e.preventDefault();
+    closeCommands();
+    return true;
+  }
+  return false;
+}
+
+/* ---------------------------- 输入历史(↑/↓) ---------------------------- */
+
+function pushHistory(sid, text) {
+  const t = String(text || '');
+  if (!sid || !t) return;
+  const arr = store.history.get(sid) || [];
+  if (arr[arr.length - 1] !== t) arr.push(t); // 连续重复只记一次
+  while (arr.length > HISTORY_LIMIT) arr.shift();
+  store.history.set(sid, arr);
+  store.histAt = -1;
+  store.histDraft = '';
+}
+
+// 只在光标处于首行(↑)/末行(↓)时接管;否则让光标在文本里照常移动
+function historyKey(e) {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return false;
+  const el = $('#input');
+  if (!el) return false;
+  const arr = store.history.get(store.selected) || [];
+  if (!arr.length) return false;
+  const up = e.key === 'ArrowUp';
+  if (!up && store.histAt < 0) return false;
+  const caret = el.selectionStart == null ? el.value.length : el.selectionStart;
+  const atTop = el.value.slice(0, caret).indexOf('\n') < 0;
+  const atBottom = el.value.slice(caret).indexOf('\n') < 0;
+  if (up ? !atTop : !atBottom) return false;
+
+  if (up && store.histAt < 0) {
+    store.histDraft = el.value; // 记住草稿,↓ 能退回来
+    store.histAt = 0;
+  } else {
+    const next = up ? store.histAt + 1 : store.histAt - 1;
+    if (next >= arr.length) return true; // 已到最旧一条:吞掉按键,不动
+    store.histAt = next;
+  }
+  const text = store.histAt < 0 ? store.histDraft : arr[arr.length - 1 - store.histAt];
+  if (el.value !== text) {
+    el.value = text;
+    if (el.setSelectionRange) el.setSelectionRange(text.length, text.length);
+    renderAttachments();
+  }
+  return true;
+}
+
+/* ---------------------------- 面板动作类命令 ---------------------------- */
+
+async function runCompact(sid) {
+  try {
+    await api('/api/session/' + enc(sid) + '/compact', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    flash('已请求压缩上下文', 'ok');
+    loadInbox(sid);
+    loadActive();
+  } catch (e) {
+    flash('压缩失败:' + e.message, 'bad');
+  }
+}
+
+function lastUserMessageID() {
+  let best = null;
+  for (const m of store.messages.values()) {
+    if (!m || m.type !== 'user') continue;
+    if (!best || ((m.time && m.time.created) || 0) >= ((best.time && best.time.created) || 0)) best = m;
+  }
+  return best ? best.id : '';
+}
+
+async function runUndo(sid) {
+  if (isRunning(sid) || store.running) {
+    flash('会话正在运行,先中断或等它结束再撤销', 'warn');
+    return;
+  }
+  let mid = lastUserMessageID();
+  if (!mid) {
+    await loadMessages({ older: false });
+    mid = lastUserMessageID();
+  }
+  if (!mid) {
+    flash('没有可撤销的用户消息', 'warn');
+    return;
+  }
+  if (!confirm('撤销到最后一条用户消息?这会回退对话边界并还原该轮的文件改动。')) return;
+  try {
+    await api('/api/session/' + enc(sid) + '/revert/stage', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messageID: mid, files: true }),
+    });
+    flash('已撤销到该消息', 'ok');
+    loadMessages({ older: false });
+  } catch (e) {
+    if (e.status === 409) flash('会话正忙,暂不能撤销', 'warn');
+    else flash('撤销失败:' + e.message, 'bad');
+  }
+}
+
+async function runRedo(sid) {
+  if (isRunning(sid) || store.running) {
+    flash('会话正在运行,先中断或等它结束再重做', 'warn');
+    return;
+  }
+  try {
+    await api('/api/session/' + enc(sid) + '/revert', { method: 'DELETE' });
+    flash('已清除撤销', 'ok');
+    loadMessages({ older: false });
+  } catch (e) {
+    // 409 = 当前没有已暂存的撤销,不是错误(TUI 里同样是个空操作)
+    if (e.status === 409) flash('没有可重做的撤销', 'warn');
+    else flash('重做失败:' + e.message, 'bad');
+  }
+}
+
+// 正文以 / 开头、且命中命令表 → 走命令通道(未命中一律当普通消息,不会静默失败)
+function parseCommand(text) {
+  const m = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(String(text || '').trim());
+  if (!m) return null;
+  const cmd = findCommand(m[1]);
+  if (!cmd) return null;
+  return { name: cmd.name, args: m[2] || '', cmd: cmd };
+}
+
+// 返回 true 表示这条「命令」被真正执行(调用方据此清理输入与附件)
+async function runCommand(parsed, sid, files, busy) {
+  pushHistory(sid, '/' + parsed.name + (parsed.args ? ' ' + parsed.args : ''));
+  if (parsed.cmd.panel) {
+    const def = PANEL_COMMANDS.find((p) => p.name === parsed.name);
+    if (def) await def.run(sid, parsed.args);
+    return true;
+  }
+  const body = { name: parsed.name, text: parsed.args };
+  if (files && files.length) body.files = files;
+  if (busy) body.delivery = store.delivery;
+  try {
+    await api('/api/session/' + enc(sid) + '/command', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    flash('已执行 /' + parsed.name, 'ok');
+  } catch (e) {
+    flash('命令失败:' + e.message, 'bad');
+    return false;
+  }
+  return true;
+}
+
+// 输入框内的按键优先级:命令面板 → @ 补全 → 输入历史 → 发送
+function setupComposerKeys() {
+  const inp = $('#input');
+  if (!inp) return;
+  inp.addEventListener('keydown', (e) => {
+    if (commandKey(e)) return; // 命令面板开着时优先吃方向键/Enter/Tab/Esc
+    if (mentionKey(e)) return; // 补全列表开着时,方向键/Enter/Tab/Esc 先给补全
+    if (historyKey(e)) return; // 光标在首行/末行时,↑/↓ 取输入历史
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+}
+
+/* ---------------------------- TUI 键位 ---------------------------- */
+
+function anyDialogOpen() {
+  return !!document.querySelector('dialog[open]');
+}
+
+async function cycleAgent() {
+  const sel = $('#agentSel');
+  if (!sel || !sel.options.length) return;
+  const ids = Array.from(sel.options)
+    .map((o) => o.value)
+    .filter((v) => v); // 「默认」是空值,服务端不允许置空,跳过它
+  if (!ids.length) return;
+  const cur = ids.indexOf(sel.value);
+  const next = ids[(cur + 1) % ids.length];
+  sel.value = next;
+  await switchAgent(next);
+}
+
+// Esc 的优先级:命令面板 → @ 补全 → 中断(TUI:session.interrupt = escape,一按即断)
+function setupTuiKeys() {
+  document.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.defaultPrevented) return;
+    if (e.key === 'Escape') {
+      if (anyDialogOpen()) return; // <dialog> 自己处理 Esc
+      if (commandsOpen()) {
+        e.preventDefault();
+        closeCommands();
+        return;
+      }
+      if (mentionsOpen()) {
+        e.preventDefault();
+        closeMentions();
+        return;
+      }
+      const sid = store.selected;
+      if (sid && isRunning(sid)) {
+        e.preventDefault();
+        interrupt();
+      }
+      return;
+    }
+    if (e.key === 'p' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      if (anyDialogOpen()) return;
+      e.preventDefault();
+      openCommands({ force: true });
+      return;
+    }
+    if (e.key === 'Tab' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (anyDialogOpen() || commandsOpen() || mentionsOpen()) return;
+      e.preventDefault();
+      cycleAgent();
+    }
+  });
+}
+
 async function send() {
   const text = $('#input').value.trim();
   if (!text || !store.selected) return;
@@ -2873,9 +3362,30 @@ async function send() {
   if (files.length) body.files = files;
   if (busy) body.delivery = store.delivery;
 
+  // I 组:以 / 开头且命中命令表 → 走命令通道,不当作普通消息
+  const parsed = parseCommand(text);
+  if (parsed) {
+    $('#input').value = '';
+    closeCommands();
+    closeMentions();
+    renderAttachments();
+    const ok = await runCommand(parsed, sid, files, busy);
+    if (ok && !parsed.cmd.panel) {
+      store.mentionHits.clear();
+      clearAttachments(); // 服务端命令确实消费了附件,才清空
+    }
+    updateComposerControls();
+    setTimeout(() => {
+      loadMessages({ older: false });
+      loadActive();
+    }, 300);
+    return;
+  }
+
   $('#input').value = '';
   closeMentions();
   renderAttachments(); // 正文清了,@ 引用的 chip 也一起消失
+  pushHistory(sid, text);
   store.pending = !willQueue;
   updateChatStatus();
   updateComposerControls();
@@ -3478,6 +3988,7 @@ function init() {
   setupHistoryNav();
   setupScrollMemory();
   setupAttachments();
+  setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   paintDelivery();
 
   $('#refresh').addEventListener('click', () => {
@@ -3487,13 +3998,7 @@ function init() {
   $('#loadMore').addEventListener('click', () => loadSessions({ more: true }));
   $('#older').addEventListener('click', () => loadMessages({ older: true }));
   $('#send').addEventListener('click', send);
-  $('#input').addEventListener('keydown', (e) => {
-    if (mentionKey(e)) return; // 补全列表开着时,方向键/Enter/Tab/Esc 先给补全
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  });
+  setupComposerKeys();
   $('#agentSel').addEventListener('change', () => switchAgent($('#agentSel').value));
   $('#modelSel').addEventListener('change', switchModel);
   $('#variantSel').addEventListener('change', switchModel);

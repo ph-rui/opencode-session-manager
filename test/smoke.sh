@@ -318,6 +318,123 @@ else
   echo "FAIL: 附件 uri 没有加 file:// 前缀(会被服务端 400)"; fail=$((fail + 1))
 fi
 
+# ---- I 组:命令面板(与 TUI 的 / 命令一致)+ TUI 键位 ----
+if has "$APPJS" 'function cmdQuery' && has "$APPJS" 'function openCommands' && has "$APPJS" 'function acceptCommand' &&
+   has "$APPJS" 'function mergedCommands' && has "$APPJS" 'function commandKey'; then
+  echo "PASS: app.js 有命令面板(行首 / 解析 / 打开 / 补全 / 键位)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺命令面板"; fail=$((fail + 1))
+fi
+# 命令列表来自服务端(随工程走),面板动作类命令只是补充
+if has "$APPJS" "'/api/command?'" && has "$APPJS" "location[directory]" && has "$APPJS" 'loadCommands'; then
+  echo "PASS: 命令列表取自 GET /api/command?location[directory](随工程走)"; pass=$((pass + 1))
+else
+  echo "FAIL: 命令列表没有按工程向服务端取"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'parseCommand' && has "$APPJS" 'runCommand' && has "$APPJS" "/command'"; then
+  echo "PASS: 命中命令时走 POST /api/session/:id/command(不当作普通消息)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺命令执行通道"; fail=$((fail + 1))
+fi
+# 同名冲突:服务端命令优先,面板动作让位(否则用户自定义的 /new 会被面板动作盖掉)
+if has "$APPJS" 'const taken = new Set(srv.map'; then
+  echo "PASS: 同名命令以服务端为准(面板动作让位)"; pass=$((pass + 1))
+else
+  echo "FAIL: 同名命令没有让服务端优先"; fail=$((fail + 1))
+fi
+MISSING=$(printf '%s' "$APPJS" | python3 -c "
+import re, sys
+src = sys.stdin.read()
+want = ['new', 'compact', 'interrupt', 'undo', 'redo', 'rename', 'delete', 'export',
+        'archive', 'tui', 'copy', 'sessions', 'models', 'agents', 'clear', 'help']
+got = set(re.findall(r\"\{ name: '([a-z/]+)',\", src))
+print(','.join([w for w in want if w not in got]))
+")
+ck "$MISSING" "" "面板动作类命令齐全(TUI 内置动作 → 面板已有能力)"
+
+# TUI 键位:Esc 是全局的(session.interrupt = escape),而且要按「命令面板 → @ 补全 → 中断」的顺序
+if has "$APPJS" 'function setupTuiKeys'; then
+  echo "PASS: app.js 有全局 TUI 键位接线"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺全局键位接线"; fail=$((fail + 1))
+fi
+if has "$APPJS" "document.addEventListener('keydown'"; then
+  echo "PASS: 键位挂在 document 上(焦点不在输入框时 Esc 也管用)"; pass=$((pass + 1))
+else
+  echo "FAIL: 键位没挂在 document 上"; fail=$((fail + 1))
+fi
+ESC_ORDER=$(printf '%s' "$APPJS" | awk '
+  /^function setupTuiKeys\(\)/ { f = 1 }
+  f && /closeCommands\(\);$/ && !a { a = 1 }
+  f && /closeMentions\(\);$/ && !b { b = 1 }
+  f && /interrupt\(\);$/ && !c { c = 1 }
+  f && /^}/ { exit }
+  END { print (a && b && c) ? "cmds-mentions-interrupt" : "wrong" }
+')
+case "$ESC_ORDER" in
+  cmds-mentions-interrupt) echo "PASS: Esc 优先级 = 关命令面板 → 关 @ 补全 → 中断"; pass=$((pass + 1)) ;;
+  *) echo "FAIL: Esc 优先级顺序不对 (got '$ESC_ORDER')"; fail=$((fail + 1)) ;;
+esac
+# 反向封锁:Esc 不能又退回「只在输入框里能按」—— 那是这次要修的病
+if has "$APPJS" 'isRunning(sid)) {' && has "$APPJS" 'anyDialogOpen'; then
+  echo "PASS: 仅当会话在跑才中断,且对话框打开时不抢键"; pass=$((pass + 1))
+else
+  echo "FAIL: 中断缺少「会话在跑」或对话框的护栏"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function historyKey' && has "$APPJS" 'pushHistory' && has "$APPJS" 'function cycleAgent'; then
+  echo "PASS: app.js 有输入历史(↑/↓)与 Shift+Tab 切智能体"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺输入历史或 Shift+Tab"; fail=$((fail + 1))
+fi
+if has "$APPJS" "e.ctrlKey || e.metaKey"; then
+  echo "PASS: Ctrl+P 打开命令面板(对应 TUI command.palette.show)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺 Ctrl+P"; fail=$((fail + 1))
+fi
+# 顺序锁:输入框里敲 / 要先看命令面板,再看 @ 文件补全
+DEB_ORDER=$(printf '%s' "$APPJS" | awk '
+  /^function setupAttachments\(\)/ { f = 1 }
+  f && /if \(cmdQuery\(\)\)/ && !a { a = 1 }
+  f && /openMentions\(\)/ && !b { b = 1 }
+  f && /^}/ { exit }
+  END { print (a && b) ? "cmd-first" : "wrong" }
+')
+case "$DEB_ORDER" in
+  cmd-first) echo "PASS: 输入时先判命令面板,其次才是 @ 文件补全"; pass=$((pass + 1)) ;;
+  *) echo "FAIL: 输入时的补全优先级不对 (got '$DEB_ORDER')"; fail=$((fail + 1)) ;;
+esac
+# 顺序锁:输入框的按键优先级(命令面板 → @ 补全 → 历史 → 发送)
+KEY_ORDER=$(printf '%s' "$APPJS" | awk '
+  /^function setupComposerKeys\(\)/ { f = 1 }
+  f && /commandKey\(e\)/ && !a { a = NR }
+  f && /mentionKey\(e\)/ && !b { b = NR }
+  f && /historyKey\(e\)/ && !c { c = NR }
+  f && /send\(\);$/ && !d { d = NR }
+  f && /^}/ { exit }
+  END { print (a && b && c && d && a < b && b < c && c < d) ? "ok" : "wrong" }
+')
+case "$KEY_ORDER" in
+  ok) echo "PASS: 输入框按键优先级 = 命令面板 → @ 补全 → 历史 → 发送"; pass=$((pass + 1)) ;;
+  *) echo "FAIL: 输入框按键优先级不对 (got '$KEY_ORDER')"; fail=$((fail + 1)) ;;
+esac
+if has "$HOME_HTML" 'id="cmds"' && has "$HOME_HTML" 'id="dlgHelp"' && has "$HOME_HTML" 'id="helpKeys"'; then
+  echo "PASS: 页面有命令面板容器与 /help 快捷键对话框"; pass=$((pass + 1))
+else
+  echo "FAIL: 页面缺命令面板容器或帮助对话框"; fail=$((fail + 1))
+fi
+if has "$CSS" '#cmds' && has "$CSS" '.cmd-tag' && has "$CSS" '.keys kbd'; then
+  echo "PASS: styles.css 有命令面板与快捷键表样式"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺命令面板 / 快捷键表样式"; fail=$((fail + 1))
+fi
+for f in test/ui-commands.html test/ui-commands-run.js test/e2e-commands.sh; do
+  if [ -f "$(dirname "$0")/$(basename "$f")" ]; then
+    echo "PASS: 有 I 组的测试文件 $f"; pass=$((pass + 1))
+  else
+    echo "FAIL: 缺测试文件 $f"; fail=$((fail + 1))
+  fi
+done
+
 # 顺序锁:init() 里 setupFilters() 必须排在 loadSessions 之前,否则会按默认值白拉一次
 INIT_ORDER=$(printf '%s' "$APPJS" | awk '
   /^function init\(\)/ { ininit = 1 }

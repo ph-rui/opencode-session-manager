@@ -99,10 +99,11 @@
         <div id="attach" hidden></div>
         <div class="cinput">
           <button type="button" id="btnAttach" class="attachbtn" title="添加附件(也可以直接把文件拖进来,或在输入框里粘贴)" aria-label="添加附件">📎</button>
-          <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行);@ 可补全工程内的文件"></textarea>
+          <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行);/ 命令,@ 可补全工程内的文件"></textarea>
           <button id="send">发送</button>
         </div>
         <div id="mentions" hidden role="listbox" aria-label="文件补全"></div>
+        <div id="cmds" hidden role="listbox" aria-label="命令补全"></div>
         <input type="file" id="filePick" multiple hidden>
       </div>
     </section>
@@ -176,6 +177,17 @@
       <div class="dlgacts">
         <button type="button" class="chip" data-close>关闭</button>
         <button type="button" class="chip primary" id="tuiCopy">复制</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlgHelp" class="dlg">
+    <div class="dlgform">
+      <h3>命令与快捷键</h3>
+      <p class="dlghint">在输入框里敲 <code>/</code> 打开命令面板(或按 <code>Ctrl+P</code>)。</p>
+      <div class="keys" id="helpKeys"></div>
+      <div class="dlgacts">
+        <button type="button" class="chip primary" data-close>关闭</button>
       </div>
     </div>
   </dialog>

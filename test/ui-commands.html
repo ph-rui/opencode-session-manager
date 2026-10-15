@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>commands unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"></select></label>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
+    <label class="chk"><input type="checkbox" id="showArchived"></label>
+    <span id="count"></span><span id="archivedCount"></span>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div id="attach" hidden></div>
+        <div class="cinput">
+          <button type="button" id="btnAttach">📎</button>
+          <textarea id="input"></textarea>
+          <button id="send"></button>
+        </div>
+        <div id="mentions" hidden></div>
+        <div id="cmds" hidden></div>
+        <input type="file" id="filePick" multiple hidden>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <dialog id="dlgHelp" class="dlg"><div class="dlgform"><h3>命令与快捷键</h3>
+    <div class="keys" id="helpKeys"></div>
+    <div class="dlgacts"><button type="button" class="chip primary" data-close>关闭</button></div>
+  </div></dialog>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '命令会话', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+    ];
+    var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false },
+                  { id: 'plan', name: 'Plan', mode: 'primary', hidden: false }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+
+    /* 照抄真实 GET /api/command 的返回 */
+    window.CMDS = [
+      { name: 'init', description: 'guided AGENTS.md setup' },
+      { name: 'review', description: 'review changes [commit|branch|pr], defaults to uncommitted' },
+    ];
+
+    window.SERVER = { 'ses_a': [
+      { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '第一句' },
+      { id: 'msg_a1', type: 'assistant', time: { created: 200 }, content: [] },
+      { id: 'msg_u2', type: 'user', time: { created: 300 }, text: '第二句' },
+    ] };
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    window.COMMAND_FAIL = false;
+    window.COMPACT_FAIL = false;
+    window.REVERT_BUSY = false;
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    var noContent = function () { return { ok: true, status: 204, text: async function () { return ''; } }; };
+    var bad = function (obj) { return { ok: false, status: 400, text: async function () { return JSON.stringify(obj); } }; };
+    var conflict = function (obj) { return { ok: false, status: 409, text: async function () { return JSON.stringify(obj); } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      if (u === '/__health') return json({ ok: true, base: 'http://127.0.0.1:1', uploadDir: '/tmp/oc-up' });
+      if (u.indexOf('/api/command?') === 0) return json({ location: { directory: '/proj/a' }, data: window.CMDS });
+      if (/^\/api\/session\/[^/?]+\/command$/.test(u)) {
+        if (window.COMMAND_FAIL) return bad({ message: '命令不存在' });
+        return noContent();
+      }
+      if (/^\/api\/session\/[^/?]+\/compact$/.test(u)) {
+        if (window.COMPACT_FAIL) return bad({ message: '压缩失败' });
+        return noContent();
+      }
+      if (/^\/api\/session\/[^/?]+\/revert\/stage$/.test(u)) {
+        if (window.REVERT_BUSY) return conflict({ _tag: 'SessionBusyError', message: 'Session is busy' });
+        return json({ data: {} });
+      }
+      if (/^\/api\/session\/[^/?]+\/revert$/.test(u)) {
+        if (window.REVERT_BUSY) return conflict({ _tag: 'SessionBusyError', message: 'Session is busy' });
+        return json({ data: {} });
+      }
+      if (/\/prompt$/.test(u)) return json({ data: { id: 'msg_new' } });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+    window.confirm = function () { return true; };
+    /* prompt 在无头 Firefox 里会真的弹窗卡住,必须打桩 */
+    window.prompt = function () { return '新标题'; };
+    window.__alerts = [];
+    window.alert = function (m) { window.__alerts.push(String(m)); };
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var settle = async function (pred, tries) {
+      for (var i = 0; i < (tries || 300); i++) {
+        if (pred()) return true;
+        await Promise.resolve();
+      }
+      return pred();
+    };
+    var setCaret = function (v, pos) {
+      var el = q('#input');
+      el.value = v;
+      var p = pos == null ? v.length : pos;
+      el.setSelectionRange(p, p);
+      return el;
+    };
+    /* 合成一次真实按键:用来驱动挂在 document 上的全局键位 */
+    var fire = function (k, opts) {
+      var o = Object.assign({ key: k, bubbles: true, cancelable: true }, opts || {});
+      var e = new KeyboardEvent('keydown', o);
+      document.dispatchEvent(e);
+      return e;
+    };
+    var lastCall = function (re) {
+      for (var i = window.calls.length - 1; i >= 0; i--) if (re.test(window.calls[i].url)) return window.calls[i];
+      return null;
+    };
+    var bodyOf = function (c) { return c && c.body ? JSON.parse(c.body) : null; };
+    /* 浮动的 loadMessages 会把 store.running/store.pending 置位;每条面板动作前先摆回空闲 */
+    var idle = function () { store.pending = false; store.running = false; store.active.delete('ses_a'); };
+    var hadCall = function (re) { return window.calls.some(function (c) { return re.test(c.url); }); };
+
+    try {
+      await loadSessions({ reset: true }); // 会话表要有内容,sessionDir 才取得到工程目录
+
+      /* ================= 纯函数:行首 /token 解析(cmdQuery) ================= */
+      T('cmdQuery:空输入敲 / → 查询词为空且落在行首',
+        (function () { setCaret('/'); var t = cmdQuery(); return t && t.query === '' && t.start === 0 && t.end === 1; })());
+      T('cmdQuery:/re → query=re',
+        (function () { setCaret('/re'); var t = cmdQuery(); return t && t.query === 're' && t.start === 0 && t.end === 3; })());
+      T('cmdQuery:词中间的 / 不弹(a/b)',
+        (function () { setCaret('a/b'); return cmdQuery() === null; })());
+      T('cmdQuery:换行后的行首照弹',
+        (function () { setCaret('你好\n/rev'); var t = cmdQuery(); return t && t.query === 'rev' && t.start === 3; })());
+      T('cmdQuery:嵌套命令名(team/review)整体作为查询词',
+        (function () { setCaret('/team/review'); var t = cmdQuery(); return t && t.query === 'team/review' && t.start === 0; })());
+      T('cmdQuery:只看光标之前',
+        (function () { setCaret('/review 后面还有字', 7); var t = cmdQuery(); return t && t.query === 'review'; })());
+      T('cmdQuery:没有 / → null',
+        (function () { setCaret('普通消息'); return cmdQuery() === null; })());
+      T('cmdQuery:只有空白 → null',
+        (function () { setCaret('/rev '); return cmdQuery() === null; })());
+      T('cmdQuery:没有输入框也不炸', (function () {
+        var el = q('#input'); el.remove();
+        var r = cmdQuery();
+        q('#composer').insertBefore(el, q('#cmds'));
+        return r === null;
+      })());
+
+      /* ================= 命令表合并(mergedCommands) ================= */
+      T('mergedCommands:未加载时只有面板命令', mergedCommands('/proj/a').every(function (c) { return c.panel; }));
+      T('mergedCommands:面板命令带 panel 标记与说明',
+        mergedCommands('/proj/a').every(function (c) { return c.panel === true && !!c.description; }));
+      store.commands.set('/proj/a', window.CMDS);
+      var merged = mergedCommands('/proj/a');
+      T('mergedCommands:服务端命令排在前(真实命令优先)',
+        merged[0].name === 'init' && merged[0].panel === false, merged.slice(0, 3));
+      T('mergedCommands:服务端命令数量正确', merged.filter(function (c) { return !c.panel; }).length === 2);
+      T('mergedCommands:面板命令也在(如 new/help)',
+        merged.some(function (c) { return c.name === 'new' && c.panel; }) &&
+        merged.some(function (c) { return c.name === 'help' && c.panel; }));
+      T('mergedCommands:同名时服务端优先(面板 new 被让位)',
+        (function () {
+          store.commands.set('/proj/a', [{ name: 'new', description: '服务端的 new' }]);
+          var hit = mergedCommands('/proj/a').filter(function (c) { return c.name === 'new'; });
+          store.commands.set('/proj/a', window.CMDS);
+          return hit.length === 1 && hit[0].panel === false && hit[0].description === '服务端的 new';
+        })());
+      T('mergedCommands:没有服务端命令时面板命令照旧',
+        mergedCommands('/不存在').length === PANEL_COMMANDS.length);
+
+      /* ================= 命令解析(parseCommand) ================= */
+      store.selected = 'ses_a';
+      T('parseCommand:/review 带参数', (function () {
+        var p = parseCommand('/review src/a.ts');
+        return p && p.name === 'review' && p.args === 'src/a.ts' && p.cmd.panel === false;
+      })());
+      T('parseCommand:无参数', (function () { var p = parseCommand('/new'); return p && p.name === 'new' && p.args === ''; })());
+      T('parseCommand:多个空格后的参数整体保留', (function () {
+        var p = parseCommand('/review   a.ts   b.ts  ');
+        return p && p.args === 'a.ts   b.ts';
+      })());
+      T('parseCommand:大小写不敏感,名字取表里的写法', (function () {
+        var p = parseCommand('/REVIEW x');
+        return p && p.name === 'review' && p.args === 'x';
+      })());
+      T('parseCommand:非行首的 / 不当命令', parseCommand('你好 /review') === null);
+      T('parseCommand:未命中的 /foo 不当命令(会当普通消息发)', parseCommand('/foo bar') === null);
+      T('parseCommand:面板命令命中', (function () { var p = parseCommand('/help'); return p && p.cmd.panel === true; })());
+      T('parseCommand:空串 → null', parseCommand('') === null && parseCommand(null) === null);
+      T('parseCommand:嵌套命令命中', (function () {
+        store.commands.set('/proj/a', [{ name: 'team/review', description: '嵌套' }]);
+        var p = parseCommand('/team/review src/x.ts');
+        store.commands.set('/proj/a', window.CMDS);
+        return p && p.name === 'team/review' && p.args === 'src/x.ts';
+      })());
+
+      /* ================= 拉命令(loadCommands) ================= */
+      store.commands.clear();
+      var list = await loadCommands('/proj/a');
+      var cmdHits = function () { return window.calls.filter(function (c) { return c.url.indexOf('/api/command') === 0; }); };
+      T('loadCommands:返回服务端命令', list.length === 2 && list[1].name === 'review', list);
+      T('loadCommands:带 location[directory](命令随工程走)',
+        cmdHits()[0].url.indexOf('location%5Bdirectory%5D=%2Fproj%2Fa') > 0, cmdHits()[0].url);
+      var before = cmdHits().length;
+      await loadCommands('/proj/a');
+      T('loadCommands:按目录缓存(第二次不再请求)', cmdHits().length === before, cmdHits().length);
+      await loadCommands('/别的工程');
+      T('loadCommands:换目录会重新请求', cmdHits().length === before + 1);
+      store.commands.clear();
+      T('loadCommands:目录为空直接返回空', (await loadCommands('')).length === 0 && cmdHits().length === before + 1);
+
+      /* ================= 打开 / 过滤 / 渲染(openCommands) ================= */
+      await selectSession('ses_a');
+      setCaret('普通消息');
+      await openCommands();
+      T('openCommands:不是 / 开头就不开', q('#cmds').hidden === true);
+      T('openCommands:关着时 commandsOpen() 为假', commandsOpen() === false);
+      setCaret('/');
+      await openCommands();
+      T('openCommands:敲 / 就开', q('#cmds').hidden === false && commandsOpen() === true);
+      T('openCommands:列出命令且受 CMD_LIMIT 截断',
+        store.cmdItems.length === CMD_LIMIT && qa('#cmds .mention-item').length === CMD_LIMIT, store.cmdItems.length);
+      T('openCommands:命令表总数 = 服务端 + 面板',
+        mergedCommands(sessionDir(store.selected)).length === 2 + PANEL_COMMANDS.length);
+      T('openCommands:高亮第一条', store.cmdAt === 0);
+      T('openCommands:补全范围覆盖整个 /token', store.cmdRange.start === 0 && store.cmdRange.end === 1);
+      setCaret('/rev');
+      await openCommands();
+      T('openCommands:按查询词过滤', store.cmdItems.length === 1 && store.cmdItems[0].name === 'review', store.cmdItems);
+      T('openCommands:渲染出斜杠名', qa('#cmds .mention-item .mi-name')[0].textContent === '/review');
+      T('openCommands:服务端命令不带「面板」标签', qa('#cmds .cmd-tag').length === 0);
+      T('openCommands:渲染出说明', qa('#cmds .mi-dir')[0].textContent.indexOf('review changes') === 0);
+      setCaret('/re');
+      await openCommands();
+      T('openCommands:前缀命中的排在包含命中的前面', (function () {
+        var n = store.cmdItems;
+        var firstNon = n.findIndex(function (c) { return c.name.indexOf('re') !== 0; });
+        var firstPre = n.findIndex(function (c) { return c.name.indexOf('re') === 0; });
+        return firstPre === 0 && (firstNon < 0 || firstNon > firstPre);
+      })(), store.cmdItems.map(function (c) { return c.name; }));
+      setCaret('/hel');
+      await openCommands();
+      T('openCommands:面板项渲染出「面板」标签',
+        qa('#cmds .cmd-tag').length === 1 && q('#cmds .cmd-tag').textContent === '面板', qa('#cmds .cmd-tag').length);
+      T('openCommands:面板项的说明也在', qa('#cmds .mi-dir')[0].textContent.length > 0);
+      setCaret('/zzz');
+      await openCommands();
+      T('openCommands:没有匹配时给出空态而不是不显示',
+        q('#cmds').hidden === false && q('#cmds .mention-empty') !== null);
+      T('openCommands:空态时高亮为 -1', store.cmdAt === -1);
+      setCaret('普通消息');
+      await openCommands({ force: true });
+      T('openCommands:force(Ctrl+P)时输入框非空也开', q('#cmds').hidden === false);
+      T('openCommands:force 时插入点就是光标处', store.cmdRange.start === 4 && store.cmdRange.end === 4);
+      T('openCommands:条目数受 CMD_LIMIT 限制', store.cmdItems.length <= CMD_LIMIT);
+      store.selected = null;
+      await openCommands();
+      T('openCommands:没有选中会话时不开', q('#cmds').hidden === true);
+      store.selected = 'ses_a';
+
+      /* ================= 键盘操作(commandKey / acceptCommand) ================= */
+      setCaret('/');
+      await openCommands();
+      var n0 = store.cmdItems.length;
+      T('commandKey:ArrowDown 往下', commandKey(new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true })) && store.cmdAt === 1);
+      T('commandKey:ArrowUp 往上', commandKey(new KeyboardEvent('keydown', { key: 'ArrowUp', cancelable: true })) && store.cmdAt === 0);
+      commandKey(new KeyboardEvent('keydown', { key: 'ArrowUp', cancelable: true }));
+      T('commandKey:在第一条上按上键环绕到最后', store.cmdAt === n0 - 1, store.cmdAt);
+      commandKey(new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true }));
+      T('commandKey:最后一条按下键回到第一条', store.cmdAt === 0);
+      setCaret('/rev');
+      await openCommands();
+      T('commandKey:Tab 也是选中', (function () {
+        var e = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+        return commandKey(e) === true && e.defaultPrevented === true;
+      })());
+      T('acceptCommand:补全成 /review 并留出参数位', q('#input').value === '/review ', q('#input').value);
+      T('acceptCommand:光标落在插入之后', q('#input').selectionStart === 8, q('#input').selectionStart);
+      T('acceptCommand:补全后关掉面板', q('#cmds').hidden === true);
+      var sentBefore = window.calls.length;
+      setCaret('/hel');
+      await openCommands();
+      T('commandKey:Enter 选中(不会顺手把消息发出去)', (function () {
+        var e = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true });
+        commandKey(e);
+        var sent = window.calls.slice(sentBefore).some(function (c) { return /\/prompt$/.test(c.url); });
+        return sent === false && q('#input').value === '/help ';
+      })(), q('#input').value);
+      setCaret('/rev 后面的字', 4);
+      await openCommands();
+      T('acceptCommand:保留光标之后已有的正文', (function () {
+        acceptCommand();
+        return q('#input').value === '/review  后面的字';
+      })(), q('#input').value);
+      setCaret('/');
+      await openCommands();
+      T('commandKey:Escape 关掉面板并标记已消费', (function () {
+        var e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+        var r = commandKey(e);
+        return r === true && e.defaultPrevented === true && q('#cmds').hidden === true;
+      })());
+      T('commandKey:面板关着时不吃按键',
+        commandKey(new KeyboardEvent('keydown', { key: 'Enter' })) === false);
+      setCaret('/');
+      await openCommands();
+      store.cmdItems = [];
+      T('commandKey:开着但没有条目时不吃按键',
+        commandKey(new KeyboardEvent('keydown', { key: 'ArrowDown' })) === false);
+      closeCommands();
+      T('acceptCommand:空列表时安全返回 null', acceptCommand() === null && q('#cmds').hidden === true);
+
+      /* ================= 服务端命令的执行(send → POST /command) ================= */
+      window.calls.length = 0;
+      store.attachments = [];
+      setCaret('/review src/a.ts');
+      await send();
+      var cc = lastCall(/\/command$/);
+      T('send:命中服务端命令 → POST /api/session/:id/command', cc !== null, window.calls);
+      T('send:命令名与参数分别放进 name/text',
+        bodyOf(cc).name === 'review' && bodyOf(cc).text === 'src/a.ts', bodyOf(cc));
+      T('send:不忙时不带 delivery', bodyOf(cc).delivery === undefined, bodyOf(cc));
+      T('send:命令走命令通道,不再发普通 prompt', !hadCall(/\/prompt$/));
+      T('send:命令执行后清空输入框', q('#input').value === '');
+      T('send:命令执行后关掉面板', q('#cmds').hidden === true);
+
+      store.active.set('ses_a', 'busy');
+      setCaret('/init');
+      await send();
+      T('send:会话忙时带上 delivery', bodyOf(lastCall(/\/command$/)).delivery === 'queue', bodyOf(lastCall(/\/command$/)));
+      store.active.delete('ses_a');
+
+      store.mentionHits.set('Makefile', '/proj/a/Makefile');
+      setCaret('/review @Makefile');
+      await send();
+      T('send:命令也能带 @ 引用附件', (function () {
+        var b = bodyOf(lastCall(/\/command$/));
+        return b.files && b.files.length === 1 && b.files[0].uri === 'file:///proj/a/Makefile';
+      })(), bodyOf(lastCall(/\/command$/)));
+      T('send:服务端命令执行后清空 @ 引用记忆', store.mentionHits.size === 0);
+
+      window.COMMAND_FAIL = true;
+      setCaret('/review x');
+      await send();
+      T('send:命令失败时弹提示(toast)',
+        q('#toast').textContent.indexOf('命令失败') >= 0 && q('#toast').hidden === false, q('#toast').textContent);
+      T('send:命令失败时输入框照旧清空(不赖在输入框里)', q('#input').value === '');
+      window.COMMAND_FAIL = false;
+
+      window.calls.length = 0;
+      setCaret('/foo bar');
+      await send();
+      T('send:未命中的 /foo 当普通消息发', !hadCall(/\/command$/) && hadCall(/\/prompt$/), window.calls);
+
+      /* ================= 面板动作类命令 ================= */
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/compact');
+      await send();
+      T('/compact:POST compact 且 body 为 {}',
+        lastCall(/\/compact$/).method === 'POST' && lastCall(/\/compact$/).body === '{}', lastCall(/\/compact$/));
+      T('/compact:不当作普通消息', !hadCall(/\/prompt$/) && !hadCall(/\/command$/));
+      window.COMPACT_FAIL = true;
+      idle();
+      setCaret('/compact');
+      await send();
+      T('/compact:失败时弹提示(toast)', q('#toast').textContent.indexOf('压缩失败') >= 0, q('#toast').textContent);
+      window.COMPACT_FAIL = false;
+
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/undo');
+      await send();
+      var rs = lastCall(/\/revert\/stage$/);
+      T('/undo:POST revert/stage', rs !== null && rs.method === 'POST');
+      T('/undo:messageID 取最后一条用户消息',
+        bodyOf(rs).messageID === 'msg_u2', bodyOf(rs));
+      T('/undo:带上 files=true(会还原该轮文件改动)', bodyOf(rs).files === true);
+      T('/undo:不当作普通消息', !hadCall(/\/prompt$/));
+
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/redo');
+      await send();
+      T('/redo:DELETE revert 清除已暂存撤销',
+        lastCall(/\/revert$/).method === 'DELETE' && !/stage/.test(lastCall(/\/revert$/).url), lastCall(/\/revert$/));
+
+      /* 运行时不允许撤销(TUI 里 undo/redo 也要等回合结束,服务端会回 409) */
+      window.calls.length = 0;
+      idle();
+      store.active.set('ses_a', 'busy');
+      setCaret('/undo');
+      await send();
+      T('/undo:会话在跑时不动手,给出提示', !hadCall(/\/revert\/stage$/) && q('#toast').textContent.indexOf('正在运行') >= 0,
+        [window.calls, q('#toast').textContent]);
+      setCaret('/redo');
+      await send();
+      T('/redo:会话在跑时不动手,给出提示', !hadCall(/\/revert$/) && q('#toast').textContent.indexOf('正在运行') >= 0);
+      idle();
+      window.REVERT_BUSY = true;
+      setCaret('/redo');
+      await send();
+      T('/redo:服务端 409 时报「没有可重做的撤销」而不是报错',
+        q('#toast').textContent.indexOf('没有可重做的撤销') >= 0, q('#toast').textContent);
+      window.REVERT_BUSY = false;
+
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/rename');
+      await send();
+      T('/rename:PATCH 会话标题', (function () {
+        var c = lastCall(/^\/api\/session\/ses_a$/);
+        return c && c.method === 'PATCH' && typeof bodyOf(c).title === 'string';
+      })(), lastCall(/^\/api\/session\/ses_a$/));
+
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/archive');
+      await send();
+      T('/archive:PATCH metadata(面板级归档)', (function () {
+        var c = lastCall(/^\/api\/session\/ses_a$/);
+        return c && c.method === 'PATCH' && bodyOf(c).metadata && bodyOf(c).metadata.ocs;
+      })(), lastCall(/^\/api\/session\/ses_a$/));
+
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/clear');
+      await send();
+      T('/clear:清空输入框', q('#input').value === '');
+      T('/clear:不发任何请求', window.calls.length === 0, window.calls);
+
+      idle();
+      setCaret('/help');
+      await send();
+      T('/help:填充键位表', qa('#helpKeys kbd').length >= 8, qa('#helpKeys kbd').length);
+      T('/help:小节标题跨满两列,不占掉一个格子(否则后面每行都错位)', (function () {
+        var kids = qa('#helpKeys > *');
+        return kids.length > 1 && kids[0].className === 'keys-sec' && kids[1].tagName === 'KBD';
+      })(), qa('#helpKeys > *').slice(0, 3).map(function (e) { return e.tagName + '.' + e.className; }));
+      T('/help:每行都是「按键 + 说明」', (function () {
+        var kids = qa('#helpKeys > *');
+        var i = 0;
+        while (i < kids.length) {
+          if (kids[i].className === 'keys-sec') { i += 1; continue; }
+          if (kids[i].tagName === 'KBD' && kids[i + 1] && kids[i + 1].tagName === 'DIV') { i += 2; continue; }
+          return false;
+        }
+        return true;
+      })());
+      T('/help:含 Esc 中断一行',
+        q('#helpKeys').textContent.indexOf('中断当前回合') > 0);
+      T('/help:打开帮助对话框', q('#dlgHelp').open === true);
+      T('/help:没有把 /help 当消息发', !hadCall(/\/prompt$/));
+      q('#dlgHelp').close();
+      T('/help:关掉后 anyDialogOpen 为假', anyDialogOpen() === false);
+
+      window.calls.length = 0;
+      idle();
+      idle();
+      setCaret('/sessions');
+      await send();
+      T('/sessions:焦点落到列表搜索框', document.activeElement === q('#search'));
+      idle();
+      setCaret('/models');
+      await send();
+      T('/models:焦点落到模型选择', document.activeElement === q('#modelSel'));
+      idle();
+      setCaret('/agents');
+      await send();
+      T('/agents:焦点落到智能体选择', document.activeElement === q('#agentSel'));
+
+      /* ================= 输入历史(↑/↓) ================= */
+      store.history.clear();
+      store.histAt = -1;
+      pushHistory('ses_a', '第一条');
+      pushHistory('ses_a', '第二条');
+      pushHistory('ses_a', '第二条'); // 连续重复只记一次
+      T('pushHistory:记录历史且连续重复只记一次', (store.history.get('ses_a') || []).length === 2, store.history.get('ses_a'));
+      T('pushHistory:记录后游标归位', store.histAt === -1 && store.histDraft === '');
+      setCaret('草稿');
+      T('historyKey:↑ 进入最新一条', historyKey({ key: 'ArrowUp' }) === true && q('#input').value === '第二条', q('#input').value);
+      T('historyKey:再 ↑ 到更早一条', historyKey({ key: 'ArrowUp' }) === true && q('#input').value === '第一条');
+      T('historyKey:到头了吞掉按键但不动正文',
+        historyKey({ key: 'ArrowUp' }) === true && q('#input').value === '第一条');
+      T('historyKey:↓ 退回下一条', historyKey({ key: 'ArrowDown' }) === true && q('#input').value === '第二条');
+      T('historyKey:↓ 出历史回草稿', historyKey({ key: 'ArrowDown' }) === true && q('#input').value === '草稿');
+      T('historyKey:不在历史里时 ↓ 不接管', historyKey({ key: 'ArrowDown' }) === false);
+      T('historyKey:没有历史时 ↑ 不接管', (function () {
+        store.history.clear();
+        store.histAt = -1;
+        var r = historyKey({ key: 'ArrowUp' });
+        pushHistory('ses_a', '第一条');
+        pushHistory('ses_a', '第二条');
+        return r === false;
+      })());
+      store.histAt = -1;
+      setCaret('第一行\n第二行', 3);
+      T('historyKey:光标在首行末尾 → ↑ 接管(TUI 同:首行 ↑ 取历史)',
+        historyKey({ key: 'ArrowUp' }) === true && q('#input').value === '第二条', q('#input').value);
+      store.histAt = -1;
+      setCaret('第一行\n第二行', 5);
+      T('historyKey:光标不在首行 → ↑ 不接管(留给光标移动)', historyKey({ key: 'ArrowUp' }) === false);
+      store.histAt = 1;
+      setCaret('第一行\n第二行', 3);
+      T('historyKey:光标不在末行 → ↓ 不接管', historyKey({ key: 'ArrowDown' }) === false);
+      store.histAt = -1;
+      store.histAt = -1;
+      T('historyKey:不是方向键就不管', historyKey({ key: 'Enter' }) === false);
+      await selectSession('ses_a');
+      T('切会话会把历史游标归位', store.histAt === -1 && store.histDraft === '');
+      T('切会话会关掉命令面板', q('#cmds').hidden === true);
+      store.history.clear();
+      setCaret('记进历史');
+      await send();
+      T('send:普通消息也会记进历史', (store.history.get('ses_a') || []).indexOf('记进历史') >= 0, store.history.get('ses_a'));
+
+      /* ================= 全局键位(setupTuiKeys) ================= */
+      setupTuiKeys();
+      store.commands.set('/proj/a', window.CMDS);
+
+      /* Esc:命令面板开着 → 只关面板 */
+      setCaret('/rev');
+      await openCommands();
+      window.calls.length = 0;
+      store.active.set('ses_a', 'busy');
+      fire('Escape');
+      T('Esc:优先关命令面板', q('#cmds').hidden === true);
+      T('Esc:关面板时不会顺手中断回合', !hadCall(/\/interrupt$/), window.calls);
+
+      /* Esc:@ 补全开着 → 只关补全 */
+      store.mentionItems = [{ path: 'Makefile', type: 'file', abs: '/proj/a/Makefile' }];
+      store.mentionRange = { start: 0, end: 9 };
+      store.mentionAt = 0;
+      renderMentions();
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:其次关 @ 补全', q('#mentions').hidden === true);
+      T('Esc:关补全时不会顺手中断回合', !hadCall(/\/interrupt$/), window.calls);
+
+      /* Esc:都不开且在跑 → 中断 */
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:都不开且会话在跑 → 中断当前回合', hadCall(/\/interrupt$/), window.calls);
+
+      /* Esc:都不开且没跑 → 什么都不做 */
+      store.active.delete('ses_a');
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:会话没在跑就什么都不做', window.calls.length === 0, window.calls);
+
+      /* Esc:对话框开着 → 交给对话框自己处理 */
+      store.active.set('ses_a', 'busy');
+      store.selected = 'ses_a';
+      q('#dlgHelp').showModal();
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:对话框打开时不抢键(交给 <dialog>)', !hadCall(/\/interrupt$/));
+      q('#dlgHelp').close();
+      store.active.delete('ses_a');
+
+      /* Esc:已被消费(defaultPrevented)就跳过 */
+      window.calls.length = 0;
+      store.active.set('ses_a', 'busy');
+      var pe = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+      pe.preventDefault();
+      document.dispatchEvent(pe);
+      T('Esc:已被别人消费过就不再处理', !hadCall(/\/interrupt$/));
+      store.active.delete('ses_a');
+
+      /* Ctrl+P:命令面板 */
+      setCaret('已经写了字');
+      fire('p', { ctrlKey: true });
+      await settle(function () { return commandsOpen(); });
+      T('Ctrl+P:打开命令面板', commandsOpen() === true);
+      T('Ctrl+P:输入框非空也照开', store.cmdRange.start === 5);
+      T('Ctrl+P:输入内容不被改动', q('#input').value === '已经写了字');
+      closeCommands();
+      var cp = fire('p', { ctrlKey: true, shiftKey: true });
+      T('Ctrl+P:带 Shift 时不算(避免误吞)', commandsOpen() === false && cp.defaultPrevented === false);
+      fire('p', { ctrlKey: true, altKey: true });
+      T('Ctrl+P:带 Alt 时不算', commandsOpen() === false);
+      q('#dlgHelp').showModal();
+      var cd = fire('p', { ctrlKey: true });
+      T('Ctrl+P:对话框打开时不抢键', commandsOpen() === false && cd.defaultPrevented === false);
+      q('#dlgHelp').close();
+
+      /* Shift+Tab:循环智能体 */
+      await renderControls(store.sessions.get('ses_a'));
+      var opts = qa('#agentSel option').filter(function (o) { return o.value; });
+      T('智能体下拉里有可循环的选项', opts.length >= 2, opts.map(function (o) { return o.value; }));
+      window.calls.length = 0;
+      var st = fire('Tab', { shiftKey: true });
+      T('Shift+Tab:被消费(不会把焦点移走)', st.defaultPrevented === true);
+      await settle(function () { return hadCall(/\/api\/session\/ses_a\/agent$/); });
+      T('Shift+Tab:切到下一个智能体', hadCall(/\/api\/session\/ses_a\/agent$/), window.calls);
+      T('Shift+Tab:跳过空值的「默认」',
+        bodyOf(lastCall(/\/agent$/)).agent === opts[0].value, bodyOf(lastCall(/\/agent$/)));
+      window.calls.length = 0;
+      fire('Tab', { shiftKey: true });
+      await settle(function () { return hadCall(/\/agent$/); });
+      T('Shift+Tab:再按循环到下一个',
+        bodyOf(lastCall(/\/agent$/)).agent === opts[1].value, bodyOf(lastCall(/\/agent$/)));
+      window.calls.length = 0;
+      fire('Tab', { shiftKey: true });
+      await settle(function () { return hadCall(/\/agent$/); });
+      T('Shift+Tab:到头后绕回第一个',
+        bodyOf(lastCall(/\/agent$/)).agent === opts[0].value, bodyOf(lastCall(/\/agent$/)));
+
+      /* Shift+Tab:面板开着 / 对话框开着 都不抢 */
+      setCaret('/rev');
+      await openCommands();
+      var st2 = fire('Tab', { shiftKey: true });
+      T('Shift+Tab:命令面板开着时不抢键', st2.defaultPrevented === false);
+      closeCommands();
+      q('#dlgHelp').showModal();
+      var st3 = fire('Tab', { shiftKey: true });
+      T('Shift+Tab:对话框打开时不抢键', st3.defaultPrevented === false);
+      q('#dlgHelp').close();
+      fire('Tab');
+      T('Tab(无 Shift)不受影响', true);
+
+      /* 输入框内的接线:命令面板先于 @ 补全与历史 */
+      setupComposerKeys(); // 这个接线在 init() 里,测试页要手动接上
+      store.history.clear();
+      pushHistory('ses_a', '旧消息');
+      setCaret('/re');
+      await openCommands();
+      var ke = new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(ke);
+      T('输入框按键:面板开着时方向键给面板,不落到历史',
+        store.cmdAt === 1 && q('#input').value === '/re', [store.cmdAt, q('#input').value, store.cmdItems.length]);
+      closeCommands();
+      store.history.set('ses_a', ['旧消息']);
+      setCaret('');
+      var ke2 = new KeyboardEvent('keydown', { key: 'ArrowUp', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(ke2);
+      T('输入框按键:面板没开时方向键给历史', q('#input').value === '旧消息', q('#input').value);
+      setCaret('发一条');
+      var ke3 = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+      window.calls.length = 0;
+      q('#input').dispatchEvent(ke3);
+      await settle(function () { return hadCall(/\/prompt$/); });
+      T('输入框按键:Enter 仍然发送', hadCall(/\/prompt$/), window.calls);
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

@@ -690,8 +690,9 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 .achip-x:hover { background: #f3dcdc; color: var(--danger); }
 
-/* @ 文件补全:贴着输入区上沿浮出(不挤动其它元素) */
-#mentions {
+/* @ 文件补全 / I 组 / 命令补全:贴着输入区上沿浮出(不挤动其它元素) */
+#mentions,
+#cmds {
   position: absolute;
   left: 14px;
   right: 14px;
@@ -707,7 +708,8 @@ table#list { width: 100%; border-collapse: collapse; }
   font-family: var(--mono);
   font-size: 0.92em;
 }
-#mentions[hidden] { display: none; }
+#mentions[hidden],
+#cmds[hidden] { display: none; }
 .mention-item {
   display: flex;
   align-items: center;
@@ -722,6 +724,32 @@ table#list { width: 100%; border-collapse: collapse; }
 .mention-item .mi-dir { color: var(--muted); }
 .mention-item .mi-name { font-weight: 600; }
 .mention-empty { padding: 6px 10px; color: var(--muted); }
+
+/* 命令面板:斜杠名 + 说明 + 「面板」小标签(服务端命令无标签) */
+.cmd-item .mi-name { color: var(--accent); }
+.cmd-tag {
+  font-size: 0.85em;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: #fafafa;
+}
+
+/* 帮助对话框里的键位表 */
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 0.92em; }
+.keys kbd {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #fafafa;
+  white-space: nowrap;
+}
+.keys .keys-sec { grid-column: 1 / -1; margin-top: 6px; font-weight: 600; }
+.keys .keys-sec:first-child { margin-top: 0; }
 
 /* 列表中的运行中标记 */
 .run-badge { color: var(--accent); font-size: 11px; white-space: nowrap; }
