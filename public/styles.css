@@ -97,6 +97,13 @@ main.list-hidden { grid-template-columns: 0 var(--rz-w, 16px) minmax(0, 1fr); }
 main.list-hidden #listpane { display: none; }
 main.list-hidden .resizer { background: var(--panel); }
 
+/* 鼠标靠到左边缘 → 临时把列表拉出来看一眼(桌面专属;窄屏的分栏条是 display:none,收不到事件)。
+   list-hidden 是「用户记下来的选择」,list-peek 是「鼠标路过时的临时覆盖」——两个类会同时在,
+   靠顺序让 peek 赢(选择器优先级相同,写在后面就赢)。所以这两条必须在 list-hidden 那两条之后。 */
+main.list-peek { grid-template-columns: var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr); }
+main.list-peek #listpane { display: block; box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1); } /* 一道轻阴影:说明它是临时的浮层 */
+main.list-peek .resizer { background: transparent; }
+
 /* 分栏拖拽条。它同时是「折叠手柄」的底座:条上拖动改宽度,点手柄收起/展开。 */
 .resizer {
   position: relative;

@@ -214,6 +214,78 @@
       try { resizer.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7 })); } catch (e) {}
       T('拖拽结束后退出拖拽态', !document.body.classList.contains('resizing'));
 
+      /* ============ 3c. 鼠标靠左边缘 → 列表临时拉出来 ============ */
+      setupListPeek();
+      T('接线后不留临时态', !main.classList.contains('list-peek'));
+      var addCallsPeek = 0;
+      var origAddPeek = main.addEventListener.bind(main);
+      main.addEventListener = function () { addCallsPeek++; return origAddPeek.apply(null, arguments); };
+      setupListPeek();
+      main.addEventListener = origAddPeek;
+      T('重复接线不再挂监听', addCallsPeek === 0, addCallsPeek);
+
+      localStorage.setItem('ocs.listHidden', '1');
+      setupListToggle();
+      T('(前置)列表已收起', main.classList.contains('list-hidden') && hiddenOf(listPane));
+      var rzEdge = resizer.getBoundingClientRect().right;
+      T('(前置)收起时分栏槽就贴在左边缘', rzEdge < 20, rzEdge);
+
+      var mv = function (x) {
+        main.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 300 }));
+      };
+      mv(5);
+      T('鼠标贴到左边缘 → 临时拉出来(list-peek)', main.classList.contains('list-peek'));
+      T('临时拉出来时列表是看得见的', !hiddenOf(listPane));
+      T('临时拉出来时不写记忆:list-hidden 还在', main.classList.contains('list-hidden'));
+      T('临时拉出来时不写记忆:localStorage 还是 1', localStorage.getItem('ocs.listHidden') === '1');
+      T('临时展开后分栏槽跟着列表挪到右边(不再是最左边那条)', resizer.getBoundingClientRect().right > rzEdge + 100,
+        [rzEdge, resizer.getBoundingClientRect().right]);
+      T('临时展开后对话区仍有宽度(不会整片变白)', chatPane.getBoundingClientRect().width > 100,
+        chatPane.getBoundingClientRect().width);
+      T('临时展开用的是用户拖出来的列宽(420px)', getComputedStyle(main).gridTemplateColumns.indexOf('420px') === 0,
+        getComputedStyle(main).gridTemplateColumns);
+      T('临时展开的列表有一道阴影(看得出是浮层)', getComputedStyle(listPane).boxShadow !== 'none',
+        getComputedStyle(listPane).boxShadow);
+
+      mv(200);
+      T('在列表里挪动不算离开(还留着)', main.classList.contains('list-peek'));
+      var rzEdgePeek = resizer.getBoundingClientRect().right;
+      mv(rzEdgePeek + 5);
+      T('挪进对话区 → 收回', !main.classList.contains('list-peek'));
+      T('收回后列表又藏起来了', hiddenOf(listPane));
+      T('收回后分栏槽回到左边缘', resizer.getBoundingClientRect().right < 20,
+        resizer.getBoundingClientRect().right);
+
+      mv(5);
+      T('再靠回去还能拉出来', main.classList.contains('list-peek'));
+      main.dispatchEvent(new MouseEvent('mouseleave'));
+      T('鼠标移出主区(含移出窗口)→ 收回', !main.classList.contains('list-peek'));
+
+      /* 临时展开期间点手柄 = 显式展开并保持 */
+      mv(5);
+      T('(前置)此刻是临时展开', main.classList.contains('list-peek'));
+      btn.click();
+      T('临时展开期间点手柄 → 变成显式展开', !main.classList.contains('list-hidden'));
+      T('显式展开后记忆清空(下次启动还是展开)', localStorage.getItem('ocs.listHidden') === null);
+      T('显式展开后临时态也摘掉了', !main.classList.contains('list-peek'));
+      mv(400);
+      T('显式展开时鼠标乱动也不会冒临时态', !main.classList.contains('list-peek'));
+      T('显式展开时列表照旧可见', !hiddenOf(listPane));
+
+      /* 窄屏不玩这一套 */
+      document.documentElement.classList.add('narrow');
+      localStorage.setItem('ocs.listHidden', '1');
+      setupListToggle();
+      T('(前置)窄屏下重新收起', main.classList.contains('list-hidden'));
+      mv(5);
+      T('窄屏不玩这一套(.resizer 本来就是 display:none)', !main.classList.contains('list-peek'));
+      document.documentElement.classList.remove('narrow');
+      localStorage.removeItem('ocs.listHidden');
+      setupListToggle();
+      setupListPeek();
+      T('(收尾)回到展开态、不留临时态',
+        !main.classList.contains('list-hidden') && !main.classList.contains('list-peek'));
+
       /* ============ 4. 折叠状态被记住(模拟刷新后重新接线) ============ */
       localStorage.setItem('ocs.listHidden', '1');
       setupListToggle(); // 重复接线:只按存储重画,不应重复挂监听

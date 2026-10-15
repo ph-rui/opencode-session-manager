@@ -4367,6 +4367,48 @@ function setupListToggle() {
   });
 }
 
+/* -------------------- 鼠标靠左边缘:列表临时拉出来 --------------------
+ * 列表收起之后,左侧那条 16px 分栏槽是鼠标最容易撞到的边界(它就在最左边)。
+ * 靠上去就把列表临时拉出来,移开就收回去 —— 省掉「点手柄 → 看一眼 → 再点回去」。
+ *
+ * 三件事刻意不碰:
+ *   1. 记忆(ocs.listHidden)不动。这是「路过看一眼」,不是改设置;
+ *      点手柄才算显式展开(setupListToggle 照旧写记忆),那时顺手把临时态摘掉,列表就保持住了。
+ *   2. 收回的判定不用 mouseleave + relatedTarget:临时展开会把分栏槽从光标底下挪走
+ *      (收起时它在 x=0,展开后跑到列表右边),光标底下换元素时 relatedTarget 在浏览器之间不可靠,
+ *      换来换去就是闪。改成「按分栏槽右沿判定」:收起时右沿=16(贴到左边缘就展开),
+ *      临时展开后右沿=列表宽+16(整个「列表 + 槽」都留着),天然免疫元素挪位。
+ *   3. 窄屏不管:那边 .resizer 是 display:none,根本收不到鼠标事件(这里再加一道判定兜底)。
+ */
+function setupListPeek() {
+  const main = document.querySelector('main');
+  const rz = document.getElementById('resizer-mid');
+  const pane = document.getElementById('listpane');
+  if (!main || !rz || !pane) return;
+
+  const hide = () => main.classList.remove('list-peek');
+  const onMove = (e) => {
+    // 常态(列表好好开着)不 measure、也不留残留的临时态 —— 早退
+    if (!main.classList.contains('list-hidden')) {
+      if (main.classList.contains('list-peek')) hide();
+      return;
+    }
+    if (document.documentElement.classList.contains('narrow')) return;
+    if (e.clientX < rz.getBoundingClientRect().right) main.classList.add('list-peek');
+    else hide();
+  };
+
+  if (main.dataset.peekWired !== '1') {
+    main.dataset.peekWired = '1';
+    main.addEventListener('mousemove', onMove);
+    main.addEventListener('mouseleave', hide); // 移出整个主区(含移出窗口)就收回
+    const btn = document.getElementById('btnList');
+    // 临时展开期间点手柄 = 显式展开并保持(setupListToggle 已经写好记忆与类),这里只摘掉临时态
+    if (btn) btn.addEventListener('click', hide);
+  }
+  hide();
+}
+
 /* ---------------------- 底板(输入区)收起 / 展开 ----------------------
  * 手机屏幕小,收起后只留一条细边(styles.css 的 #composer.collapsed),高度让给会话内容。
  *
@@ -4564,6 +4606,7 @@ function init() {
   setupEvents();
   setupResizers();
   setupListToggle();
+  setupListPeek(); // 鼠标靠左边缘临时拉出列表(桌面专属)
   setupNarrow();
   setupComposerToggle(); // 底板收起/展开(手机默认收起,见上面那一节)
   setupHistoryNav();

@@ -899,6 +899,56 @@ for f in test/ui-jump.html test/ui-jump-run.js; do
   fi
 done
 
+# ---- P 组:鼠标靠左边缘 → 列表临时拉出来 ----
+# 列表收起后,左边那条 16px 分栏槽是鼠标最容易撞到的边界:靠上去临时拉出来,移开就收回。
+# 临时态(list-peek)与记忆(list-hidden)是两个类,靠 CSS 顺序让临时态赢 —— 这两条必须写对顺序。
+PEEK_LINE=$(printf '%s' "$CSS" | grep -n '^main\.list-peek {' | head -1 | cut -d: -f1)
+HIDE_LINE=$(printf '%s' "$CSS" | grep -n '^main\.list-hidden {' | head -1 | cut -d: -f1)
+if [ -n "$PEEK_LINE" ] && [ -n "$HIDE_LINE" ] && [ "$PEEK_LINE" -gt "$HIDE_LINE" ]; then
+  echo "PASS: main.list-peek 写在 main.list-hidden 之后(同优先级靠顺序赢)"; pass=$((pass + 1))
+else
+  echo "FAIL: list-peek 的 CSS 顺序不对(peek 会被 list-hidden 压住)"; fail=$((fail + 1))
+fi
+if has "$CSS" 'main.list-peek #listpane { display: block;' &&
+   has "$CSS" 'var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)'; then
+  echo "PASS: 临时展开还是「列表 + 16px 分栏条 + 对话区」三列,用的是用户拖出来的列宽"; pass=$((pass + 1))
+else
+  echo "FAIL: list-peek 的网格/列表可见性不对"; fail=$((fail + 1))
+fi
+PEEK_FN=$(printf '%s' "$APPJS" | awk '/^function setupListPeek\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$PEEK_FN" "addEventListener('mousemove'" && has "$PEEK_FN" "addEventListener('mouseleave'"; then
+  echo "PASS: 靠左边缘展开 / 移出主区收回(mousemove + mouseleave)"; pass=$((pass + 1))
+else
+  echo "FAIL: setupListPeek 没挂 mousemove/mouseleave"; fail=$((fail + 1))
+fi
+if has "$PEEK_FN" 'rz.getBoundingClientRect().right' && ! has "$PEEK_FN" 'relatedTarget'; then
+  echo "PASS: 按「分栏槽右沿」判定,不用 relatedTarget(展开会把槽从光标底下挪走)"; pass=$((pass + 1))
+else
+  echo "FAIL: 收回判定用了会抖的 relatedTarget"; fail=$((fail + 1))
+fi
+if has "$PEEK_FN" "classList.contains('narrow')" && has "$PEEK_FN" 'dataset.peekWired'; then
+  echo "PASS: 窄屏挡一道 + 重复接线只重画"; pass=$((pass + 1))
+else
+  echo "FAIL: 少了窄屏判定或重复接线保护"; fail=$((fail + 1))
+fi
+if has "$PEEK_FN" "btn.addEventListener('click', hide)"; then
+  echo "PASS: 临时展开期间点手柄 → 显式展开并保持(记忆由 setupListToggle 写)"; pass=$((pass + 1))
+else
+  echo "FAIL: 点手柄没有把临时态摘掉"; fail=$((fail + 1))
+fi
+INIT_FN_P=$(printf '%s' "$APPJS" | awk '/^function init\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$INIT_FN_P" 'setupListPeek()' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setupListPeek' | wc -l)" = 2 ]; then
+  echo "PASS: setupListPeek() 接进了 init() 且只有这一处接线"; pass=$((pass + 1))
+else
+  echo "FAIL: setupListPeek 的接线不对(应为 定义 1 次 + init 里 1 次)"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-layout.html")" "list-peek"; then
+  echo "PASS: ui-layout.html 里有临时展开的断言"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-layout.html 里没有 list-peek 的断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
