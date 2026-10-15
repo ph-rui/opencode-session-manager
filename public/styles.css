@@ -75,23 +75,25 @@ html, body {
 
 main {
   display: grid;
-  grid-template-columns: var(--list-w, 560px) 6px minmax(0, 1fr);
+  grid-template-columns: var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
 
+/* 显式钉死列位:收起时 #listpane 会被隐藏,若靠自动排布,剩下的子元素会往前顶
+   (曾经就把 #chatpane 顶到宽度 0 的第一列上,整个右侧变白)。钉死列位后隐藏谁都不影响别人。 */
+#listpane { grid-column: 1; }
+.resizer { grid-column: 2; }
+#chatpane { grid-column: 3; }
+
 /* 会话列表收起:整列让给对话区。
-   刻意不动 --list-w —— 用户拖出来的宽度要原样留着,展开时直接还原。
-   注意:两个子元素被 display:none 后就退出了网格,此时必须把模板也降成单列,
-   否则 #chatpane 会顶到第一列(宽度 0)上,整个右侧会变白。 */
-main.list-hidden { grid-template-columns: minmax(0, 1fr); }
-main.list-hidden #listpane,
-main.list-hidden #resizer-mid { display: none; }
+   分栏条【保留】成一条 16px 窄槽 —— 它是唯一的「展开」入口,不能跟着一起消失,
+   否则列表再也拉不回来。刻意不动 --list-w:用户拖出来的宽度留着,展开时原样还原。 */
+main.list-hidden { grid-template-columns: 0 var(--rz-w, 16px) minmax(0, 1fr); }
+main.list-hidden #listpane { display: none; }
+main.list-hidden .resizer { background: var(--panel); }
 
-/* 顶栏的列表开关:收起态用不同的底色提示「现在是收起的」 */
-#btnList[aria-expanded="false"] { border-color: var(--accent); color: var(--accent); }
-
-/* 分栏拖拽条 */
+/* 分栏拖拽条。它同时是「折叠手柄」的底座:条上拖动改宽度,点手柄收起/展开。 */
 .resizer {
   position: relative;
   cursor: col-resize;
@@ -110,6 +112,36 @@ main.list-hidden #resizer-mid { display: none; }
 .resizer:hover::before,
 .resizer.active::before { background: var(--accent); width: 2px; }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* 折叠手柄:贴在分栏条顶部的小竖片。收起 ⇄ 展开都在这一个位置上,
+   所以「这条能收起」一眼可见,收起之后也还能点回来。 */
+.resizer .handle {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  width: 15px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.resizer .handle:hover { border-color: var(--accent); color: var(--accent); }
+.resizer .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 两个箭头都在 DOM 里,由收起状态决定露出哪一个(收起态同时也高亮手柄) */
+.resizer .handle .ac { display: none; }
+main.list-hidden #btnList { border-color: var(--accent); color: var(--accent); }
+main.list-hidden #btnList .ao { display: none; }
+main.list-hidden #btnList .ac { display: inline; }
 
 #loadMore, #older {
   width: 100%;

@@ -6,15 +6,18 @@
     <label class="f"><span>搜索</span><input id="search"></label>
     <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
     <label class="f"><span>排序</span><select id="order"></select></label>
-    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button>
-      <button id="btnList" type="button" aria-expanded="true">« 列表</button></div>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
     <label class="chk"><input type="checkbox" id="showArchived"></label>
     <span id="count"></span><span id="archivedCount"></span>
     <div id="status" class="status"></div>
   </header>
   <main>
     <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
-    <div class="resizer" id="resizer-mid"></div>
+    <div class="resizer" id="resizer-mid">
+      <button id="btnList" class="handle" type="button" aria-expanded="true" aria-label="收起会话列表">
+        <span class="ao" aria-hidden="true">‹</span><span class="ac" aria-hidden="true">›</span>
+      </button>
+    </div>
     <section id="chatpane">
       <div id="chatHeader">
         <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
@@ -109,16 +112,25 @@
     var resizer = q('#resizer-mid');
     var chatPane = q('#chatpane');
     var hiddenOf = function (el) { return getComputedStyle(el).display === 'none'; };
+    var ao = q('#btnList .ao'), ac = q('#btnList .ac');
+    // 手柄上的两个箭头都在 DOM 里,由 CSS 决定露哪一个;用计算样式判断,不看文案
+    var arrow = function () {
+      if (hiddenOf(ac)) return 'ao';
+      if (hiddenOf(ao)) return 'ac';
+      return 'both';
+    };
 
     try {
       /* ============ 1. 列表折叠:默认展开 ============ */
       localStorage.clear();
       setupListToggle();
       T('初始是展开的', !main.classList.contains('list-hidden'));
-      T('初始按钮写「« 列表」', btn.textContent === '« 列表', btn.textContent);
+      T('初始箭头是「‹」(露出 .ao)', arrow() === 'ao', arrow());
       T('初始 aria-expanded=true', btn.getAttribute('aria-expanded') === 'true');
+      T('初始 aria-label 是「收起会话列表」', btn.getAttribute('aria-label') === '收起会话列表', btn.getAttribute('aria-label'));
       T('初始列表可见', !hiddenOf(listPane) && !hiddenOf(resizer));
       T('初始对话区可见', !hiddenOf(chatPane));
+      T('手柄就长在分栏条里(收起后不会跟着消失)', btn.parentElement === resizer);
 
       /* 先拖出一个自定义列宽,用来验证「收起再展开」不会把它吃掉 */
       main.style.setProperty('--list-w', '420px');
@@ -128,43 +140,67 @@
       /* ============ 2. 点一下收起 ============ */
       btn.click();
       T('点击后 main 带 list-hidden', main.classList.contains('list-hidden'));
-      T('点击后按钮写「» 列表」', btn.textContent === '» 列表', btn.textContent);
+      T('点击后箭头翻成「›」(露出 .ac)', arrow() === 'ac', arrow());
       T('点击后 aria-expanded=false', btn.getAttribute('aria-expanded') === 'false');
-      T('点击后标题提示改为「展开」', btn.title.indexOf('展开') === 0, btn.title);
+      T('点击后 aria-label 改成「展开会话列表」', btn.getAttribute('aria-label') === '展开会话列表', btn.getAttribute('aria-label'));
       T('点击后本地存储记为收起', localStorage.getItem('ocs.listHidden') === '1');
       T('收起时列表被 display:none', hiddenOf(listPane));
-      T('收起时拖拽条被 display:none', hiddenOf(resizer));
-      /* 回归锁:#listpane/#resizer-mid 一 display:none 就退出了网格,
-         若 grid-template-columns 不跟着降成单列,#chatpane 会顶到第一列(宽 0)→ 整片变白 */
+      /* 回归锁:分栏条是唯一的展开入口,收起后它【必须】还在 ——
+         一旦跟着 display:none,列表就再也拉不回来了 */
+      T('收起时分栏条仍然可见', !hiddenOf(resizer));
+      T('收起后手柄仍有实际大小(点得到)', btn.getBoundingClientRect().width > 0 && btn.getBoundingClientRect().height > 0,
+        [btn.getBoundingClientRect().width, btn.getBoundingClientRect().height]);
+      T('收起后手柄没被挤出视口', btn.getBoundingClientRect().left >= 0 && btn.getBoundingClientRect().top >= 0,
+        [btn.getBoundingClientRect().left, btn.getBoundingClientRect().top]);
+      T('收起后分栏条仍是 16px 窄槽', Math.abs(resizer.getBoundingClientRect().width - 16) < 0.5,
+        resizer.getBoundingClientRect().width);
       T('收起后对话区仍有宽度(不会整片变白)', chatPane.getBoundingClientRect().width > 100,
         chatPane.getBoundingClientRect().width);
-      T('收起后对话区宽度 ≈ main 宽度',
-        Math.abs(chatPane.getBoundingClientRect().width - main.getBoundingClientRect().width) < 2,
-        [chatPane.getBoundingClientRect().width, main.getBoundingClientRect().width]);
-      T('收起后网格只剩一列', getComputedStyle(main).gridTemplateColumns.split(' ').length === 1,
+      T('收起后让出的正好是列表那一列(只少了 16px 窄槽)',
+        Math.abs((main.getBoundingClientRect().width - chatPane.getBoundingClientRect().width) - 16) < 1,
+        [main.getBoundingClientRect().width, chatPane.getBoundingClientRect().width]);
+      T('收起后第一列宽度为 0', getComputedStyle(main).gridTemplateColumns.indexOf('0px') === 0,
+        getComputedStyle(main).gridTemplateColumns);
+      T('收起后仍是三列(第一列为 0)', getComputedStyle(main).gridTemplateColumns.split(' ').length === 3,
         getComputedStyle(main).gridTemplateColumns);
 
-      /* ============ 3. 再点一下展开,列宽原样回来 ============ */
+      /* ============ 3. 收起态点手柄能重新展开(入口没丢) ============ */
       btn.click();
-      T('再点一下恢复展开', !main.classList.contains('list-hidden'));
-      T('按钮文案回到「« 列表」', btn.textContent === '« 列表', btn.textContent);
+      T('收起态点手柄能重新展开', !main.classList.contains('list-hidden'));
+      T('箭头回到「‹」', arrow() === 'ao', arrow());
       T('aria-expanded 回到 true', btn.getAttribute('aria-expanded') === 'true');
       T('展开后本地存储清空', localStorage.getItem('ocs.listHidden') === null);
       T('展开后列表回来了', !hiddenOf(listPane) && !hiddenOf(resizer));
       T('展开后自定义列宽没被吃掉', main.style.getPropertyValue('--list-w') === '420px',
         main.style.getPropertyValue('--list-w'));
-      T('展开后网格回到三列(420px + 6px + 1fr)',
+      T('展开后网格回到三列(420px + 16px + 1fr)',
         getComputedStyle(main).gridTemplateColumns.indexOf('420px') === 0 &&
           getComputedStyle(main).gridTemplateColumns.split(' ').length === 3,
         getComputedStyle(main).gridTemplateColumns);
       T('展开后对话区宽度小于 main(让出了列表)', chatPane.getBoundingClientRect().width < main.getBoundingClientRect().width);
 
+      /* ============ 3b. 手柄不吃拖拽:点手柄≠拖宽度,点条上空白才是拖宽度 ============ */
+      resizer.setPointerCapture = function () {};
+      resizer.releasePointerCapture = function () {};
+      setupResizers();
+      var wOpen = main.style.getPropertyValue('--list-w');
+      var pd = function (target) {
+        try { target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 500, pointerId: 7 })); } catch (e) {}
+      };
+      pd(btn);
+      T('点手柄不会进入拖拽态', !document.body.classList.contains('resizing'));
+      T('点手柄不会改动列宽', main.style.getPropertyValue('--list-w') === wOpen,
+        [wOpen, main.style.getPropertyValue('--list-w')]);
+      pd(resizer);
+      T('点分栏条空白处仍能进入拖拽态', document.body.classList.contains('resizing'));
+      try { resizer.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7 })); } catch (e) {}
+      T('拖拽结束后退出拖拽态', !document.body.classList.contains('resizing'));
+
       /* ============ 4. 折叠状态被记住(模拟刷新后重新接线) ============ */
       localStorage.setItem('ocs.listHidden', '1');
       setupListToggle(); // 重复接线:只按存储重画,不应重复挂监听
       T('重新接线后按存储进入收起态', main.classList.contains('list-hidden'));
-      T('重新接线后按钮为「» 列表」', btn.textContent === '» 列表', btn.textContent);
-      var wAfterRe = main.getBoundingClientRect().width;
+      T('重新接线后箭头为「›」', arrow() === 'ac', arrow());
       btn.click();
       T('重复接线后单击只切换一次(不会一次点两下)', !main.classList.contains('list-hidden'));
       T('展开后不残留收起状态', localStorage.getItem('ocs.listHidden') === null);

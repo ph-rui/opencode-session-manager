@@ -2747,6 +2747,8 @@ function setupResizers() {
   if (savedList) main.style.setProperty('--list-w', savedList + 'px');
 
   function startDrag(e) {
+    // 手柄是「折叠/展开」的按钮,按到它身上不算拖宽度
+    if (e.target.closest && e.target.closest('.handle')) return;
     const handle = e.currentTarget;
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
@@ -2757,7 +2759,7 @@ function setupResizers() {
       const mainRect = main.getBoundingClientRect();
       const start = listPane.getBoundingClientRect().left;
       let w = ev.clientX - start;
-      const maxList = mainRect.width - 12 - 320;
+      const maxList = mainRect.width - 22 - 320;
       w = Math.max(280, Math.min(Math.max(280, maxList), w));
       main.style.setProperty('--list-w', w + 'px');
     };
@@ -2776,14 +2778,17 @@ function setupResizers() {
   }
 
   r2.addEventListener('pointerdown', startDrag);
-  r2.addEventListener('dblclick', () => {
+  r2.addEventListener('dblclick', (e) => {
+    // 手柄上双击会顺带触发两次「折叠/展开」,别再叠一次复位宽度
+    if (e.target.closest && e.target.closest('.handle')) return;
     main.style.removeProperty('--list-w');
     localStorage.removeItem('ocs.listW');
   });
 }
 
 /* 会话列表整列收起 / 展开。
- * 入口只放在顶栏(#btnList):分栏条收起后本身会被 display:none,不能当入口。
+ * 入口就是分栏条顶部那个手柄(#btnList 在 #resizer-mid 里):收起后分栏条本身
+ * 会保留成一条 16px 窄槽,所以手柄不会跟着消失,列表随时能拉回来。
  * 收起状态记在 localStorage,与列宽 ocs.listW 并列。 */
 function setupListToggle() {
   const main = document.querySelector('main');
@@ -2793,8 +2798,8 @@ function setupListToggle() {
   const paint = (hidden) => {
     main.classList.toggle('list-hidden', hidden);
     btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
-    btn.textContent = hidden ? '» 列表' : '« 列表';
-    btn.title = hidden ? '展开左侧的会话列表' : '收起左侧的会话列表';
+    btn.setAttribute('aria-label', hidden ? '展开会话列表' : '收起会话列表');
+    btn.title = hidden ? '展开会话列表(分栏条上拖动可改宽度)' : '收起会话列表(分栏条上拖动可改宽度)';
   };
 
   const stored = () => localStorage.getItem('ocs.listHidden') === '1';
