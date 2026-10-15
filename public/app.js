@@ -419,6 +419,70 @@ function setupEvents() {
   };
 }
 
+/* ----------------------------- 分栏拖拽 ----------------------------- */
+
+function setupResizers() {
+  const main = document.querySelector('main');
+  const leftPane = document.getElementById('filters');
+  const listPane = document.getElementById('listpane');
+  const r1 = document.getElementById('resizer-left');
+  const r2 = document.getElementById('resizer-mid');
+  if (!main || !leftPane || !listPane || !r1 || !r2) return;
+
+  const savedLeft = parseInt(localStorage.getItem('ocs.leftW') || '', 10);
+  const savedMid = parseInt(localStorage.getItem('ocs.midW') || '', 10);
+  if (savedLeft) main.style.setProperty('--left-w', savedLeft + 'px');
+  if (savedMid) main.style.setProperty('--mid-w', savedMid + 'px');
+
+  function startDrag(e) {
+    const handle = e.currentTarget;
+    const isLeft = handle === r1;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('active');
+    document.body.classList.add('resizing');
+
+    const move = (ev) => {
+      const mainRect = main.getBoundingClientRect();
+      if (isLeft) {
+        let w = ev.clientX - mainRect.left;
+        w = Math.max(150, Math.min(480, w));
+        main.style.setProperty('--left-w', w + 'px');
+      } else {
+        const start = listPane.getBoundingClientRect().left;
+        let w = ev.clientX - start;
+        const maxMid = mainRect.width - leftPane.getBoundingClientRect().width - 12 - 320;
+        w = Math.max(280, Math.min(Math.max(280, maxMid), w));
+        main.style.setProperty('--mid-w', w + 'px');
+      }
+    };
+    const end = () => {
+      handle.classList.remove('active');
+      document.body.classList.remove('resizing');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      localStorage.setItem('ocs.leftW', Math.round(leftPane.getBoundingClientRect().width));
+      localStorage.setItem('ocs.midW', Math.round(listPane.getBoundingClientRect().width));
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  r1.addEventListener('pointerdown', startDrag);
+  r2.addEventListener('pointerdown', startDrag);
+
+  [r1, r2].forEach((h) =>
+    h.addEventListener('dblclick', () => {
+      main.style.removeProperty('--left-w');
+      main.style.removeProperty('--mid-w');
+      localStorage.removeItem('ocs.leftW');
+      localStorage.removeItem('ocs.midW');
+    })
+  );
+}
+
 /* ----------------------------- 绑定 ----------------------------- */
 
 function debounce(fn, ms) {
@@ -434,6 +498,7 @@ function init() {
   setInterval(health, 15000);
   loadSessions({ reset: true });
   setupEvents();
+  setupResizers();
 
   $('#search').addEventListener(
     'input',

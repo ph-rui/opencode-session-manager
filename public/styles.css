@@ -36,12 +36,31 @@ html, body {
 
 main {
   display: grid;
-  grid-template-columns: 220px minmax(420px, 1fr) minmax(420px, 1.2fr);
+  grid-template-columns: var(--left-w, 200px) 6px var(--mid-w, 560px) 6px minmax(0, 1fr);
   height: calc(100vh - 43px);
 }
 
+/* 分栏拖拽条 */
+.resizer {
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 5;
+  touch-action: none;
+}
+.resizer::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border);
+}
+.resizer:hover::before,
+.resizer.active::before { background: var(--accent); width: 2px; }
+body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+
 #filters {
-  border-right: 1px solid var(--border);
   padding: 14px;
   overflow: auto;
   background: var(--panel);
@@ -68,7 +87,7 @@ main {
 #filters button:hover, #loadMore:hover, #older:hover { border-color: var(--accent); }
 .hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
 
-#listpane { overflow: auto; border-right: 1px solid var(--border); }
+#listpane { overflow: auto; min-width: 0; }
 #loadMore { width: calc(100% - 20px); margin: 10px; }
 
 table#list { width: 100%; border-collapse: collapse; }
@@ -91,10 +110,19 @@ table#list { width: 100%; border-collapse: collapse; }
 #list td.title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #list td.dir { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #list td.upd, #list td.tok, #list td.cost { color: var(--muted); white-space: nowrap; }
-#list td.actions { white-space: nowrap; }
+#list td.actions, #list th.actions {
+  position: sticky;
+  right: 0;
+  white-space: nowrap;
+  box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.7);
+}
+#list th.actions { background: var(--panel); z-index: 2; }
+#list td.actions { background: var(--bg); }
+#list tbody tr:hover td.actions { background: var(--panel); }
+#list tbody tr.selected td.actions { background: #21304d; }
 #list td.actions button {
-  padding: 3px 7px;
-  margin-right: 3px;
+  padding: 2px 6px;
+  margin-right: 2px;
   font-size: 11px;
   background: var(--panel2);
   color: var(--fg);
