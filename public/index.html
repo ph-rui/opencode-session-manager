@@ -62,12 +62,37 @@
       </div>
       <div id="messages"></div>
       <div id="asks" hidden></div>
+      <div id="inbox" hidden></div>
       <div id="composer">
-        <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行)"></textarea>
-        <button id="send">发送</button>
+        <div id="ctoolbar" hidden>
+          <label class="ctl" title="当前会话使用的智能体">
+            <span>智能体</span>
+            <select id="agentSel"><option value="">默认</option></select>
+          </label>
+          <label class="ctl" title="当前会话使用的模型">
+            <span>模型</span>
+            <select id="modelSel"><option value="">默认</option></select>
+          </label>
+          <label class="ctl" id="variantWrap" hidden title="模型变体 / 推理档位">
+            <span>变体</span>
+            <select id="variantSel"></select>
+          </label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden title="运行中消息的投递方式">
+            <button type="button" data-delivery="queue">排队</button>
+            <button type="button" data-delivery="steer">插话</button>
+          </div>
+          <button type="button" id="interrupt" class="chip danger" hidden title="中断当前正在执行的回合">■ 中断</button>
+        </div>
+        <div class="cinput">
+          <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行)"></textarea>
+          <button id="send">发送</button>
+        </div>
       </div>
     </section>
   </main>
+
+  <div id="toast" hidden></div>
 
   <script src="/app.js"></script>
 </body>

@@ -20,7 +20,7 @@
 
 ### 非目标(v1 明确不做,留作 v2)
 - ~~网页内应答权限请求(permission)与交互式表单(form)~~ → 已作为 v2 的 A 组实现(见 §7);
-- 中断 / steer / 切换 model·agent;
+- ~~中断 / steer / 切换 model·agent~~ → 已作为 v2 的 B 组实现(见 §7);
 - 文件附件、网页内新建会话、归档、导入导出;
 - 深链跳回 TUI。
 
@@ -140,7 +140,15 @@ opencode-session-manager/
   - 权限:`GET /api/session/:sid/permission`、`GET .../permission/:rid`、`POST .../permission/:rid/reply` `{decision:"once"|"always"|"reject"}`。
   - 字段类型:`string`(format: email/uri/date/date-time,可带 options/custom)、`number`、`integer`、`boolean`、`multiselect`(options/minItems/maxItems/custom)、`external`(url)。通用:required/default/when。
   - 语义要点(与服务端 `fI/uc/ac` 对齐):`when` 未满足的字段提交会被拒;`external` 必须为 `true`;答案值类型为 `string|number|boolean|string[]`。
-- 普通对话升级:中断 / steer、切换 model·agent。
+- **B 会话控制(已实现)** — 运行状态、中断、steer/queue、切换 model·agent。
+  - 运行状态:`GET /api/session/active` → `{data:{<sid>:{type:"running"}}}`;事件 `session.status`(`status.type ∈ idle|retry|busy`)、`session.idle`(`{sessionID}`)、`session.execution.started|succeeded|failed|interrupted`(`{sessionID,...}`,interrupted 另带 `reason ∈ user|shutdown|superseded|inactivity`)。前端以事件为主、8 秒轮询兜底。
+  - 中断:`POST /api/session/:sid/interrupt?resume=` → `{interrupted:boolean}`;空闲会话返回 `false`,会话不存在 `404`。
+  - 投递方式:`prompt` body 的 `delivery ∈ steer|queue`;响应 `{data: Session.Inbox.User}` 里回带 `delivery`。空闲时不带该字段即立即执行。
+  - 待发送队列:`GET /api/session/:sid/inbox` → `{data: Session.Inbox.Info[]}`,`Info = User|Synthetic|Compaction|Move`(均有 `id/sessionID/time/type/delivery/payload`)。
+    `PATCH .../inbox/:iid` `{delivery}` → `204`(不可改时 `409`);`DELETE .../inbox/:iid` → `204`(幂等)。切换 agent 会注入 `synthetic` 系统提醒,前端按 `type` 过滤不展示。
+  - 切换:`GET /api/agent?location[directory]=`(Agent.Info:`id/name/mode ∈ subagent|primary|all/hidden/model`)、`GET /api/model?location[directory]=`(Model.Info:`providerID/modelID/name/enabled/variants[]`)、`GET /api/model/default`。
+    `POST /api/session/:sid/agent` `{agent}` → `204`;`POST /api/session/:sid/model` `{model:{id,providerID,variant?}}` → `204`。
+    服务端不校验 agent/model 是否存在(未知值也 `204`),但 `model` 缺 `providerID` → `400`。会话当前值在 `Session.Info.agent` / `.model`(可为 `null` = 跟随默认)。
 - 渲染升级:直接消费事件里的 part 增量,做逐 token 流式与增量合并。
 - 能力扩展:网页内新建会话、归档、导入导出、深链跳回 TUI。
 
@@ -164,11 +172,20 @@ opencode-session-manager/
 - [ ] 停掉 OpenCode 服务时,页面给出清晰错误提示而非白屏。
 - [ ] 触发一次 `question` 工具问询:底部出现卡片,提交后助手继续;列表徽标消失。
 - [ ] 触发一次需批准的权限请求(需在配置里把某动作设为 `ask`):三个按钮可用,应答后工具继续。
+- [ ] 助手运行中:标题栏显示 `● 运行中`,输入区出现「排队/插话」与「■ 中断」;点中断后回到空闲。
+- [ ] 运行中发送消息选「排队」:消息进入待发送队列(不立刻出现在消息流),回合结束后自动执行;选「插话」则立即并入当前回合。
+- [ ] 待发送项可「改为排队/改为插话」与「取消」,操作后队列即时刷新。
+- [ ] 切换智能体/模型后,重新打开该会话仍显示新值(已持久化)。
 
 ### 问询应答的自动化验证(本次已执行)
 - 浏览器内断言 36 项(`/tmp/ocsm-probe/asks-unit*.html`,真实 `app.js`):字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装与本地校验(含 `external`、数值范围、`minItems/maxItems`、`minLength`、`email/uri`)。
 - 端到端 11 项(经面板代理,`/tmp/ocsm-probe/e2e-forms.sh`):真实创建表单 → 列表可见(`Form.Info` 无 `state`)→ 提交未激活字段被拒 `400` → `external` 未确认被拒 `400` → 正常应答 `204` 且服务端保存答案与提交一致 → `detail` 为 `answered` → 取消 `204` 且为 `cancelled`。
 - 权限应答路由经代理可达(已处理/不存在 → `404`);`permission.asked` 的真实出现取决于本机权限策略,当前全部 `allow`,故留作手动验收。
+
+### 会话控制的自动化验证(本次已执行)
+- 端到端 `test/e2e-controls.sh`(22 项;`OCS_E2E_LLM=1` 时 31 项,全部通过):agent 切到 `plan`/`build` 并核对持久化;`model` 缺 `providerID` 被拒 `400`、正常切换 `204` 且持久化;空闲中断 `interrupted=false`;未知会话的 `interrupt`/`inbox` 均 `404`;`synthetic` 项被前端规则过滤;`inbox` 改投递方式与取消的负例(`409`/`204`);真实运行中 `queue` 投递→队列可见→改 `steer`→取消→`interrupt` 返回 `true` 且回到空闲。
+- 浏览器内断言 `test/ui-controls-run.js`(77 项,真实 `public/app.js`,无头 Firefox):agent/model 选择器的过滤与分组、变体显隐、切换请求体形状、中断/投递控件显隐、运行状态文案与列表标记、待发送队列渲染与 PATCH/DELETE 请求、发送时的 `delivery` 选择、事件→运行状态映射。
+- 离线渲染核对:`/tmp/ocsm-probe/controls-preview.html`(真实 `app.js` + `styles.css` + 假数据)在运行中与空闲两种状态下的截图,确认工具栏、待发送队列与提示条不遮挡输入框。
 
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?

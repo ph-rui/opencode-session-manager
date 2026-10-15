@@ -328,7 +328,107 @@ table#list { width: 100%; border-collapse: collapse; }
 .ask-err { color: var(--bad); font-size: 11.5px; }
 .ask-badge { color: #b8860b; font-size: 11px; white-space: nowrap; }
 
-#composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--panel); }
+/* --------------------------- 待发送队列(inbox) --------------------------- */
+
+#inbox { border-top: 1px solid var(--border); background: #f7f9ff; max-height: 26vh; overflow: auto; }
+.inbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #e6ecf7;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.inbox-item:last-child { border-bottom: none; }
+.ib-mark { color: var(--accent); font-weight: 700; }
+.ib-kind { color: var(--muted); font-size: 11px; }
+.ib-delivery {
+  font-size: 10.5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid #cfd8e6;
+  background: #fff;
+  white-space: nowrap;
+}
+.ib-delivery.steer { border-color: #d9a520; background: #fff8e6; color: #8a6a00; }
+.ib-delivery.queue { border-color: #9cc0e0; background: #eef6ff; color: #0a5c9c; }
+.ib-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-acts { display: flex; gap: 4px; }
+.ib-acts button {
+  padding: 1px 7px;
+  font-size: 11px;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ib-acts button:hover { border-color: var(--accent); }
+.ib-acts button.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+/* --------------------------- 输入区 --------------------------- */
+
+#composer {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+#ctoolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 14px 0;
+  flex-wrap: wrap;
+}
+#ctoolbar[hidden] { display: none; }
+.ctl { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ctl[hidden] { display: none; }
+.ctl select {
+  max-width: 240px;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  color: var(--fg);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.ctl select:hover { border-color: var(--accent); }
+.ctl-spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg[hidden] { display: none; }
+.seg button {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  background: var(--panel2);
+  color: var(--muted);
+  border: none;
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.active { background: #fff; color: var(--fg); font-weight: 600; }
+.seg button[data-delivery="steer"].active { background: #fff8e6; color: #8a6a00; }
+.seg button[data-delivery="queue"].active { background: #eef6ff; color: #0a5c9c; }
+.chip {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.chip[hidden] { display: none; }
+.chip:hover { border-color: var(--accent); }
+.chip:disabled { opacity: 0.5; cursor: default; }
+.chip.danger:hover { border-color: var(--danger); color: var(--danger); background: #fff5f5; }
+
+.cinput { display: flex; gap: 8px; padding: 8px 14px 10px; }
 #input {
   flex: 1;
   resize: vertical;
@@ -350,3 +450,27 @@ table#list { width: 100%; border-collapse: collapse; }
   font-weight: 600;
 }
 #send:hover { filter: brightness(1.1); }
+#send:disabled { opacity: 0.5; cursor: default; filter: none; }
+
+/* 列表中的运行中标记 */
+.run-badge { color: var(--accent); font-size: 11px; white-space: nowrap; }
+.state.retry { color: #b8860b; }
+
+/* 轻量提示 */
+#toast {
+  position: fixed;
+  top: 52px;
+  right: 16px;
+  z-index: 50;
+  max-width: min(44vw, 480px);
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: #333;
+  color: #fff;
+  font-size: 12.5px;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
+}
+#toast[hidden] { display: none; }
+#toast.ok { background: #2e6b31; }
+#toast.warn { background: #8a6a00; }
+#toast.bad { background: #a4262c; }

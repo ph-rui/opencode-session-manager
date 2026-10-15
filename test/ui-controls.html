@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>controls unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div><div id="status" class="status"></div></header>
+  <main>
+    <aside id="filters"><input id="search"><select id="dirFilter"></select><select id="order"></select>
+      <button id="refresh"></button><span id="count"></span></aside>
+    <div class="resizer" id="resizer-left"></div>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader"><span id="chatTitle"></span><span id="chatState"></span><div id="chatMeta"></div>
+        <button id="older" hidden></button></div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value="">默认</option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value="">默认</option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden>
+            <button type="button" data-delivery="queue">排队</button>
+            <button type="button" data-delivery="steer">插话</button>
+          </div>
+          <button type="button" id="interrupt" class="chip danger" hidden>■ 中断</button>
+        </div>
+        <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init:本测试直接调用被测函数,避免后台拉取干扰断言 */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var AGENTS = [
+      { id: 'build', name: 'Build', mode: 'primary', hidden: false },
+      { id: 'plan', name: 'Plan', mode: 'primary', hidden: false },
+      { id: 'general', name: 'General', mode: 'subagent', hidden: false },
+      { id: 'secret', name: 'Secret', mode: 'primary', hidden: true },
+    ];
+    var MODELS = [
+      { providerID: 'p1', modelID: 'm1', name: 'M1', enabled: true, variants: [ { id: 'low' }, { id: 'high' } ] },
+      { providerID: 'p2', modelID: 'm2', name: 'M2', enabled: true, variants: [] },
+      { providerID: 'p3', modelID: 'off', name: 'OFF', enabled: false, variants: [] },
+    ];
+    var SESSION = {
+      id: 'ses_t', title: 'T', agent: 'build',
+      model: { id: 'm1', providerID: 'p1', variant: 'low' },
+      location: { directory: '/proj' }, time: { updated: 1 },
+    };
+    var ACTIVE_DATA = {};
+
+    /* 打桩:记录请求并按路径返回固定 JSON;保留原始 fetch 供结果回传 */
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      window.calls.push({ url: u, method: (opts && opts.method) || 'GET', body: (opts && opts.body) || null });
+      var data;
+      if (u.indexOf('/api/session/active') === 0) data = { data: ACTIVE_DATA };
+      else if (u.indexOf('/api/agent') === 0) data = { data: AGENTS };
+      else if (u.indexOf('/api/model') === 0) data = { data: MODELS };
+      else if (u.indexOf('/api/session/') === 0 && u.indexOf('/inbox') >= 0) data = { data: [] };
+      else if (u.indexOf('/api/session?') === 0) data = { data: [SESSION], cursor: {} };
+      else data = {};
+      return { ok: true, status: 200, text: async function () { return JSON.stringify(data); } };
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (body) { try { window.__realFetch('/result', { method: 'POST', body: body }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var vals = function (sel) { return qa(sel + ' option').map(function (o) { return o.value; }); };
+    var reqs = function (re) { return window.calls.filter(function (c) { return re.test(c.url); }); };
+    var bodyOf = function (c) { return JSON.parse(c.body); };
+
+    try {
+      /* ---------------- 智能体 / 模型选择器 ---------------- */
+      store.sessions.set(SESSION.id, SESSION);
+      store.selected = SESSION.id;
+      await renderControls(SESSION);
+
+      T('工具栏可见', q('#ctoolbar').hidden === false);
+      T('agent 选项按前端规则过滤(subagent/hidden 除外)',
+        JSON.stringify(vals('#agentSel')) === JSON.stringify(['', 'build', 'plan']), vals('#agentSel'));
+      T('agent 选中当前值 build', q('#agentSel').value === 'build', q('#agentSel').value);
+      T('model 按 provider 分组',
+        qa('#modelSel optgroup').map(function (g) { return g.label; }).join(',') === 'p1,p2',
+        qa('#modelSel optgroup').map(function (g) { return g.label; }));
+      T('未启用的模型被过滤', vals('#modelSel').indexOf('p3/off') === -1, vals('#modelSel'));
+      T('model 选中当前值 p1/m1', q('#modelSel').value === 'p1/m1', q('#modelSel').value);
+      T('modelIndex 可用于反查 Model.Info', !!store.modelIndex.get('p1/m1'));
+      T('有变体时显示变体选择', q('#variantWrap').hidden === false && q('#variantSel').value === 'low',
+        q('#variantSel').value);
+
+      T('modelKey 拼接 providerID/id', modelKey({ providerID: 'p1', id: 'm1' }) === 'p1/m1');
+      T('modelKey 对空值返回空串', modelKey(null) === '');
+      T('ctrlKeyOf 随 agent/model 变化',
+        ctrlKeyOf(SESSION) !== ctrlKeyOf({ agent: 'plan', model: SESSION.model }));
+
+      /* 没有变体的模型 → 变体选择隐藏 */
+      q('#modelSel').value = 'p2/m2';
+      await renderControls({
+        id: 'ses_t', agent: 'build', model: { id: 'm2', providerID: 'p2' },
+        location: { directory: '/proj' },
+      });
+      T('无变体时隐藏变体选择', q('#variantWrap').hidden === true);
+
+      /* ---------------- 切换请求形状(与 TUI/服务端契约一致) ---------------- */
+      await renderControls(SESSION); // 恢复带变体的选择器
+      T('恢复后变体选择可见', q('#variantWrap').hidden === false);
+      window.calls.length = 0;
+      q('#modelSel').value = 'p1/m1';
+      q('#variantSel').value = 'high';
+      await switchModel();
+      var cm = reqs(/\/model$/)[0];
+      T('切换模型 POST 到 /api/session/:id/model', !!cm && cm.method === 'POST' && cm.url === '/api/session/ses_t/model', cm && cm.url);
+      T('模型请求体含 providerID/id/variant',
+        !!cm && bodyOf(cm).model.providerID === 'p1' && bodyOf(cm).model.id === 'm1' && bodyOf(cm).model.variant === 'high',
+        cm && bodyOf(cm));
+      T('切换模型给出提示', q('#toast').hidden === false && q('#toast').textContent.indexOf('p1/m1') >= 0, q('#toast').textContent);
+
+      window.calls.length = 0;
+      await switchAgent('plan');
+      var ca = reqs(/\/agent$/)[0];
+      T('切换智能体 POST 到 /api/session/:id/agent', !!ca && ca.method === 'POST' && ca.url === '/api/session/ses_t/agent', ca && ca.url);
+      T('智能体请求体为 {agent}', !!ca && bodyOf(ca).agent === 'plan', ca && bodyOf(ca));
+
+      window.calls.length = 0;
+      await switchAgent('');
+      T('智能体不允许置空:不发请求', reqs(/\/agent$/).length === 0);
+
+      /* ---------------- 中断按钮与投递选择 ---------------- */
+      store.selected = SESSION.id;
+      store.running = false;
+      store.active.set(SESSION.id, 'busy');
+      updateComposerControls();
+      T('运行中显示中断按钮', q('#interrupt').hidden === false);
+      T('运行中显示投递选择', q('#delivery').hidden === false);
+      T('运行中发送按钮可用', q('#send').disabled === false);
+
+      store.active.delete(SESSION.id);
+      store.running = false;
+      updateComposerControls();
+      T('空闲隐藏中断按钮', q('#interrupt').hidden === true);
+      T('空闲隐藏投递选择', q('#delivery').hidden === true);
+
+      store.selected = null;
+      updateComposerControls();
+      T('未选会话时禁用发送', q('#send').disabled === true);
+
+      setDelivery('steer');
+      T('插话按钮高亮', q('#delivery button[data-delivery="steer"]').classList.contains('active'));
+      T('排队按钮不再高亮', !q('#delivery button[data-delivery="queue"]').classList.contains('active'));
+      T('store.delivery=steer', store.delivery === 'steer');
+      setDelivery('bogus');
+      T('非法投递值回退为排队', store.delivery === 'queue');
+
+      /* ---------------- 中断请求 ---------------- */
+      store.selected = SESSION.id;
+      window.calls.length = 0;
+      await interrupt();
+      var ci = reqs(/\/interrupt$/)[0];
+      T('中断 POST 到 /api/session/:id/interrupt', !!ci && ci.method === 'POST' && ci.url === '/api/session/ses_t/interrupt', ci && ci.url);
+      T('中断后重取运行状态', reqs(/\/api\/session\/active$/).length >= 1);
+
+      /* ---------------- 运行状态文案 ---------------- */
+      store.selected = SESSION.id;
+      store.running = false;
+      store.active.set(SESSION.id, 'busy');
+      updateChatStatus();
+      T('运行中状态文案', q('#chatState').textContent.indexOf('运行中') >= 0, q('#chatState').textContent);
+      store.active.set(SESSION.id, 'retry');
+      updateChatStatus();
+      T('重试中状态文案', q('#chatState').textContent.indexOf('重试') >= 0, q('#chatState').textContent);
+      store.active.delete(SESSION.id);
+      updateChatStatus();
+      T('空闲状态文案', q('#chatState').textContent === '空闲', q('#chatState').textContent);
+
+      /* ---------------- 列表运行标记 ---------------- */
+      store.sessions.set(SESSION.id, SESSION);
+      store.active.set(SESSION.id, 'busy');
+      renderSessions();
+      var tr = q('#list tbody tr[data-id="ses_t"]');
+      T('列表显示运行标记', !!tr && !!tr.querySelector('.run-badge'));
+      store.active.set(SESSION.id, 'retry');
+      renderSessions();
+      tr = q('#list tbody tr[data-id="ses_t"]');
+      T('重试中显示不同标记', !!tr && tr.querySelector('.run-badge').textContent.indexOf('重试') >= 0,
+        tr && tr.querySelector('.run-badge').textContent);
+      store.active.delete(SESSION.id);
+      renderSessions();
+      tr = q('#list tbody tr[data-id="ses_t"]');
+      T('空闲无运行标记', !!tr && !tr.querySelector('.run-badge'));
+
+      /* ---------------- 待发送队列渲染 ---------------- */
+      store.selected = SESSION.id;
+      store.inbox.set(SESSION.id, [
+        { id: 'i1', sessionID: 'ses_t', type: 'user', delivery: 'queue', payload: { text: '排队消息' } },
+        { id: 'i2', sessionID: 'ses_t', type: 'user', delivery: 'steer', payload: { text: '插话消息' } },
+        { id: 'i3', sessionID: 'ses_t', type: 'synthetic', delivery: 'steer', payload: { text: '系统注入提示' } },
+      ]);
+      renderInbox();
+      T('有内容时显示队列', q('#inbox').hidden === false);
+      T('过滤 synthetic 后剩 2 项', qa('#inbox .inbox-item').length === 2, qa('#inbox .inbox-item').length);
+      T('显示排队标签', q('#inbox').textContent.indexOf('排队') >= 0);
+      T('显示插话标签', q('#inbox').textContent.indexOf('插话') >= 0);
+      T('不展示 synthetic 文本', q('#inbox').textContent.indexOf('系统注入提示') < 0);
+      T('展示用户消息文本', q('#inbox').textContent.indexOf('排队消息') >= 0);
+      var first = qa('#inbox .inbox-item')[0];
+      T('排队项按钮为「改为插话」', first.querySelector('[data-inbox-op="toggle"]').textContent === '改为插话',
+        first.querySelector('[data-inbox-op="toggle"]').textContent);
+      T('每项含取消按钮', !!first.querySelector('[data-inbox-op="cancel"]'));
+      T('插话项按钮为「改为排队」',
+        qa('#inbox .inbox-item')[1].querySelector('[data-inbox-op="toggle"]').textContent === '改为排队');
+
+      /* move 类型条目的文本取自 payload.location.directory */
+      store.inbox.set(SESSION.id, [
+        { id: 'i4', sessionID: 'ses_t', type: 'move', delivery: 'queue', payload: { location: { directory: '/tmp/oc-x' } } },
+      ]);
+      renderInbox();
+      T('move 条目展示目标目录', q('#inbox').textContent.indexOf('/tmp/oc-x') >= 0, q('#inbox').textContent);
+      T('move 条目标记为「移动」', q('#inbox').textContent.indexOf('移动') >= 0);
+
+      store.inbox.set(SESSION.id, []);
+      renderInbox();
+      T('队列为空时隐藏容器', q('#inbox').hidden === true);
+
+      /* ---------------- 队列操作请求 ---------------- */
+      var item = { id: 'i1', sessionID: 'ses_t', type: 'user', delivery: 'queue', payload: { text: 'x' } };
+      window.calls.length = 0;
+      await setInboxDelivery(item, 'steer');
+      var cp = reqs(/\/inbox\/i1$/)[0];
+      T('改投递方式 PATCH 到 inbox 项',
+        !!cp && cp.method === 'PATCH' && cp.url === '/api/session/ses_t/inbox/i1' && bodyOf(cp).delivery === 'steer',
+        cp && (cp.url + ' ' + cp.body));
+      window.calls.length = 0;
+      await cancelInbox(item);
+      var cd = reqs(/\/inbox\/i1$/)[0];
+      T('取消 DELETE 到 inbox 项', !!cd && cd.method === 'DELETE' && cd.url === '/api/session/ses_t/inbox/i1', cd && cd.url);
+
+      /* ---------------- 发送时的投递方式 ---------------- */
+      store.selected = SESSION.id;
+      store.running = false;
+      store.active.set(SESSION.id, 'busy');
+      setDelivery('queue');
+      store.pending = false;
+      q('#input').value = '  排队一下  ';
+      window.calls.length = 0;
+      await send();
+      var ps = reqs(/\/prompt$/)[0];
+      T('运行中发送 POST /prompt', !!ps && ps.method === 'POST' && ps.url === '/api/session/ses_t/prompt', ps && ps.url);
+      T('运行中发送带 delivery=queue', !!ps && bodyOf(ps).delivery === 'queue', ps && bodyOf(ps));
+      T('发送文本已 trim', !!ps && bodyOf(ps).text === '排队一下', ps && bodyOf(ps).text);
+      T('排队后不置 pending', store.pending === false);
+      T('排队后提示已排队', q('#toast').textContent.indexOf('排队') >= 0, q('#toast').textContent);
+
+      setDelivery('steer');
+      q('#input').value = '插话内容';
+      window.calls.length = 0;
+      await send();
+      ps = reqs(/\/prompt$/)[0];
+      T('插话发送带 delivery=steer', !!ps && bodyOf(ps).delivery === 'steer', ps && bodyOf(ps));
+      T('插话后进入 pending', store.pending === true);
+
+      store.active.delete(SESSION.id);
+      store.running = false;
+      q('#input').value = '空闲消息';
+      window.calls.length = 0;
+      await send();
+      ps = reqs(/\/prompt$/)[0];
+      T('空闲发送不带 delivery', !!ps && !('delivery' in bodyOf(ps)), ps && bodyOf(ps));
+      T('空输入不发送', (function () {
+        q('#input').value = '   ';
+        window.calls.length = 0;
+        send();
+        return reqs(/\/prompt$/).length === 0;
+      })());
+
+      /* ---------------- 事件流 → 运行状态 ---------------- */
+      store.active.clear();
+      handleControlEvent({ type: 'session.status', data: { sessionID: 'ses_x', status: { type: 'busy' } } });
+      T('session.status busy → 记为运行中', store.active.get('ses_x') === 'busy');
+      handleControlEvent({ type: 'session.status', data: { sessionID: 'ses_x', status: { type: 'retry' } } });
+      T('session.status retry → 保留重试状态', store.active.get('ses_x') === 'retry');
+      handleControlEvent({ type: 'session.status', data: { sessionID: 'ses_x', status: { type: 'idle' } } });
+      T('session.status idle → 移除', !store.active.has('ses_x'));
+      handleControlEvent({ type: 'session.idle', data: { sessionID: 'ses_y' } });
+      T('session.idle → 移除', !store.active.has('ses_y'));
+      handleControlEvent({ type: 'session.execution.started', data: { sessionID: 'ses_y' } });
+      T('session.execution.started → 记为运行中', store.active.get('ses_y') === 'busy');
+      handleControlEvent({ type: 'session.execution.interrupted', data: { sessionID: 'ses_y' } });
+      T('session.execution.interrupted → 移除', !store.active.has('ses_y'));
+      handleControlEvent({ type: 'session.execution.succeeded', data: { sessionID: 'ses_y' } });
+      T('session.execution.succeeded → 不误报运行中', !store.active.has('ses_y'));
+      store.active.clear();
+
+      /* session.updated:兼容「带 info」与「只有 sessionID」两种载荷 */
+      store.selected = 'ses_t';
+      store.sessions.set('ses_t', Object.assign({}, SESSION));
+      handleControlEvent({ type: 'session.updated', data: { info: { id: 'ses_t', title: 'T2', location: { directory: '/proj' } } } });
+      T('session.updated(带 info)合并到会话表', store.sessions.get('ses_t').title === 'T2', store.sessions.get('ses_t').title);
+      handleControlEvent({ type: 'session.updated', data: { sessionID: 'ses_t' } });
+      T('session.updated(无 info)不破坏已有字段', store.sessions.get('ses_t').title === 'T2');
+
+      /* 事件里可能是扁平 directory(V1 形状),patchSession 需补出 location */
+      store.sessions.set('ses_z', { id: 'ses_z' });
+      patchSession('ses_z', { title: 'Z', directory: '/flat' });
+      T('patchSession 由扁平 directory 补出 location',
+        store.sessions.get('ses_z').location && store.sessions.get('ses_z').location.directory === '/flat',
+        store.sessions.get('ses_z'));
+
+      /* 实测的真实事件名:重命名 / 切 agent / 切 model / 移动 */
+      store.sessions.set('ses_t', Object.assign({}, SESSION));
+      handleControlEvent({ type: 'session.renamed', data: { sessionID: 'ses_t', title: '新标题' } });
+      T('session.renamed 更新标题', store.sessions.get('ses_t').title === '新标题', store.sessions.get('ses_t').title);
+      handleControlEvent({ type: 'session.agent.selected', data: { sessionID: 'ses_t', agent: 'plan' } });
+      T('session.agent.selected 更新 agent', store.sessions.get('ses_t').agent === 'plan');
+      handleControlEvent({ type: 'session.model.selected', data: { sessionID: 'ses_t', model: { id: 'm2', providerID: 'p2' } } });
+      T('session.model.selected 更新 model', store.sessions.get('ses_t').model.id === 'm2', store.sessions.get('ses_t').model);
+      handleControlEvent({ type: 'session.moved', location: { directory: '/newdir' }, data: { sessionID: 'ses_t' } });
+      T('session.moved 更新工程目录', store.sessions.get('ses_t').location.directory === '/newdir',
+        store.sessions.get('ses_t').location);
+
+      /* session.inbox.* 触发重取 */
+      store.selected = 'ses_t';
+      window.calls.length = 0;
+      handleControlEvent({ type: 'session.inbox.enqueued', data: { sessionID: 'ses_t' } });
+      T('inbox 事件触发重取队列', reqs(/\/inbox$/).length >= 1);
+      handleControlEvent({ type: 'session.inbox.cancelled', data: { sessionID: 'ses_other' } });
+      T('其它会话的 inbox 事件不重取当前队列', reqs(/\/inbox$/).length === 1);
+
+      /* session.deleted 清理 */
+      store.sessions.set('ses_del', { id: 'ses_del', location: { directory: '/x' } });
+      store.active.set('ses_del', 'busy');
+      store.inbox.set('ses_del', [ { id: 'z' } ]);
+      store.selected = 'ses_del';
+      handleControlEvent({ type: 'session.deleted', data: { info: { id: 'ses_del' } } });
+      T('session.deleted 移除会话', !store.sessions.has('ses_del'));
+      T('session.deleted 清运行状态', !store.active.has('ses_del'));
+      T('session.deleted 清队列缓存', !store.inbox.has('ses_del'));
+      T('删除当前会话后清空选择', store.selected === null);
+
+      /* ---------------- loadActive 兜底 ---------------- */
+      store.sessions.set(SESSION.id, SESSION);
+      store.selected = SESSION.id;
+      ACTIVE_DATA = { ses_t: { type: 'running' } };
+      await loadActive();
+      T('loadActive 读取运行中会话', store.active.get('ses_t') === 'busy', store.active.get('ses_t'));
+      ACTIVE_DATA = {};
+      await loadActive();
+      T('loadActive 反映空闲', store.active.size === 0, store.active.size);
+
+      /* ---------------- 轻量提示 ---------------- */
+      flash('提示内容', 'bad');
+      T('toast 展示内容与样式', q('#toast').hidden === false && q('#toast').textContent === '提示内容' && q('#toast').className === 'bad');
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      post('PAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) + ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

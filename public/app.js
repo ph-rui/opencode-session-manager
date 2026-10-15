@@ -15,9 +15,17 @@ const store = {
   pending: false,
   running: false,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
+  active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
+  inbox: new Map(), // sessionID -> [Session.Inbox.Info]
+  agents: new Map(), // directory -> [Agent.Info]
+  models: new Map(), // directory -> [Model.Info]
+  modelIndex: new Map(), // 'providerID/modelID' -> Model.Info
+  delivery: 'queue', // 运行中消息的投递方式
+  ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
 };
 
 const $ = (s) => document.querySelector(s);
+const enc = encodeURIComponent;
 
 /* ----------------------------- 工具 ----------------------------- */
 
@@ -95,6 +103,380 @@ async function health() {
   }
 }
 
+/* ----------------------------- 轻量提示 ----------------------------- */
+
+let toastTimer = null;
+function flash(msg, kind) {
+  const el = $('#toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = kind || '';
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 2600);
+}
+
+/* ----------------------------- 会话运行状态 ----------------------------- */
+
+function runStatus(sid) {
+  return store.active.get(sid) || null;
+}
+
+function isRunning(sid) {
+  return !!sid && store.active.has(sid);
+}
+
+async function loadActive() {
+  let j = null;
+  try {
+    j = await api('/api/session/active');
+  } catch (e) {
+    return; // 连接异常由健康检查提示
+  }
+  const prev = store.active;
+  const next = new Map();
+  Object.keys((j && j.data) || {}).forEach((sid) => {
+    next.set(sid, (j.data[sid] || {}).type === 'retry' ? 'retry' : 'busy');
+  });
+  let changed = next.size !== prev.size;
+  if (!changed) {
+    for (const [k, v] of next) {
+      if (prev.get(k) !== v) {
+        changed = true;
+        break;
+      }
+    }
+  }
+  store.active = next;
+  if (changed) {
+    renderSessions();
+    updateChatStatus();
+  }
+  updateComposerControls();
+  const sel = store.selected;
+  if (sel && isRunning(sel)) {
+    // 运行中可能正产生新消息,轻量刷新
+    loadMessages({ older: false });
+  }
+}
+
+/* ----------------------------- 智能体 / 模型 ----------------------------- */
+
+async function loadAgents(dir) {
+  const key = dir || '';
+  if (store.agents.has(key)) return store.agents.get(key);
+  let list = [];
+  try {
+    const j = await api('/api/agent?location%5Bdirectory%5D=' + enc(key));
+    list = (j.data || []).filter((a) => !a.hidden && a.mode !== 'subagent');
+  } catch (e) {
+    list = [];
+  }
+  store.agents.set(key, list);
+  return list;
+}
+
+async function loadModels(dir) {
+  const key = dir || '';
+  if (store.models.has(key)) return store.models.get(key);
+  let list = [];
+  try {
+    const j = await api('/api/model?location%5Bdirectory%5D=' + enc(key));
+    list = (j.data || []).filter((m) => m.enabled !== false);
+  } catch (e) {
+    list = [];
+  }
+  list.forEach((m) => store.modelIndex.set(m.providerID + '/' + m.modelID, m));
+  store.models.set(key, list);
+  return list;
+}
+
+function modelKey(ref) {
+  return ref && ref.providerID && ref.id ? ref.providerID + '/' + ref.id : '';
+}
+
+function ctrlKeyOf(s) {
+  return JSON.stringify([(s && s.agent) || '', (s && s.model) || null]);
+}
+
+async function renderControls(s) {
+  const bar = $('#ctoolbar');
+  if (!bar) return;
+  if (!s || !store.selected) {
+    bar.hidden = true;
+    store.ctrlKey = '';
+    updateComposerControls();
+    return;
+  }
+  const dir = (s.location && s.location.directory) || '';
+  const agentSel = $('#agentSel');
+  const modelSel = $('#modelSel');
+  const varWrap = $('#variantWrap');
+  const varSel = $('#variantSel');
+
+  const [agents, models] = await Promise.all([loadAgents(dir), loadModels(dir)]);
+  if (store.selected !== s.id) return; // 期间切换了会话
+
+  // 智能体
+  const curAgent = s.agent || '';
+  let aHtml = '<option value="">默认</option>';
+  const ids = agents.map((a) => a.id);
+  if (curAgent && ids.indexOf(curAgent) === -1) {
+    aHtml += '<option value="' + esc(curAgent) + '">' + esc(curAgent) + '(当前)</option>';
+  }
+  aHtml += agents
+    .map((a) => '<option value="' + esc(a.id) + '">' + esc(a.name || a.id) + '</option>')
+    .join('');
+  agentSel.innerHTML = aHtml;
+  agentSel.value = curAgent;
+
+  // 模型(按 provider 分组)
+  const groups = new Map();
+  models.forEach((m) => {
+    if (!groups.has(m.providerID)) groups.set(m.providerID, []);
+    groups.get(m.providerID).push(m);
+  });
+  let mHtml = '<option value="">默认</option>';
+  for (const [pid, ms] of groups) {
+    mHtml +=
+      '<optgroup label="' + esc(pid) + '">' +
+      ms
+        .map(
+          (m) =>
+            '<option value="' + esc(pid + '/' + m.modelID) + '">' +
+            esc(m.name || m.modelID) + '</option>'
+        )
+        .join('') +
+      '</optgroup>';
+  }
+  modelSel.innerHTML = mHtml;
+  const curModel = modelKey(s.model);
+  if (curModel && !store.modelIndex.has(curModel)) {
+    mHtml += '<option value="' + esc(curModel) + '">' + esc(curModel) + '(当前)</option>';
+    modelSel.innerHTML = mHtml;
+  }
+  modelSel.value = curModel;
+
+  // 变体
+  const info = store.modelIndex.get(curModel);
+  const variants = (info && info.variants) || [];
+  varWrap.hidden = !variants.length;
+  varSel.innerHTML =
+    '<option value="">默认</option>' +
+    variants.map((v) => '<option value="' + esc(v.id) + '">' + esc(v.id) + '</option>').join('');
+  varSel.value = (s.model && s.model.variant) || '';
+
+  bar.hidden = false;
+  store.ctrlKey = ctrlKeyOf(s);
+  updateComposerControls();
+}
+
+async function switchAgent(id) {
+  const sid = store.selected;
+  if (!sid) return;
+  const s = store.sessions.get(sid);
+  if (!id) {
+    // 服务端不允许清空,回填原值
+    flash('智能体不能置空,已保留当前设置', 'warn');
+    renderControls(s);
+    return;
+  }
+  try {
+    await api('/api/session/' + enc(sid) + '/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: id }),
+    });
+  } catch (e) {
+    flash('切换智能体失败:' + e.message, 'bad');
+    renderControls(s);
+    return;
+  }
+  flash('已切换智能体:' + id, 'ok');
+  await loadSessions({});
+  loadMessages({ older: false });
+}
+
+async function switchModel() {
+  const sid = store.selected;
+  if (!sid) return;
+  const s = store.sessions.get(sid);
+  const key = $('#modelSel').value;
+  if (!key) {
+    flash('模型不能置空,已保留当前设置', 'warn');
+    renderControls(s);
+    return;
+  }
+  const info = store.modelIndex.get(key);
+  const slash = key.indexOf('/');
+  const ref = {
+    providerID: info ? info.providerID : key.slice(0, slash),
+    id: info ? info.modelID : key.slice(slash + 1),
+  };
+  const variant = $('#variantSel').value;
+  if (variant) ref.variant = variant;
+  try {
+    await api('/api/session/' + enc(sid) + '/model', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: ref }),
+    });
+  } catch (e) {
+    flash('切换模型失败:' + e.message, 'bad');
+    renderControls(s);
+    return;
+  }
+  flash('已切换模型:' + ref.providerID + '/' + ref.id + (variant ? ' · ' + variant : ''), 'ok');
+  await loadSessions({});
+  loadMessages({ older: false });
+}
+
+/* ----------------------------- 投递方式 / 中断 ----------------------------- */
+
+function setDelivery(mode) {
+  store.delivery = mode === 'steer' ? 'steer' : 'queue';
+  paintDelivery();
+}
+
+function paintDelivery() {
+  const el = $('#delivery');
+  if (!el) return;
+  el.querySelectorAll('button[data-delivery]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.delivery === store.delivery);
+  });
+}
+
+function updateComposerControls() {
+  const sel = store.selected;
+  const busy = !!sel && (isRunning(sel) || store.running);
+  const ib = $('#interrupt');
+  if (ib) {
+    ib.hidden = !busy;
+    ib.disabled = false;
+  }
+  const dl = $('#delivery');
+  if (dl) dl.hidden = !busy;
+  const send = $('#send');
+  if (send) send.disabled = !sel;
+}
+
+async function interrupt() {
+  const sid = store.selected;
+  if (!sid) return;
+  const btn = $('#interrupt');
+  if (btn) btn.disabled = true;
+  try {
+    const j = await api('/api/session/' + enc(sid) + '/interrupt', { method: 'POST' });
+    if (j && j.interrupted) flash('已中断当前回合', 'ok');
+    else flash('当前没有正在执行的回合', 'warn');
+  } catch (e) {
+    flash('中断失败:' + e.message, 'bad');
+  }
+  if (btn) btn.disabled = false;
+  await loadActive();
+}
+
+/* ----------------------------- 待发送队列 ----------------------------- */
+
+async function loadInbox(sid) {
+  if (!sid) return;
+  let items = [];
+  try {
+    const j = await api('/api/session/' + enc(sid) + '/inbox');
+    items = j.data || [];
+  } catch (e) {
+    items = [];
+  }
+  store.inbox.set(sid, items);
+  if (store.selected === sid) renderInbox();
+}
+
+function inboxKind(it) {
+  if (!it) return '待发送';
+  if (it.type === 'compaction') return '压缩';
+  if (it.type === 'move') return '移动';
+  if (it.type === 'synthetic') return '注入';
+  return '待发送';
+}
+
+function inboxText(it) {
+  const p = it && it.payload;
+  if (!p) return '';
+  if (typeof p.text === 'string') return p.text;
+  if (p.location && p.location.directory) return p.location.directory;
+  if (p.directory) return p.directory;
+  return '';
+}
+
+function renderInbox() {
+  const box = $('#inbox');
+  if (!box) return;
+  // synthetic 是服务端注入的内部提醒(例如切换 agent 时的系统提示),不展示也不允许取消
+  const items = ((store.selected && store.inbox.get(store.selected)) || []).filter(
+    (it) => it && it.type !== 'synthetic'
+  );
+  box.innerHTML = '';
+  if (!items.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  for (const it of items) {
+    const isSteer = it.delivery === 'steer';
+    const el = document.createElement('div');
+    el.className = 'inbox-item';
+    const text = inboxText(it);
+    el.innerHTML =
+      '<span class="ib-mark">↳</span>' +
+      '<span class="ib-kind">' + esc(inboxKind(it)) + '</span>' +
+      '<span class="ib-delivery ' + (isSteer ? 'steer' : 'queue') + '">' +
+      (isSteer ? '插话' : '排队') +
+      '</span>' +
+      '<span class="ib-text" title="' + esc(text) + '">' + esc(text || '(无文本)') + '</span>' +
+      '<span class="ib-acts">' +
+      '<button type="button" data-inbox-op="toggle">' + (isSteer ? '改为排队' : '改为插话') + '</button>' +
+      '<button type="button" data-inbox-op="cancel" class="danger">取消</button>' +
+      '</span>';
+    el.querySelector('[data-inbox-op="toggle"]').addEventListener('click', () =>
+      setInboxDelivery(it, isSteer ? 'queue' : 'steer', el)
+    );
+    el.querySelector('[data-inbox-op="cancel"]').addEventListener('click', () => cancelInbox(it, el));
+    box.appendChild(el);
+  }
+}
+
+async function setInboxDelivery(it, mode, el) {
+  const url = '/api/session/' + enc(it.sessionID) + '/inbox/' + enc(it.id);
+  if (el) el.style.opacity = '0.5';
+  try {
+    await api(url, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delivery: mode }),
+    });
+    flash('投递方式已改为:' + (mode === 'steer' ? '插话' : '排队'), 'ok');
+  } catch (e) {
+    flash('修改投递方式失败:' + e.message, 'bad');
+  }
+  if (el) el.style.opacity = '';
+  await loadInbox(it.sessionID);
+}
+
+async function cancelInbox(it, el) {
+  const url = '/api/session/' + enc(it.sessionID) + '/inbox/' + enc(it.id);
+  if (el) el.style.opacity = '0.5';
+  try {
+    await api(url, { method: 'DELETE' });
+    flash('已取消该条待发送消息', 'ok');
+  } catch (e) {
+    flash('取消失败:' + e.message, 'bad');
+  }
+  if (el) el.style.opacity = '';
+  await loadInbox(it.sessionID);
+}
+
 /* ----------------------------- 会话列表 ----------------------------- */
 
 async function loadSessions(opts) {
@@ -139,8 +521,10 @@ function renderSessions() {
     if (s.id === store.selected) tr.classList.add('selected');
     const dir = (s.location && s.location.directory) || '';
     const nAsk = askCountFor(s.id);
+    const st = runStatus(s.id);
     tr.innerHTML =
       '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
+      (st ? ' <span class="run-badge" title="正在执行">' + (st === 'retry' ? '◌ 重试中' : '● 运行中') + '</span>' : '') +
       (nAsk ? ' <span class="ask-badge" title="有待处理问询">⚑ ' + nAsk + '</span>' : '') +
       '</td>' +
       '<td class="dir" title="' + esc(dir) + '">' + esc(dirBase(dir) || '—') + '</td>' +
@@ -195,8 +579,14 @@ async function selectSession(id) {
   msgEls.clear();
   $('#messages').innerHTML = '';
   renderAsks();
+  renderInbox();
   updateChatStatus();
-  await Promise.all([loadMessages({ older: false }), loadAsks(id)]);
+  await Promise.all([
+    loadMessages({ older: false }),
+    loadAsks(id),
+    loadInbox(id),
+    renderControls(s),
+  ]);
 }
 
 async function loadMessages(opts) {
@@ -529,15 +919,21 @@ function updateChatStatus() {
   if (!store.selected) {
     el.textContent = '';
     el.className = 'state';
+    updateComposerControls();
     return;
   }
-  if (store.running) {
+  const st = runStatus(store.selected);
+  if (st === 'retry') {
+    el.textContent = '◌ 重试中';
+    el.className = 'state retry';
+  } else if (st || store.running) {
     el.textContent = '● 运行中';
     el.className = 'state running';
   } else {
     el.textContent = '空闲';
     el.className = 'state';
   }
+  updateComposerControls();
 }
 
 /* ----------------------------- 问询(表单 / 权限) ----------------------------- */
@@ -1176,28 +1572,142 @@ async function onAction(act, id) {
 async function send() {
   const text = $('#input').value.trim();
   if (!text || !store.selected) return;
+  const sid = store.selected;
+  const busy = isRunning(sid) || store.running;
+  const willQueue = busy && store.delivery === 'queue';
+  const body = { text };
+  if (busy) body.delivery = store.delivery;
+
   $('#input').value = '';
-  store.pending = true;
+  store.pending = !willQueue;
   updateChatStatus();
+  updateComposerControls();
   try {
-    await api('/api/session/' + encodeURIComponent(store.selected) + '/prompt', {
+    const j = await api('/api/session/' + enc(sid) + '/prompt', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(body),
     });
+    if (willQueue || (j && j.data && j.data.delivery === 'queue')) {
+      flash('已排队,当前回合结束后执行', 'ok');
+      store.pending = false;
+    }
   } catch (e) {
     alert('发送失败:' + e.message);
     store.pending = false;
     updateChatStatus();
     return;
   }
-  setTimeout(() => loadMessages({ older: false }), 300);
+  loadInbox(sid);
+  setTimeout(() => {
+    loadMessages({ older: false });
+    loadActive();
+  }, 300);
 }
 
 /* ----------------------------- 事件流 ----------------------------- */
 
 let msgTimer = null;
 let listTimer = null;
+let activeTimer = null;
+
+// 把局部变更合并进会话对象。事件里的 info 可能是扁平 directory(V1 形状),统一补出 location。
+function patchSession(id, patch) {
+  if (!id) return null;
+  const merged = Object.assign({}, store.sessions.get(id) || { id: id }, patch);
+  if (!merged.location && merged.directory) merged.location = { directory: merged.directory };
+  store.sessions.set(id, merged);
+  if (store.selected === id && ctrlKeyOf(merged) !== store.ctrlKey) renderControls(merged);
+  return merged;
+}
+
+// 维护运行中集合:优先消费 session.status / session.idle,其余事件做兜底重取。
+function handleControlEvent(e) {
+  const t = e.type;
+  const d = e.data || {};
+  const sid = d.sessionID;
+  let dirty = false;
+  let refreshActive = false;
+
+  if (t === 'session.status') {
+    const st = (d.status && d.status.type) || null;
+    if (sid) {
+      if (st === 'busy' || st === 'retry') store.active.set(sid, st);
+      else store.active.delete(sid);
+      dirty = true;
+    }
+  } else if (t === 'session.idle') {
+    if (sid) {
+      store.active.delete(sid);
+      dirty = true;
+    }
+  } else if (t.indexOf('session.execution.') === 0) {
+    if (sid) {
+      if (t === 'session.execution.started') store.active.set(sid, 'busy');
+      else store.active.delete(sid);
+      dirty = true;
+    }
+  } else if (t === 'session.renamed') {
+    if (sid) {
+      patchSession(sid, { title: d.title || '' });
+      dirty = true;
+    }
+  } else if (t === 'session.agent.selected') {
+    if (sid) {
+      patchSession(sid, { agent: d.agent || null });
+      dirty = true;
+    }
+  } else if (t === 'session.model.selected') {
+    if (sid) {
+      patchSession(sid, { model: d.model || null });
+      dirty = true;
+    }
+  } else if (t === 'session.moved') {
+    if (sid && e.location && e.location.directory) {
+      patchSession(sid, { location: e.location });
+      dirty = true;
+    }
+    refreshActive = true;
+  } else if (t === 'session.updated') {
+    // 该事件在不同版本里载荷不同:有的带完整 info,有的只有 sessionID
+    const info = d.info;
+    if (info && typeof info === 'object') {
+      const merged = patchSession(info.id || sid, info);
+      if (merged) dirty = true;
+    } else {
+      refreshActive = true;
+    }
+  } else if (t === 'session.deleted') {
+    const info = d.info;
+    const id = (info && info.id) || sid;
+    if (id) {
+      store.sessions.delete(id);
+      store.active.delete(id);
+      store.inbox.delete(id);
+      if (store.selected === id) {
+        store.selected = null;
+        renderInbox();
+        updateComposerControls();
+      }
+      dirty = true;
+    }
+    refreshActive = true;
+  } else if (t === 'session.created') {
+    refreshActive = true;
+  } else if (t.indexOf('session.inbox.') === 0) {
+    if (sid && sid === store.selected) loadInbox(sid);
+    refreshActive = true;
+  }
+
+  if (refreshActive) {
+    clearTimeout(activeTimer);
+    activeTimer = setTimeout(loadActive, 200);
+  }
+  if (dirty) {
+    renderSessions();
+    updateChatStatus();
+  }
+}
 
 function setupEvents() {
   const es = new EventSource('/api/event');
@@ -1206,7 +1716,10 @@ function setupEvents() {
     try {
       e = JSON.parse(ev.data);
     } catch (_) {}
-    if (e && e.type) handleAskEvent(e);
+    if (e && e.type) {
+      handleAskEvent(e);
+      handleControlEvent(e);
+    }
     clearTimeout(msgTimer);
     msgTimer = setTimeout(() => {
       if (store.selected) loadMessages({ older: false });
@@ -1300,8 +1813,11 @@ function init() {
   health();
   setInterval(health, 15000);
   loadSessions({ reset: true });
+  loadActive();
+  setInterval(loadActive, 8000);
   setupEvents();
   setupResizers();
+  paintDelivery();
 
   $('#search').addEventListener(
     'input',
@@ -1330,6 +1846,14 @@ function init() {
       e.preventDefault();
       send();
     }
+  });
+  $('#agentSel').addEventListener('change', () => switchAgent($('#agentSel').value));
+  $('#modelSel').addEventListener('change', switchModel);
+  $('#variantSel').addEventListener('change', switchModel);
+  $('#interrupt').addEventListener('click', interrupt);
+  $('#delivery').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-delivery]');
+    if (b) setDelivery(b.dataset.delivery);
   });
   $('#list tbody').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-act]');

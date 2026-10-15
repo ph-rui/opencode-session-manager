@@ -54,6 +54,7 @@ const server = http.createServer((req, res) => {
 
 let child = null;
 let finished = false;
+let profileDir = null;
 function finish(code) {
   if (finished) return;
   finished = true;
@@ -63,7 +64,14 @@ function finish(code) {
     } catch (_) {}
   }
   server.close();
-  setTimeout(() => process.exit(code), 100);
+  setTimeout(() => {
+    if (profileDir) {
+      try {
+        fs.rmSync(profileDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
+    process.exit(code);
+  }, 100);
 }
 
 if (spawnSync('sh', ['-c', 'command -v firefox'], { stdio: 'ignore' }).status !== 0) {
@@ -74,7 +82,7 @@ if (spawnSync('sh', ['-c', 'command -v firefox'], { stdio: 'ignore' }).status !=
 server.listen(0, '127.0.0.1', () => {
   const port = server.address().port;
   const url = 'http://127.0.0.1:' + port + '/test';
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-asks-ffp-'));
+  const profile = (profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-asks-ffp-')));
   console.log('服务 ' + url);
   child = spawn('firefox', ['--headless', '--no-remote', '--new-instance', '--profile', profile, url], {
     stdio: 'ignore',
