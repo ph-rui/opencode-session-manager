@@ -280,6 +280,35 @@
       var s2 = toolMetaSig({ state: { metadata: { files: [{ file: 'default.xml', status: 'modified', additions: 2, deletions: 1, patch: REAL_PATCH + '+x\n' }] } } });
       T('toolMetaSig:内容变了指纹就变', s1 !== s2, [s1, s2]);
 
+      /* ================= userRefsHtml:用户消息上的 agent/skill 提及(H 组 5) ================= */
+      T('没有 agents/skills 时不出这一行', userRefsHtml({ type: 'user', text: 'hi' }) === '');
+      T('空数组时也不出', userRefsHtml({ agents: [], skills: [] }) === '');
+      var refA = userRefsHtml({ agents: [{ name: 'build' }] });
+      T('agent 渲染成 @name', refA.indexOf('@build') >= 0 && qaOf(refA, 'ref-agent') === 1, refA);
+      T('agent 标记带 title', refA.indexOf('title="智能体"') >= 0, refA);
+      var refS = userRefsHtml({ skills: [{ id: 'brainstorming', name: 'brainstorming' }] });
+      T('skill 渲染成 #name', refS.indexOf('#brainstorming') >= 0 && qaOf(refS, 'ref-skill') === 1, refS);
+      T('skill 标记带 title', refS.indexOf('title="技能"') >= 0, refS);
+      var refBoth = userRefsHtml({ agents: [{ name: 'build' }], skills: [{ name: 'brainstorming' }] });
+      T('agent 与 skill 同时存在时各一个', qaOf(refBoth, 'ref-agent') === 1 && qaOf(refBoth, 'ref-skill') === 1, refBoth);
+      T('多个 agent 都渲染出来', qaOf(userRefsHtml({ agents: [{ name: 'a' }, { name: 'b' }] }), 'ref-agent') === 2);
+      T('缺 name 的条目被跳过', userRefsHtml({ agents: [{ name: '' }], skills: [{}] }) === '');
+      T('agent 只有 id 时用 id 兜底', userRefsHtml({ agents: [{ id: 'builder' }] }).indexOf('@builder') >= 0);
+      var refEsc = userRefsHtml({ agents: [{ name: '<img src=x>' }] });
+      T('提及名里的 HTML 被转义', refEsc.indexOf('&lt;img') >= 0 && refEsc.indexOf('<img') < 0, refEsc);
+
+      /* 落进真实消息里 */
+      var uMsg = renderMessage({ id: 'mu', type: 'user', text: '按这个来',
+        agents: [{ name: 'build' }], skills: [{ name: 'brainstorming' }] });
+      T('renderMessage 把提及放进用户消息', !!uMsg.querySelector('.refs .ref-agent') && !!uMsg.querySelector('.refs .ref-skill'),
+        uMsg.outerHTML);
+      var uKids = uMsg.querySelectorAll(':scope > div');
+      T('提及排在正文之后(角色行 / 正文 / 提及)',
+        uKids.length === 3 && uKids[1].className === 'content' && uKids[2].className === 'refs', uMsg.outerHTML);
+      T('没有提及时不产生空的 refs 行',
+        renderMessage({ id: 'mu2', type: 'user', text: 'plain' }).querySelector('.refs') === null);
+      T('用户消息正文仍被转义', renderMessage({ id: 'mu3', type: 'user', text: '<b>x</b>' }).querySelector('.content').innerHTML.indexOf('<b>') < 0);
+
       /* ================= 事件驱动:progress 带来 diff 要立刻重绘 ================= */
       SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); });
       renderSessions();

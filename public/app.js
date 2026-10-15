@@ -1633,6 +1633,21 @@ function toolHtml(p) {
   return toolCard(p, s, desc, null, body, false);
 }
 
+// 用户消息上的提及标记:agent(@)与 skill(#)。H 组 5 补的,延续终端风
+// (不加气泡,只用色条 + 标记);附件在 H 组 6 一起补。
+function userRefsHtml(m) {
+  const out = [];
+  for (const a of m.agents || []) {
+    const name = a && (a.name || a.id);
+    if (name) out.push('<span class="ref ref-agent" title="智能体">@' + esc(name) + '</span>');
+  }
+  for (const s of m.skills || []) {
+    const name = s && (s.name || s.id);
+    if (name) out.push('<span class="ref ref-skill" title="技能">#' + esc(name) + '</span>');
+  }
+  return out.length ? '<div class="refs">' + out.join('') + '</div>' : '';
+}
+
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -1641,7 +1656,8 @@ function renderMessage(m, opts) {
   if (m.type === 'user') {
     el.innerHTML =
       '<div class="turn-head"><span class="marker">❯</span><span class="who">你</span></div>' +
-      '<div class="content">' + esc(m.text || '') + '</div>';
+      '<div class="content">' + esc(m.text || '') + '</div>' +
+      userRefsHtml(m);
     return el;
   }
 

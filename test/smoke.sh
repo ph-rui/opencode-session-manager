@@ -193,6 +193,19 @@ if has "$CSS" '.dfile' && has "$CSS" '.diff '; then
 else
   echo "FAIL: styles.css 缺 .dfile/.diff 样式"; fail=$((fail + 1))
 fi
+# H 组 1:会话区字号由一个变量统管,区内字号一律相对 em(整块等比缩放,不是只有正文变大)
+if has "$CSS" '--chat-fs: 14px' && has "$CSS" 'font-size: var(--chat-fs)' &&
+   has "$CSS" 'font-size: 0.92em' && has "$CSS" 'font-size: 0.88em'; then
+  echo "PASS: styles.css 会话区字号有旋钮(--chat-fs)且区内用相对 em"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 会话区字号没有可调旋钮 / 区内仍是写死 px"; fail=$((fail + 1))
+fi
+# H 组 5:用户消息上的 agent/skill 提及标记
+if has "$CSS" '.ref-agent' && has "$CSS" '.ref-skill' && has "$CSS" '.refs '; then
+  echo "PASS: styles.css 有 agent/skill 提及标记样式(.ref-agent/.ref-skill)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 agent/skill 提及标记样式"; fail=$((fail + 1))
+fi
 # 会话列表收起:只隐藏列表,分栏条保留成 16px 窄槽 —— 它是唯一的展开入口,跟着消失就把列表锁死了
 if has "$CSS" 'main.list-hidden { grid-template-columns: 0 var(--rz-w, 16px) minmax(0, 1fr); }'; then
   echo "PASS: styles.css 收起时为分栏条留出窄槽"; pass=$((pass + 1))
@@ -244,6 +257,12 @@ if has "$APPJS" 'ocs.q.search' && has "$APPJS" 'ocs.q.dir' && has "$APPJS" 'ocs.
   echo "PASS: app.js 持久化顶栏筛选/排序/搜索"; pass=$((pass + 1))
 else
   echo "FAIL: app.js 缺顶栏条件持久化"; fail=$((fail + 1))
+fi
+# H 组 5:用户消息上的 agent/skill 提及(渲染侧)
+if has "$APPJS" 'userRefsHtml' && has "$APPJS" 'ref-agent' && has "$APPJS" 'ref-skill'; then
+  echo "PASS: app.js 渲染用户消息上的 agent/skill 提及"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺 agent/skill 提及渲染"; fail=$((fail + 1))
 fi
 # 顺序锁:init() 里 setupFilters() 必须排在 loadSessions 之前,否则会按默认值白拉一次
 INIT_ORDER=$(printf '%s' "$APPJS" | awk '
