@@ -2460,20 +2460,15 @@ function setupEvents() {
 
 function setupResizers() {
   const main = document.querySelector('main');
-  const leftPane = document.getElementById('filters');
   const listPane = document.getElementById('listpane');
-  const r1 = document.getElementById('resizer-left');
   const r2 = document.getElementById('resizer-mid');
-  if (!main || !leftPane || !listPane || !r1 || !r2) return;
+  if (!main || !listPane || !r2) return;
 
-  const savedLeft = parseInt(localStorage.getItem('ocs.leftW') || '', 10);
-  const savedMid = parseInt(localStorage.getItem('ocs.midW') || '', 10);
-  if (savedLeft) main.style.setProperty('--left-w', savedLeft + 'px');
-  if (savedMid) main.style.setProperty('--mid-w', savedMid + 'px');
+  const savedList = parseInt(localStorage.getItem('ocs.listW') || localStorage.getItem('ocs.midW') || '', 10);
+  if (savedList) main.style.setProperty('--list-w', savedList + 'px');
 
   function startDrag(e) {
     const handle = e.currentTarget;
-    const isLeft = handle === r1;
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
     handle.classList.add('active');
@@ -2481,17 +2476,11 @@ function setupResizers() {
 
     const move = (ev) => {
       const mainRect = main.getBoundingClientRect();
-      if (isLeft) {
-        let w = ev.clientX - mainRect.left;
-        w = Math.max(150, Math.min(480, w));
-        main.style.setProperty('--left-w', w + 'px');
-      } else {
-        const start = listPane.getBoundingClientRect().left;
-        let w = ev.clientX - start;
-        const maxMid = mainRect.width - leftPane.getBoundingClientRect().width - 12 - 320;
-        w = Math.max(280, Math.min(Math.max(280, maxMid), w));
-        main.style.setProperty('--mid-w', w + 'px');
-      }
+      const start = listPane.getBoundingClientRect().left;
+      let w = ev.clientX - start;
+      const maxList = mainRect.width - 12 - 320;
+      w = Math.max(280, Math.min(Math.max(280, maxList), w));
+      main.style.setProperty('--list-w', w + 'px');
     };
     const end = () => {
       handle.classList.remove('active');
@@ -2499,25 +2488,19 @@ function setupResizers() {
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', end);
       handle.removeEventListener('pointercancel', end);
-      localStorage.setItem('ocs.leftW', Math.round(leftPane.getBoundingClientRect().width));
-      localStorage.setItem('ocs.midW', Math.round(listPane.getBoundingClientRect().width));
+      localStorage.setItem('ocs.listW', Math.round(listPane.getBoundingClientRect().width));
+      localStorage.removeItem('ocs.midW');
     };
     handle.addEventListener('pointermove', move);
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
   }
 
-  r1.addEventListener('pointerdown', startDrag);
   r2.addEventListener('pointerdown', startDrag);
-
-  [r1, r2].forEach((h) =>
-    h.addEventListener('dblclick', () => {
-      main.style.removeProperty('--left-w');
-      main.style.removeProperty('--mid-w');
-      localStorage.removeItem('ocs.leftW');
-      localStorage.removeItem('ocs.midW');
-    })
-  );
+  r2.addEventListener('dblclick', () => {
+    main.style.removeProperty('--list-w');
+    localStorage.removeItem('ocs.listW');
+  });
 }
 
 /* ----------------------------- 绑定 ----------------------------- */

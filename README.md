@@ -60,6 +60,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 
 ## 功能
 
+- **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
 - 跨工程列出会话,按更新时间排序,游标翻页
 - 按标题搜索(服务端 `search`)
 - 按工程目录过滤(服务端 `directory`)
@@ -77,8 +78,8 @@ chmod 600 ~/.config/opencode-session-manager/env
   - **权限请求**(工具需批准):允许一次 / 总是允许 / 拒绝
   - 表单可「取消」并附原因;列表对有未决问询的会话显示 `⚑` 徽标
 - **能力扩展**:
-  - **网页内新建会话**:左栏「+ 新建」,填工程目录(绝对路径)可选标题 / 智能体 / 模型(含变体),创建后自动打开
-  - **归档**:列表与聊天头部可归档 / 取消归档,默认从列表隐藏,左栏「显示已归档」可查看(记录在 `session.metadata`,见下文说明)
+  - **网页内新建会话**:顶栏「+ 新建」,填工程目录(绝对路径)可选标题 / 智能体 / 模型(含变体),创建后自动打开
+  - **归档**:列表与聊天头部可归档 / 取消归档,默认从列表隐藏,顶栏「显示已归档」可查看(记录在 `session.metadata`,见下文说明)
   - **导出 / 导入**:导出会话为 JSON(可选脱敏),或从 JSON 导入为新会话并指定目标工程目录
   - **深链跳回 TUI**:给出 `opencode --session <id> <目录>`,可直接粘到终端继续同一会话
 
@@ -184,7 +185,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 前置:OpenCode 服务已运行,且本代理已启动。凭据从 `~/.config/opencode-session-manager/env` 读取(可用 `OCS_AUTH` 覆盖)。
 
 ```bash
-bash test/smoke.sh            # 代理层:健康检查/静态托管/鉴权注入/SSE/密码不外泄/问询·控制·能力扩展端点与控件
+bash test/smoke.sh            # 代理层:健康检查/静态托管/鉴权注入/SSE/密码不外泄/顶栏结构/问询·控制·能力扩展端点与控件
 bash test/e2e-asks.sh         # 问询端到端(纯 curl):创建表单→应答/取消→状态核对→负例
 bash test/e2e-controls.sh     # 会话控制端到端(纯 curl):agent/model 切换、中断、inbox 改投递/取消
 OCS_E2E_LLM=1 bash test/e2e-controls.sh   # 追加真实运行中的 queue/steer/interrupt 用例(会消耗一次很小的模型调用)
@@ -197,7 +198,7 @@ node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
-- `smoke.sh`:35 项。
+- `smoke.sh`:50 项。含顶部栏改造的 15 项结构断言:控件都在 `#topbar` 切片内,首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条,`styles.css` 主区为 `var(--list-w, 560px) 6px minmax(0, 1fr)` 且不再写死高度。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
 - `e2e-capabilities.sh`:26 项。只用临时会话与 `/tmp` 临时目录,结束时全部删除;验证新建的字段落库、`PATCH metadata` 的整体替换语义、导出脱敏与否、导入的换 ID 与 `location` 重挂、以及 `409`/`400` 负例。
@@ -257,3 +258,7 @@ journalctl --user -u opencode-session-manager.service -f
 - `ordinal` 是**同一类型内的序号**,不是 `content` 下标:content 为 `[reasoning, text]` 时两者的 `ordinal` 都是 0。前端按 `类型:序号` 建键。
 - **一个 step 对应一条助手消息**:多 step 回合(如先调工具再总结)里 `assistantMessageID` 每 step 都不同,所以不会跨 step 撞序号。
 - 工具事件的载荷:`tool.input.started` 带 `{id, name}`(**没有** `ordinal`),`tool.input.ended` 带完整 JSON 参数字符串,`tool.called` 带已解析的 `input`,`tool.success` 带 `content` / `metadata`。
+- **顶部栏改造的坑**:`main` 原先写死 `height: calc(100vh - 43px)`(43px = 单行顶栏高度)。顶栏改可换行后它必然变高,若不同时改成
+  `body` 纵向 flex + `main { flex:1; min-height:0 }`,顶栏一折行底部输入框就会被顶出视口。冒烟里专门断言 `calc(100vh - 43px)` 已消失。
+- 顶栏折行的临界宽度约 **1160px**:1500px 单行;1100px 会折成两行(第二行只有右侧的连接状态),此时 `main` 正确让出高度。
+- 分栏宽度存在 `localStorage`:`ocs.listW`(会话表宽度,默认 560px,双击 `#resizer-mid` 复位)。旧键 `ocs.midW` 仍会被读取一次以兼容,并在下次拖动时清掉。

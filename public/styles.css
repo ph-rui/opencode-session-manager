@@ -19,27 +19,52 @@ html, body {
   margin: 0;
   height: 100%;
   background: var(--bg);
+  display: flex;
+  flex-direction: column;
   color: var(--fg);
   font: 13px/1.5 -apple-system, "Segoe UI", Roboto, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
 }
 
 #topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
+  gap: 8px 12px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
-.brand { font-weight: 600; font-size: 14px; }
+.brand { font-weight: 600; font-size: 14px; margin-right: 4px; }
 .status { margin-left: auto; font-size: 12px; color: var(--muted); }
 .status.ok { color: var(--ok); }
 .status.bad { color: var(--bad); }
 
+/* 顶部栏里的「标签 + 控件」组(原来在左栏里是竖排的,这里改横排紧凑版) */
+#topbar .f {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+#topbar .f > span { flex: none; }
+#topbar .f input,
+#topbar .f select {
+  padding: 5px 8px;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+#topbar .f input#search { width: 180px; }
+#topbar .f select { max-width: 200px; }
+
 main {
   display: grid;
-  grid-template-columns: var(--left-w, 200px) 6px var(--mid-w, 560px) 6px minmax(0, 1fr);
-  height: calc(100vh - 43px);
+  grid-template-columns: var(--list-w, 560px) 6px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
 }
 
 /* 分栏拖拽条 */
@@ -62,22 +87,7 @@ main {
 .resizer.active::before { background: var(--accent); width: 2px; }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
 
-#filters {
-  padding: 14px;
-  overflow: auto;
-  background: var(--panel);
-}
-#filters label { display: block; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
-#filters input, #filters select {
-  width: 100%;
-  margin-top: 4px;
-  padding: 6px 8px;
-  background: var(--panel2);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-#filters button, #loadMore, #older {
+#loadMore, #older {
   width: 100%;
   padding: 7px 10px;
   background: var(--panel2);
@@ -86,10 +96,10 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
   border-radius: 6px;
   cursor: pointer;
 }
-#filters button:hover, #loadMore:hover, #older:hover { border-color: var(--accent); }
-.hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
+#loadMore:hover, #older:hover { border-color: var(--accent); }
+.hint { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
-#listpane { overflow: auto; min-width: 0; }
+#listpane { overflow: auto; min-width: 0; min-height: 0; }
 #loadMore { width: calc(100% - 20px); margin: 10px; }
 
 table#list { width: 100%; border-collapse: collapse; }
@@ -478,25 +488,23 @@ table#list { width: 100%; border-collapse: collapse; }
 #toast.warn { background: #8a6a00; }
 #toast.bad { background: #a4262c; }
 
-/* --------------------------- 左栏工具行 / 归档 --------------------------- */
+/* --------------------------- 顶部工具行 / 归档 --------------------------- */
 
-.lbtools { display: flex; gap: 6px; margin-bottom: 10px; }
-#filters .lbtools button { width: auto; flex: 1; padding: 6px 4px; font-size: 12px; }
+.lbtools { display: flex; gap: 6px; }
+#topbar .lbtools button { width: auto; padding: 5px 10px; font-size: 12px; }
 .chip.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .chip.primary:hover { filter: brightness(1.08); }
-#filters .chip.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 .chk {
-  display: flex !important;
+  display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 10px !important;
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
   user-select: none;
 }
-.chk input { width: auto !important; margin: 0 !important; }
+.chk input { width: auto; margin: 0; }
 #archivedCount { color: var(--muted); }
 
 .arch-badge { color: #8a6a00; font-size: 11px; white-space: nowrap; }

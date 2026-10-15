@@ -65,7 +65,7 @@
    - **SSE 透传**:对 `text/event-stream` 响应,用 `fetch` 的流式 body 直接 pipe 回浏览器,
      禁用缓冲,保证心跳与事件即时到达。
    - **`GET /__health`**:返回发现到的 base URL 与连通性,供前端展示当前连接的服务。
-2. **前端(`public/index.html` + `app.js` + `styles.css`)** — 单页应用,三栏布局,无框架、无构建。
+2. **前端(`public/index.html` + `app.js` + `styles.css`)** — 单页应用,**顶部栏 + 两栏**(会话表 / 对话),无框架、无构建。
 
 ### 为什么需要本地代理(而不是纯前端)
 浏览器无法跨域携带 `Authorization` 头(预检不允许),且把密码放进浏览器既不安全也不可靠。
@@ -89,9 +89,14 @@ server.js  ──注入 Basic──►  OpenCode 服务(127.0.0.1:49374)
   该策略与具体事件 schema **解耦**,稳健可靠;不以逐 token 精细合并为目标(升级路径见 §7)。
 
 ### UI 结构
-- **左栏(过滤)**:搜索框(→ `search`)、工程目录过滤(→ `directory`,下拉项来自会话 `location.directory` 去重)、排序(updated/created)、刷新按钮。
-- **中栏(会话表)**:列 = 标题 / 工程目录(截断显示 + `title` 悬浮全路径) / 更新时间(相对) / tokens / cost / 行内操作(改名、删除、移动、分叉、打开)。点击行=打开。
-- **右栏(对话)**:消息列表(user 右侧气泡;assistant 渲染 `text`;`reasoning` 可折叠;`tool` 显示名称+状态)、底部输入框+发送、顶部显示标题/工程/状态(运行中·空闲)并自动滚动到底部。
+- **顶部栏(`#topbar`,可换行 flex)**:品牌 + 全部控件(搜索 → `search`、工程目录过滤 → `directory`(下拉项来自会话 `location.directory` 去重)、排序(updated/created)、
+  `+ 新建` / `导入` / `刷新`、`显示已归档`、会话计数),右侧贴边显示连接状态。
+  窄屏(约 <1160px)时自动折到第二行,**不遮挡**下方内容;`body` 为纵向 flex,`main` 用 `flex:1; min-height:0`
+  吃掉剩余高度(不再写死 `calc(100vh - 43px)`,否则顶栏一换行底部输入框就会被顶出视口)。
+- **会话表(`#listpane`,可拖拽 `--list-w`,默认 560px)**:列 = 标题 / 工程目录(截断显示 + `title` 悬浮全路径) / 更新时间(相对) / tokens / cost / 行内操作(改名、删除、移动、分叉、打开)。点击行=打开。
+- **对话(`#chatpane`,占满剩余)**:消息列表(终端风:等宽、无气泡、角色色条+标记;user/assistant/tool 渲染)、底部输入框+发送、顶部显示标题/工程/状态(运行中·空闲)并自动滚动到底部。
+- **左栏已整栏移除**:原 `#filters` 左栏与 `#resizer-left` 分栏条删除,控件迁入顶部栏,会话表接管腾出的宽度;
+  唯一保留的分栏条是 `#resizer-mid`(分隔会话表与对话,双击复位)。
 
 ### 安全
 - 默认仅监听 `127.0.0.1`。
@@ -206,6 +211,14 @@ opencode-session-manager/
   - 视觉:光标 `▌` 落在**最后一个文本/思考块内部的行内末尾**(直接拼在 Markdown 结果后会掉到块级元素之外、单独占一行);
     流式期间思考块自动展开(`▾ 思考`),回合结束后回落折叠态(`▸ 思考`),与服务端版本一致;
     标题行加「输出中」徽标,用量行加「流式中」。
+- **E 顶部栏布局(已实现)** — 左栏整栏移除,控件上顶栏。
+  - `index.html`:原 `#filters` 内的控件(搜索/工程目录/排序/新建·导入·刷新/显示已归档/计数)原样成为 `#topbar` 的直接子元素,
+    `<aside id="filters">` 与 `#resizer-left` 删除;**所有控件 id 保持不变**(其它模块与测试均按 id 取用,业务逻辑零改动)。
+  - `styles.css`:顶栏改 `flex-wrap: wrap`(窄屏折行)、`main` 网格由五列降为三列 `var(--list-w,560px) 6px minmax(0,1fr)`;
+    `body` 改纵向 flex + `main { flex:1; min-height:0 }`,替换原先写死的 `height: calc(100vh - 43px)`(否则顶栏折行会把底部输入框顶出视口);
+    删除 `#filters` 全套规则与 `#left-w`/`#mid-w` 变量。
+  - `app.js`:**只改** `setupResizers()` —— 去掉左分栏条一半,`--mid-w` 更名 `--list-w`(localStorage 键 `ocs.midW` → `ocs.listW`,
+    读取时兼容旧键并顺手清掉),双击复位的边界钳制随之简化。其余逻辑**一字未改**。
 
 ## 8. 测试
 
@@ -215,10 +228,13 @@ opencode-session-manager/
 - 直连 OpenCode 无鉴权 → 401;经代理 → 200(证明鉴权只在代理侧)。
 - 经代理订阅 `/api/event`,约 2s 内收到 `server.connected`。
 - 断言任何发给浏览器的响应体 / 头中**不含** password。
+- **顶部栏结构(15 项)**:`#topbar` 切片内包含 `#search`/`#dirFilter`/`#order`/`#btnNew`/`#refresh`/`#showArchived`/`#count`/`#status`;
+  首页不再有 `id="filters"`、不再有 `<aside>`、不再有 `#resizer-left`,且 `class="resizer"` 只剩 1 处;
+  `styles.css` 主区为 `var(--list-w, 560px) 6px minmax(0, 1fr)`,不再引用 `--left-w`/`--mid-w`,不再有 `calc(100vh - 43px)`。
 
 ### 前端手动验收清单
 - [ ] 列表能同时看到多个工程目录下的会话,并按更新时间倒序。
-- [ ] 搜索关键字能过滤;选择工程目录能只显示该工程会话。
+- [ ] 顶栏搜索关键字能过滤;选择工程目录能只显示该工程会话。
 - [ ] 改名后标题即时更新。
 - [ ] 移动到新目录后,该会话的工程目录更新。
 - [ ] 删除后会话从列表消失。
@@ -234,10 +250,10 @@ opencode-session-manager/
 - [ ] 运行中发送消息选「排队」:消息进入待发送队列(不立刻出现在消息流),回合结束后自动执行;选「插话」则立即并入当前回合。
 - [ ] 待发送项可「改为排队/改为插话」与「取消」,操作后队列即时刷新。
 - [ ] 切换智能体/模型后,重新打开该会话仍显示新值(已持久化)。
-- [ ] 左栏「+ 新建」填绝对路径目录后能建出会话并自动打开;留空目录或填相对路径会就地报错。
-- [ ] 列表「归档」后该会话从列表消失,左栏提示「另 N 个已归档」;勾选「显示已归档」可见 `📦 已归档` 行并能「取消归档」。
+- [ ] 顶栏「+ 新建」填绝对路径目录后能建出会话并自动打开;留空目录或填相对路径会就地报错。
+- [ ] 列表「归档」后该会话从列表消失,顶栏提示「另 N 个已归档」;勾选「显示已归档」可见 `📦 已归档` 行并能「取消归档」。
 - [ ] 聊天头部「导出」下载 JSON;「在 TUI 打开」给出的命令粘到终端能进入同一会话。
-- [ ] 左栏「导入」选择导出得到的 JSON,指定目标目录后导入成功并自动打开(消息完整)。
+- [ ] 顶栏「导入」选择导出得到的 JSON,指定目标目录后导入成功并自动打开(消息完整)。
 
 ### 问询应答的自动化验证(本次已执行)
 - 浏览器内断言 36 项(`/tmp/ocsm-probe/asks-unit*.html`,真实 `app.js`):字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装与本地校验(含 `external`、数值范围、`minItems/maxItems`、`minLength`、`email/uri`)。
@@ -259,7 +275,7 @@ opencode-session-manager/
   导入的解包、换 ID、`location`、409 重试、非法 JSON / 缺字段 / 未选文件;导出的 URL 与 `sanitize` 开关、下载文件名与内容形状;
   `tuiCommand` 的引号转义;`modelRefOf` / `safeName` / `newSessionID` 边界。
 - 离线渲染核对:`/tmp/ocsm-probe/caps-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=list|new|import|export|tui|arch`)逐个截图,
-  确认左栏工具行、归档标记、聊天头部操作区与四个对话框的布局;长目录路径在「在 TUI 打开」里折行完整可见。
+  确认左栏工具行(当时布局;E 组后已迁到顶栏,见 §7)、归档标记、聊天头部操作区与四个对话框的布局;长目录路径在「在 TUI 打开」里折行完整可见。
 
 ### 流式渲染的自动化验证(本次已执行)
 - 端到端 `test/e2e-stream.sh`(4 项;`OCS_E2E_LLM=1` 时 27 项,全部通过):
@@ -280,6 +296,16 @@ opencode-session-manager/
 - 离线渲染核对:`/tmp/ocsm-probe/stream-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=mid|reason|tool|done`)
   截图 `stream-{mid,reason,tool,done}.png`,确认光标贴在上一个字的行内末尾、思考块展开时的箭头、「输出中」徽标不换行、
   工具行与用量行的位置。这一轮核对实际抓出了两个肉眼可见的问题(光标掉到块级元素之外单独占一行、徽标被挤到下一行),已修。
+
+### 顶部栏布局的自动化验证(本次已执行)
+- 冒烟 `test/smoke.sh`:**50 项全部通过**(由 35 项增至 50 项,新增的 15 项即上面的顶部栏结构断言)。
+- 既有九套测试全部复跑且**断言一字未改仍然全绿** —— 证明「元素 id 不变 + 业务逻辑零改动」的前提成立:
+  `e2e-asks` 13、`e2e-controls` 22(LLM 31)、`e2e-capabilities` 26、`e2e-stream` 4(LLM 27)、
+  浏览器内断言 `ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71、`ui-stream` 96。
+  (四个 `test/ui-*.html` 骨架同步成「控件在 `#topbar` 内、无 `#filters`/`#resizer-left`」,测试断言本身未动。)
+- 离线渲染核对:`/tmp/ocsm-probe/top-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=list|selected`)
+  截图 `top-1500.png` / `top-1100.png` / `top-sel.png` —— 1500px 顶栏单行、1100px 自动折成两行且不遮挡列表与对话,
+  两种情况底部输入框都稳在视口内(验证 `body` 纵向 flex + `main { flex:1; min-height:0 }` 的修法必要且有效)。
 
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?

@@ -2,11 +2,15 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><title>asks unit</title><link rel="stylesheet" href="/styles.css"></head>
 <body>
-  <header id="topbar"><div class="brand">t</div><div id="status" class="status"></div></header>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"></select></label>
+    <div class="lbtools"><button id="refresh"></button></div>
+    <span id="count"></span>
+    <div id="status" class="status"></div>
+  </header>
   <main>
-    <aside id="filters"><input id="search"><select id="dirFilter"></select><select id="order"></select>
-      <button id="refresh"></button><span id="count"></span></aside>
-    <div class="resizer" id="resizer-left"></div>
     <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">

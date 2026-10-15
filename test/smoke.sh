@@ -112,6 +112,50 @@ for sel in 'id="btnNew"' 'id="btnImport"' 'id="showArchived"' 'id="chatOps"' 'id
   fi
 done
 
+# 顶部栏布局:筛选/工具控件搬到顶栏,左栏整栏与左分栏条已移除
+TOP_HTML=$(printf '%s' "$HOME_HTML" | awk '/<header id="topbar">/{f=1} f{print} /<\/header>/{if(f) exit}')
+for sel in 'id="search"' 'id="dirFilter"' 'id="order"' 'id="btnNew"' 'id="refresh"' 'id="showArchived"' 'id="count"' 'id="status"'; do
+  if printf '%s' "$TOP_HTML" | grep -q "$sel"; then
+    echo "PASS: 顶栏包含 $sel"; pass=$((pass + 1))
+  else
+    echo "FAIL: 顶栏缺少 $sel"; fail=$((fail + 1))
+  fi
+done
+if printf '%s' "$HOME_HTML" | grep -q 'id="filters"'; then
+  echo "FAIL: 首页仍有左栏 #filters"; fail=$((fail + 1))
+else
+  echo "PASS: 左栏 #filters 已移除"; pass=$((pass + 1))
+fi
+if printf '%s' "$HOME_HTML" | grep -q '<aside'; then
+  echo "FAIL: 首页仍有 <aside> 左栏"; fail=$((fail + 1))
+else
+  echo "PASS: 首页已无 <aside> 左栏"; pass=$((pass + 1))
+fi
+if printf '%s' "$HOME_HTML" | grep -q 'id="resizer-left"'; then
+  echo "FAIL: 首页仍有左分栏条 #resizer-left"; fail=$((fail + 1))
+else
+  echo "PASS: 左分栏条已移除"; pass=$((pass + 1))
+fi
+nres=$(printf '%s' "$HOME_HTML" | grep -o 'class="resizer"' | wc -l | tr -d ' ')
+ck "$nres" 1 "首页只剩 1 个分栏条(#resizer-mid)"
+
+CSS=$(curl -s "${AUTH[@]}" "$PROXY/styles.css")
+if printf '%s' "$CSS" | grep -q 'var(--list-w, 560px) 6px minmax(0, 1fr)'; then
+  echo "PASS: styles.css 主区为两栏网格(--list-w)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 主区网格未改为 --list-w 两栏"; fail=$((fail + 1))
+fi
+if printf '%s' "$CSS" | grep -q 'var(--left-w\|var(--mid-w'; then
+  echo "FAIL: styles.css 仍引用 --left-w/--mid-w"; fail=$((fail + 1))
+else
+  echo "PASS: styles.css 已无 --left-w/--mid-w"; pass=$((pass + 1))
+fi
+if printf '%s' "$CSS" | grep -q 'calc(100vh - 43px)'; then
+  echo "FAIL: styles.css 主区仍是写死高度(顶栏变高会把底部输入框顶出视口)"; fail=$((fail + 1))
+else
+  echo "PASS: styles.css 主区不再写死高度"; pass=$((pass + 1))
+fi
+
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if printf '%s' "$sse" | grep -q 'server.connected'; then
   echo "PASS: 经代理 SSE 收到 server.connected"; pass=$((pass + 1))

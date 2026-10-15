@@ -9,36 +9,31 @@
 <body>
   <header id="topbar">
     <div class="brand">OpenCode 会话管理器</div>
+    <label class="f"><span>搜索</span>
+      <input id="search" type="search" placeholder="标题关键字…" autocomplete="off">
+    </label>
+    <label class="f"><span>工程目录</span>
+      <select id="dirFilter"><option value="">全部</option></select>
+    </label>
+    <label class="f"><span>排序</span>
+      <select id="order">
+        <option value="desc">最近更新</option>
+        <option value="asc">最早更新</option>
+      </select>
+    </label>
+    <div class="lbtools">
+      <button id="btnNew" class="chip primary" title="在指定工程目录新建一个会话">+ 新建</button>
+      <button id="btnImport" class="chip" title="从 JSON 文件导入会话">导入</button>
+      <button id="refresh" class="chip" title="重新拉取会话列表">刷新</button>
+    </div>
+    <label class="chk" title="归档只记录在本面板(见 README),OpenCode 本身暂无会话归档接口">
+      <input type="checkbox" id="showArchived"> 显示已归档
+    </label>
+    <div class="hint">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
     <div id="status" class="status">连接中…</div>
   </header>
 
   <main>
-    <aside id="filters">
-      <label>搜索
-        <input id="search" type="search" placeholder="标题关键字…" autocomplete="off">
-      </label>
-      <label>工程目录
-        <select id="dirFilter"><option value="">全部</option></select>
-      </label>
-      <label>排序
-        <select id="order">
-          <option value="desc">最近更新</option>
-          <option value="asc">最早更新</option>
-        </select>
-      </label>
-      <div class="lbtools">
-        <button id="btnNew" class="chip primary" title="在指定工程目录新建一个会话">+ 新建</button>
-        <button id="btnImport" class="chip" title="从 JSON 文件导入会话">导入</button>
-        <button id="refresh" class="chip" title="重新拉取会话列表">刷新</button>
-      </div>
-      <label class="chk" title="归档只记录在本面板(见 README),OpenCode 本身暂无会话归档接口">
-        <input type="checkbox" id="showArchived"> 显示已归档
-      </label>
-      <div class="hint">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
-    </aside>
-
-    <div class="resizer" id="resizer-left" title="拖动调整宽度 · 双击复位"></div>
-
     <section id="listpane">
       <table id="list">
         <thead>
