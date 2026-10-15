@@ -706,6 +706,97 @@ else
   echo "FAIL: 经代理未收到 server.connected"; fail=$((fail + 1))
 fi
 
+# ---- M 组:底板(输入区)收起 / 展开 ----
+# 手机屏幕小,收起后只剩一条细边,高度让给会话内容。这一组锁的是几条【不变量】:
+# 手柄永远点得回来、运行中的中断永不被藏、两份记忆互不干扰。
+if has "$HOME_HTML" 'id="btnComposer"' && has "$HOME_HTML" 'id="cstripMeta"'; then
+  echo "PASS: index.html 有折叠手柄与细边上的提示区"; pass=$((pass + 1))
+else
+  echo "FAIL: index.html 缺 id=btnComposer / id=cstripMeta"; fail=$((fail + 1))
+fi
+if [ "$(printf '%s' "$HOME_HTML" | grep -oF 'id="btnComposer"' | wc -l)" = 1 ]; then
+  echo "PASS: 手柄只有一个(不是每屏各做一份)"; pass=$((pass + 1))
+else
+  echo "FAIL: 手柄出现次数不是 1"; fail=$((fail + 1))
+fi
+# 手柄是 #composer 的子元素:它绝对定位在底板上沿,必须留在底板里,否则收起后就没了
+if has "$(printf '%s' "$HOME_HTML" | awk '/id="composer"/{f=1} f{print} f&&/<\/section>/{exit}')" 'id="btnComposer" class="chip"'; then
+  echo "PASS: 手柄在 #composer 里,且是 .chip(窄屏因此自动拿到 ≥44 命中区)"; pass=$((pass + 1))
+else
+  echo "FAIL: 手柄不在 #composer 里 / 没带 .chip"; fail=$((fail + 1))
+fi
+# 收起 = 藏东西。要防的是「顺手把中断也藏了」——运行中它是细边上唯一的出口
+COLLAPSED_HIDE=$(printf '%s' "$CSS" | awk '/^#composer\.collapsed #ctoolbar \.ctl,$/{f=1} f{print} f&&/display: none; \}$/{exit}')
+if has "$COLLAPSED_HIDE" 'display: none;' && ! has "$COLLAPSED_HIDE" 'interrupt'; then
+  echo "PASS: 收起的隐藏名单里没有中断(运行中它是唯一不能藏的东西)"; pass=$((pass + 1))
+else
+  echo "FAIL: 隐藏名单缺了,或把 interrupt 一起藏了"; fail=$((fail + 1))
+fi
+HANDLE_CSS=$(printf '%s' "$CSS" | awk '/^#btnComposer \{/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$HANDLE_CSS" 'position: absolute' && ! has "$HANDLE_CSS" 'display: none'; then
+  echo "PASS: 手柄绝不 display:none(收起后它就是那条细边的一部分)"; pass=$((pass + 1))
+else
+  echo "FAIL: 手柄样式缺 position:absolute,或被 display:none 藏了"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #composer.collapsed { min-height: 48px; }'; then
+  echo "PASS: 手机上细边有 44px 级的高度(手指按得准,不是一条缝)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺窄屏细边高度"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #composer.collapsed #ctoolbar'; then
+  echo "PASS: 窄屏收起时工具栏给手柄让出了位(否则手柄压在控件上)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏收起缺让位规则"; fail=$((fail + 1))
+fi
+PAINT_FN=$(printf '%s' "$APPJS" | awk '/^function paintComposer\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$PAINT_FN" 'if (!comp || !btn) return;'; then
+  echo "PASS: 手柄不在就整体不收起(新 app.js 配旧 index.html 不会把底板锁死)"; pass=$((pass + 1))
+else
+  echo "FAIL: paintComposer 少了「没有手柄就不收起」的守卫"; fail=$((fail + 1))
+fi
+if has "$APPJS" "'ocs.composerHidden'" && has "$APPJS" "'ocs.composerHiddenNarrow'"; then
+  echo "PASS: 记忆分两份(桌面 / 手机各一份)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺其中一份记忆的键名"; fail=$((fail + 1))
+fi
+HIDDEN_FN=$(printf '%s' "$APPJS" | awk '/^function composerHidden\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$HIDDEN_FN" "contains('narrow');"; then
+  echo "PASS: 没记过时手机=收起、桌面=展开(默认值跟着判定源走)"; pass=$((pass + 1))
+else
+  echo "FAIL: composerHidden 的默认值不是按 html.narrow 来的"; fail=$((fail + 1))
+fi
+NARROWCLASS_FN=$(printf '%s' "$APPJS" | awk '/^function syncNarrowClass\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$NARROWCLASS_FN" 'paintComposer();'; then
+  echo "PASS: 转屏跨断点时会重读这一档自己的那份记忆"; pass=$((pass + 1))
+else
+  echo "FAIL: syncNarrowClass 里没有重读"; fail=$((fail + 1))
+fi
+if has "$(printf '%s' "$APPJS" | awk '/^function renderAttachments\(\)/{f=1} f{print} f&&/^\}$/{exit}')" 'syncComposerMeta();'; then
+  echo "PASS: 收起时细边的「草稿 / 📎 n」跟着附件与正文一起变"; pass=$((pass + 1))
+else
+  echo "FAIL: renderAttachments 没有同步细边提示"; fail=$((fail + 1))
+fi
+DROP_HANDLER=$(printf '%s' "$APPJS" | awk '/addEventListener\(.drop./{f=1} f{print} f&&/^[[:space:]]*\}\);$/{exit}')
+if has "$DROP_HANDLER" 'expandComposer();'; then
+  echo "PASS: 收起时拖文件进来会自动展开(点手柄那一步省了)"; pass=$((pass + 1))
+else
+  echo "FAIL: drop 处理器里没有自动展开"; fail=$((fail + 1))
+fi
+INIT_FN_M=$(printf '%s' "$APPJS" | awk '/^function init\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$INIT_FN_M" 'setupComposerToggle()' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setupComposerToggle' | wc -l)" = 2 ]; then
+  echo "PASS: setupComposerToggle() 接进了 init() 且只有这一处接线"; pass=$((pass + 1))
+else
+  echo "FAIL: setupComposerToggle 的接线不对"; fail=$((fail + 1))
+fi
+for f in test/ui-composer.html test/ui-composer-run.js; do
+  if [ -f "$(dirname "$0")/$(basename "$f")" ]; then
+    echo "PASS: 有 M 组的测试文件 $f"; pass=$((pass + 1))
+  else
+    echo "FAIL: 缺测试文件 $f"; fail=$((fail + 1))
+  fi
+done
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

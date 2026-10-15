@@ -93,6 +93,8 @@
       <div id="inbox" hidden></div>
       <div id="composer">
         <div id="ctoolbar" hidden>
+          <!-- 收起成细边时,左侧交代两件容易被误会成「丢了」的事:草稿、待发送附件 -->
+          <span id="cstripMeta" hidden></span>
           <label class="ctl" title="当前会话使用的智能体">
             <span>智能体</span>
             <select id="agentSel"><option value="">默认</option></select>
@@ -121,6 +123,9 @@
         <div id="mentions" hidden role="listbox" aria-label="文件补全"></div>
         <div id="cmds" hidden role="listbox" aria-label="命令补全"></div>
         <input type="file" id="filePick" multiple hidden>
+        <!-- 折叠手柄:底板上沿靠右,两种状态都在原位。
+             收起时它就是那条细边的一部分(绝不 display:none),所以任何时候都点得回来。 -->
+        <button type="button" id="btnComposer" class="chip" aria-expanded="true" aria-label="收起输入区" title="收起输入区(只留一条细边)">▾ 收起</button>
       </div>
     </section>
   </main>

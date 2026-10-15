@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>composer unit</title>
+  <!-- /narrow.js 不是本目录的文件:运行器会从 public/index.html 里【抠】出那段内联脚本再送过来。
+       于是这里翻面用的就是线上真正跑的那个判定式(与 ui-mobile.html 同一手法)。 -->
+  <script src="/narrow.js"></script>
+  <link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar">
+    <button type="button" id="btnFilters" class="chip" aria-expanded="false" aria-controls="topbar">筛选</button>
+    <div class="brand">OpenCode 会话管理器</div>
+    <label class="f"><span>搜索</span><input id="search" type="search"></label>
+    <div class="lbtools">
+      <button id="btnNew" class="chip primary">+ 新建</button>
+      <button id="btnImport" class="chip nf">导入</button>
+      <button id="refresh" class="chip nf">刷新</button>
+    </div>
+    <label class="f nf"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f nf"><span>排序</span><select id="order"></select></label>
+    <label class="chk nf"><input type="checkbox" id="showArchived"> 显示已归档</label>
+    <div class="hint nf">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane">
+      <table id="list">
+        <thead><tr><th>标题</th><th>工程目录</th><th>更新</th><th>Tokens</th><th>Cost</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button id="loadMore" hidden></button>
+    </section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline">
+          <button type="button" id="backList" class="chip" aria-label="返回会话列表">‹ 会话</button>
+          <span id="chatTitle"></span><span id="chatState"></span>
+        </div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <!-- 与 public/index.html 的底板段逐字一致,只多两个元素:
+           #cstripMeta(细边左侧交代草稿/附件)、#btnComposer(折叠手柄) -->
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <span id="cstripMeta" hidden></span>
+          <label class="ctl" title="当前会话使用的智能体"><span>智能体</span><select id="agentSel"><option value="">默认</option></select></label>
+          <label class="ctl" title="当前会话使用的模型"><span>模型</span><select id="modelSel"><option value="">默认</option></select></label>
+          <label class="ctl" id="variantWrap" hidden title="模型变体 / 推理档位"><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden title="运行中消息的投递方式">
+            <button type="button" data-delivery="queue">排队</button>
+            <button type="button" data-delivery="steer">插话</button>
+          </div>
+          <button type="button" id="interrupt" class="chip danger" hidden title="中断当前正在执行的回合">■ 中断</button>
+        </div>
+        <div id="attach" hidden></div>
+        <div class="cinput">
+          <button type="button" id="btnAttach" class="attachbtn" title="添加附件(也可以直接把文件拖进来,或在输入框里粘贴)" aria-label="添加附件">📎</button>
+          <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行);/ 命令,@ 可补全工程内的文件"></textarea>
+          <button id="send">发送</button>
+        </div>
+        <div id="mentions" hidden role="listbox" aria-label="文件补全"></div>
+        <div id="cmds" hidden role="listbox" aria-label="命令补全"></div>
+        <input type="file" id="filePick" multiple hidden>
+        <button type="button" id="btnComposer" class="chip" aria-expanded="true" aria-label="收起输入区" title="收起输入区(只留一条细边)">▾ 收起</button>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <dialog id="dlgHelp" class="dlg"><div class="dlgform"><h3>命令与快捷键</h3>
+    <div class="keys" id="helpKeys"></div>
+    <div class="dlgacts"><button type="button" class="chip primary" data-close>关闭</button></div>
+  </div></dialog>
+  <dialog id="dlgPick" class="dlg"><div class="dlgform"><h3 id="pickTitle">选择</h3>
+    <input id="pickFilter" class="pickfilter" type="text" autocomplete="off" hidden>
+    <div id="pickList" class="picklist" role="listbox"></div>
+    <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div>
+  </dialog>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init:接线函数由断言脚本自己按顺序调用(与 ui-mobile.html 同一手法) */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '甲会话', projectID: 'pj1', time: { created: 1, updated: 900 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/alpha' },
+        agent: 'build', model: { providerID: 'company', id: 'deepseek-v4-flash', variant: 'low' } },
+      { id: 'ses_b', title: '乙会话', projectID: 'pj1', time: { created: 2, updated: 800 },
+        tokens: {}, cost: 0, location: { directory: '/proj/beta' } },
+    ];
+    var AGENTS = [
+      { id: 'build', name: 'Build', mode: 'primary', hidden: false },
+      { id: 'plan', name: 'Plan', mode: 'primary', hidden: false },
+    ];
+    var MODELS = [
+      { providerID: 'company', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true,
+        variants: [{ id: 'low', settings: {} }] },
+    ];
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    var noContent = function () { return { ok: true, status: 204, text: async function () { return ''; } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      window.calls.push({ url: u, method: (opts && opts.method) || 'GET', body: (opts && opts.body) || null });
+      if (u === '/__health') return json({ ok: true, base: 'http://127.0.0.1:1', uploadDir: '/tmp/oc-up' });
+      if (u.indexOf('/api/experimental/fs/write') === 0) {
+        var p = new URLSearchParams(u.split('?')[1] || '').get('path') || '/tmp/oc-up/f';
+        return json({ data: { path: p } });
+      }
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
+      if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) return json({ data: { id: 'msg_new' } });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: [
+        { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '第一句' },
+        { id: 'msg_a1', type: 'assistant', time: { created: 200 }, content: [{ type: 'text', text: '回答' }] },
+      ], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+    window.confirm = function () { return true; };
+    window.prompt = function () { return '新标题'; };
+    window.alert = function () {};
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var PRE = '[桌面] ';
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + PRE + name + (cond ? '' : ' | got=' + J(extra)));
+    };
+    var J = function (v) { try { return JSON.stringify(v); } catch (_) { return String(v); } };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var cs = function (el) { return getComputedStyle(el); };
+    /* 「看得见」不能只看自己的 display —— 祖先 display:none 时后代的 computed display 依然在。
+       offsetParent 才是那个信号(与 ui-mobile.html 同一判据)。 */
+    var vis = function (el) {
+      if (!el || !el.isConnected) return false;
+      if (cs(el).display === 'none') return false;
+      return el.offsetParent !== null;
+    };
+    var box = function (el) { return el.getBoundingClientRect(); };
+
+    var KEY = 'ocs.composerHidden';        // 桌面那份
+    var KEY_N = 'ocs.composerHiddenNarrow'; // 手机那份
+    var collapsed = function () { return q('#composer').classList.contains('collapsed'); };
+    var meta = function () { return q('#cstripMeta'); };
+
+    var realMM = window.matchMedia;
+    /* 翻面:手机 = 桩命中 window.OCS_NARROW_MQ,桌面 = 桩什么都不命中。
+       走的就是真实那条路(syncNarrowClass 只认这一个字面量)。 */
+    var setNarrow = function (on) {
+      PRE = on ? '[手机] ' : '[桌面] ';
+      window.matchMedia = function (q2) {
+        return { matches: on && q2 === window.OCS_NARROW_MQ, media: q2,
+          addEventListener: function () {}, removeEventListener: function () {} };
+      };
+      syncNarrowClass();
+      syncNarrowView();
+    };
+    /* 每组开跑前把状态摆正,免得上一组的状态串味 */
+    var setState = function (narrow, hidden) {
+      setNarrow(narrow);
+      localStorage.setItem(narrow ? KEY_N : KEY, hidden ? '1' : '0');
+      paintComposer();
+    };
+    var expandedH = 0;
+
+    try {
+      localStorage.removeItem(KEY);
+      localStorage.removeItem(KEY_N);
+      await loadSessions({ reset: true });
+      setupFilters();
+      setupListActions();
+      setupAttachments(); // 拖放/粘贴的监听挂在这一节里(G 组要用)
+      setupNarrow();
+      setupComposerToggle();
+      await selectSession('ses_a');
+      setNarrow(false);
+
+      /* ===================== A. 手柄 ===================== */
+      T('A1 折叠手柄只有一个(不是每屏各一份)', qa('#btnComposer').length === 1, qa('#btnComposer').length);
+      T('A2 手柄是 #composer 的子元素', q('#btnComposer') && q('#btnComposer').parentElement.id === 'composer',
+        q('#btnComposer') && q('#btnComposer').parentElement.id);
+      T('A3 #composer 是手柄的定位基准(position:relative)', cs(q('#composer')).position === 'relative',
+        cs(q('#composer')).position);
+      T('A4 细边提示区也在底板里(#cstripMeta)', qa('#cstripMeta').length === 1);
+      T('A5 手柄是 .chip(于是窄屏自动拿到 ≥44 命中区)',
+        q('#btnComposer').classList.contains('chip'));
+
+      /* ===================== B. 桌面:没记过就是展开 ===================== */
+      T('B1 桌面 + 从未记过 → 展开(没有 collapsed 类)', !collapsed());
+      T('B2 桌面展开:输入框可见', vis(q('#input')));
+      T('B3 桌面展开:📎 与发送都在', vis(q('#btnAttach')) && vis(q('#send')));
+      T('B4 桌面展开:智能体/模型选择器都在明面上', vis(q('#agentSel')) && vis(q('#modelSel')));
+      T('B5 桌面展开:手柄可见', vis(q('#btnComposer')));
+      T('B6 桌面展开:手柄 aria-expanded=true', q('#btnComposer').getAttribute('aria-expanded') === 'true');
+      T('B7 桌面展开:手柄文案说的是「收起」', q('#btnComposer').textContent.indexOf('收起') >= 0,
+        q('#btnComposer').textContent);
+      T('B8 桌面展开:不显示细边提示(展开着一眼就看得到)', !vis(meta()));
+      T('B9 桌面:没记过就不写存储(默认值不落盘)', localStorage.getItem(KEY) === null,
+        localStorage.getItem(KEY));
+
+      expandedH = box(q('#composer')).height;
+      T('B10 桌面展开:底板确实有高度(>60px)', expandedH > 60, expandedH);
+
+      /* ===================== C. 手机:没记过就是收起 ===================== */
+      setNarrow(true);
+      T('C1 手机:判定源接上了(html.narrow)', document.documentElement.classList.contains('narrow'));
+      T('C2 手机 + 从未记过 → 收起(这才是这次要的默认)', collapsed());
+      T('C3 手机收起:输入框不可见(高度让给会话)', !vis(q('#input')));
+      T('C4 手机收起:📎 与发送一起让位', !vis(q('#btnAttach')) && !vis(q('#send')));
+      T('C5 手机收起:智能体/模型选择器不可见(收起的全部意义)', !vis(q('#agentSel')) && !vis(q('#modelSel')));
+      T('C6 手机收起:没有草稿没有附件时,细边左侧空着', !vis(meta()));
+      T('C7 手机收起:手柄仍然可见(绝不 display:none)', vis(q('#btnComposer')));
+      T('C8 手机收起:手柄命中区 ≥44 高', box(q('#btnComposer')).height >= 44, box(q('#btnComposer')).height);
+      T('C9 手机收起:手柄命中区 ≥38 宽', box(q('#btnComposer')).width >= 38, box(q('#btnComposer')).width);
+      var stripH = box(q('#composer')).height;
+      T('C10 手机收起:细边 ≤60px(比展开矮一大截)', stripH <= 60, [stripH, expandedH]);
+      T('C11 手机收起:比展开至少矮 40px』', expandedH - stripH >= 40, [expandedH, stripH]);
+      T('C12 手机收起:是藏,不是删 —— 三个选择器都还在文档里',
+        qa('#ctoolbar .ctl').length === 3, qa('#ctoolbar .ctl').length);
+      T('C13 手机收起:#attach / #mentions / #cmds 也都没被删掉',
+        qa('#attach').length === 1 && qa('#mentions').length === 1 && qa('#cmds').length === 1);
+      T('C14 手机:没记过就还是没写存储', localStorage.getItem(KEY_N) === null, localStorage.getItem(KEY_N));
+
+      /* ===================== D. 记住(两份,互不干扰) ===================== */
+      q('#btnComposer').click();
+      T('D1 手机点手柄 → 展开', !collapsed());
+      T('D2 手机展开:输入框拿到焦点(就是「回一句」的意图)', document.activeElement === q('#input'),
+        document.activeElement && document.activeElement.id);
+      T('D3 手机展开:手机那份记成「展开」', localStorage.getItem(KEY_N) === '0', localStorage.getItem(KEY_N));
+      T('D4 手机展开:桌面那份没被碰', localStorage.getItem(KEY) === null, localStorage.getItem(KEY));
+
+      q('#btnComposer').click();
+      T('D5 手机再点手柄 → 收起', collapsed());
+      T('D6 手机收起:手机那份记成「收起」', localStorage.getItem(KEY_N) === '1', localStorage.getItem(KEY_N));
+
+      setNarrow(false);
+      T('D7 切回桌面:桌面那份没记过 → 展开(手机上记的收起管不着桌面)', !collapsed());
+      T('D8 切回桌面:手机那份没被动过', localStorage.getItem(KEY_N) === '1', localStorage.getItem(KEY_N));
+
+      q('#btnComposer').click();
+      T('D9 桌面点手柄 → 收起', collapsed());
+      T('D10 桌面收起:桌面那份记成「收起」', localStorage.getItem(KEY) === '1', localStorage.getItem(KEY));
+
+      setNarrow(true);
+      T('D11 再切回手机:手机那份记着收起 → 收起', collapsed());
+      T('D12 再切回手机:桌面那份没被动过', localStorage.getItem(KEY) === '1', localStorage.getItem(KEY));
+
+      q('#btnComposer').click();
+      T('D13 手机点开:手机那份 = 展开,桌面那份仍是收起(两份各自独立)',
+        localStorage.getItem(KEY_N) === '0' && localStorage.getItem(KEY) === '1',
+        [localStorage.getItem(KEY_N), localStorage.getItem(KEY)]);
+
+      localStorage.removeItem(KEY);
+      setNarrow(false);
+      paintComposer();
+      T('D14 把桌面那份清掉 → 又回到桌面默认(展开):默认不是初始化那一次的巧合', !collapsed());
+      T('D15 桌面展开:手机会话的收起状态仍然原封不动', localStorage.getItem(KEY_N) === '0',
+        localStorage.getItem(KEY_N));
+
+      /* ===================== E. 运行中:细边上留着 ■ 中断 ===================== */
+      setState(false, true);
+      store.running = true;
+      updateComposerControls();
+      T('E1 桌面收起 + 运行中:■ 中断 在细边上可见', vis(q('#interrupt')));
+      T('E2 桌面收起 + 运行中:排队/插话仍藏着(次要的让位)', !vis(q('#delivery')));
+      T('E3 桌面收起:细边不是靠 #ctoolbar 的 hidden 藏出来的', q('#ctoolbar').hidden === false,
+        q('#ctoolbar').hidden);
+      T('E4 桌面收起 + 运行中:中断在左、手柄在右,不打架',
+        box(q('#interrupt')).right < box(q('#btnComposer')).left,
+        [box(q('#interrupt')).right, box(q('#btnComposer')).left]);
+
+      store.running = false;
+      updateComposerControls();
+      T('E5 运行结束:细边只剩手柄,#interrupt 收回去', !vis(q('#interrupt')) && vis(q('#btnComposer')));
+
+      setState(true, true);
+      store.running = true;
+      updateComposerControls();
+      T('E6 手机收起 + 运行中:■ 中断 也在(唯一不能藏的东西)', vis(q('#interrupt')));
+      T('E7 手机收起 + 运行中:中断命中区 ≥44', box(q('#interrupt')).height >= 44, box(q('#interrupt')).height);
+      T('E8 手机收起 + 运行中:中断在左、手柄在右,不打架',
+        box(q('#interrupt')).right < box(q('#btnComposer')).left,
+        [box(q('#interrupt')).right, box(q('#btnComposer')).left]);
+      store.running = false;
+      updateComposerControls();
+
+      /* ===================== F. 细边左侧交代草稿与附件 ===================== */
+      setState(false, true);
+      q('#input').value = '还没发出去的一句话';
+      renderAttachments();
+      T('F1 桌面收起 + 有草稿:细边说「草稿」', vis(meta()) && meta().textContent.indexOf('草稿') >= 0,
+        meta().textContent);
+      store.attachments = [
+        { id: 'a1', name: 'x.png', size: 10, mime: 'image/png', path: '/tmp/oc-up/x.png', uri: 'file:///tmp/oc-up/x.png' },
+        { id: 'a2', name: 'y.png', size: 20, mime: 'image/png', path: '/tmp/oc-up/y.png', uri: 'file:///tmp/oc-up/y.png' },
+      ];
+      renderAttachments();
+      T('F2 桌面收起 + 2 个附件:细边说「📎 2」', vis(meta()) && meta().textContent.indexOf('2') >= 0,
+        meta().textContent);
+      T('F3 桌面收起:附件 chip 行与输入框仍让位(提示把话说明白了)', !vis(q('#attach')) && !vis(q('#input')));
+      T('F4 桌面收起:草稿与附件都在文档里没丢', q('#input').value === '还没发出去的一句话' && store.attachments.length === 2);
+
+      paintComposer();
+      localStorage.setItem(KEY, '0');
+      paintComposer();
+      T('F5 展开时不显示这两句提示(展开着不用提醒)', !vis(meta()));
+
+      localStorage.setItem(KEY, '1');
+      paintComposer();
+      T('F6 再收起:提示又回来了', vis(meta()));
+
+      q('#input').value = '';
+      store.attachments = [];
+      renderAttachments();
+      T('F7 草稿清掉、附件清掉:细边左侧又空着', !vis(meta()));
+
+      setState(true, true);
+      q('#input').value = '手机上也会看到';
+      renderAttachments();
+      T('F8 手机收起 + 有草稿:同样有提示', vis(meta()) && meta().textContent.indexOf('草稿') >= 0,
+        meta().textContent);
+      q('#input').value = '';
+      renderAttachments();
+
+      /* ===================== G. 拖文件进来 → 自动展开 ===================== */
+      T('G1 起手是收起的', collapsed());
+      var dt = new DataTransfer();
+      dt.items.add(new File(['hello'], 'a.txt', { type: 'text/plain' }));
+      var drop = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt });
+      q('#composer').dispatchEvent(drop);
+      T('G2 拖放被拦下了(不然浏览器会自己打开这个文件)', drop.defaultPrevented === true, drop.defaultPrevented);
+      T('G3 拖文件进来 → 自动展开', !collapsed());
+      T('G4 自动展开后光标就在输入框里', document.activeElement === q('#input'),
+        document.activeElement && document.activeElement.id);
+      for (var i = 0; i < 12; i++) await Promise.resolve(); // 上传是异步的,把微任务抽干
+      T('G5 拖进来的文件进了待发送列表', store.attachments.length === 1, store.attachments.length);
+      T('G6 展开后细边提示不再显示(芯片行已经顶上来)', !vis(meta()) || q('#attach').hidden === false);
+      store.attachments = [];
+      renderAttachments();
+
+      /* ===================== H. 点细边 / 别误触 ===================== */
+      setState(false, true);
+      q('#ctoolbar').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('H1 点细边空白处 → 展开', !collapsed());
+      q('#composer').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('H2 展开着点底板不会误收起(收起只有手柄这一个入口)', !collapsed());
+
+      setState(false, true);
+      q('#btnComposer').click();
+      T('H3 手柄点一次只翻一次(没被冒泡的细边点击再翻回去)', !collapsed());
+
+      setState(false, true);
+      store.running = true;
+      updateComposerControls();
+      q('#interrupt').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('H4 运行中收起点「中断」:不该顺手把底板展开', collapsed());
+      T('H5 点中断后中断按钮还在细边上', vis(q('#interrupt')));
+      store.running = false;
+      updateComposerControls();
+
+      /* ===================== I. 回归:底板之外照旧 ===================== */
+      setState(true, false);
+      T('I1 手机展开:输入框/📎/发送都回来了', vis(q('#input')) && vis(q('#btnAttach')) && vis(q('#send')));
+      T('I2 手机展开:智能体/模型又回到明面上', vis(q('#agentSel')) && vis(q('#modelSel')));
+      setState(true, true);
+      T('I3 手机收起:与底板无关的窄屏控件不受影响(返回、筛选还在)',
+        vis(q('#backList')) && vis(q('#btnFilters')));
+      T('I4 手机收起:对话区仍然占着屏(view-chat)', vis(q('#chatpane')) && !vis(q('#listpane')));
+
+      /* #ctoolbar 的 hidden 只由「有没有选中会话」决定,不能被折叠牵着走。
+         未选中会话时手柄绝不能跟着消失 —— 否则收起后就再也点不回来了。 */
+      q('#ctoolbar').hidden = true;
+      T('I5 未选中会话(#ctoolbar hidden)时,手柄仍然可见可点', vis(q('#btnComposer')));
+      q('#ctoolbar').hidden = false;
+
+      setState(false, true);
+      T('I6 桌面收起:列表与对话区照旧同时在(折叠只管底板)', vis(q('#listpane')) && vis(q('#chatpane')));
+      T('I7 桌面收起:#btnFilters / #backList 依旧隐藏(规则没被带跑)',
+        !vis(q('#btnFilters')) && !vis(q('#backList')));
+      setState(false, false);
+      T('I8 桌面展开:一切照旧', vis(q('#input')) && vis(q('#agentSel')) && !collapsed());
+
+      /* ===================== J. 手柄缺席时的自保 ===================== */
+      /* 收起之后唯一的出口就是手柄。所以手柄不在 DOM 里时,整个功能必须闭嘴 ——
+         新 app.js 配上还没更新的旧 index.html 就是这一态(实测:ui-mobile 那套
+         老的测试页正是靠这条不变量躲过了「底板被收起、却没有手柄点回来」)。 */
+      localStorage.removeItem(KEY_N);
+      q('#composer').classList.remove('collapsed');
+      var btn0 = q('#btnComposer');
+      btn0.remove();
+      setNarrow(true); // 手机 + 从未记过:正常早该收起了
+      T('J1 手柄不在 DOM 里 → 一律不收起', !collapsed());
+      T('J2 手柄不在 → 连存储都不写', localStorage.getItem(KEY_N) === null, localStorage.getItem(KEY_N));
+      q('#composer').appendChild(btn0);
+      setNarrow(true);
+      T('J3 手柄回来了 → 该收起还是收起', collapsed());
+      T('J4 手柄回到原位(仍是 #composer 的子元素)', q('#btnComposer').parentElement.id === 'composer');
+
+      window.matchMedia = realMM;
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post('# 底板收起/展开(桌面 1366x768 真视口 + matchMedia 桩翻面)\n' + out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post('# 底板收起/展开(异常中断)\n' + out.join('\n') +
+           '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) + ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

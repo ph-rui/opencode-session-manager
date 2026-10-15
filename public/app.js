@@ -2700,6 +2700,7 @@ function renderAttachments() {
   box.hidden = !refs.length && !files.length;
   if (box.hidden) {
     box.innerHTML = '';
+    syncComposerMeta(); // 收起时细边左侧那两句提示跟着一起变
     return;
   }
   let html = '';
@@ -2718,6 +2719,7 @@ function renderAttachments() {
       '<button type="button" class="achip-x" data-remove="' + esc(a.id) + '" title="移除">×</button></span>';
   }
   box.innerHTML = html;
+  syncComposerMeta(); // 收起时「📎 n」跟着一起变
 }
 
 function clearAttachments() {
@@ -2965,6 +2967,8 @@ function setupAttachments() {
     inp.addEventListener('paste', (e) => {
       const f = e.clipboardData && e.clipboardData.files;
       if (f && f.length) queueFiles(f);
+      // 这里刻意不调 expandComposer():收起时输入框是 display:none,粘贴根本落不到它身上。
+      // 「收起后还能往里塞东西」的只有拖放,那条挂在下面 #composer 的 drop 上。
     });
   }
   if (comp) {
@@ -2977,6 +2981,7 @@ function setupAttachments() {
     comp.addEventListener('drop', (e) => {
       if (!store.selected) return;
       e.preventDefault();
+      expandComposer(); // 收起时拖文件进来,顺手把底板拉开(点手柄那一步省了)
       queueFiles(e.dataTransfer && e.dataTransfer.files);
     });
   }
@@ -4291,6 +4296,112 @@ function setupListToggle() {
   });
 }
 
+/* ---------------------- 底板(输入区)收起 / 展开 ----------------------
+ * 手机屏幕小,收起后只留一条细边(styles.css 的 #composer.collapsed),高度让给会话内容。
+ *
+ * 判定源仍然是 <html>.narrow 那一个类;记忆分两份,桌面与手机互不干扰:
+ *   ocs.composerHidden        桌面
+ *   ocs.composerHiddenNarrow  手机
+ * 没记过时:桌面 = 展开(键盘打字是主要入口),手机 = 收起(屏幕小,先让出高度)。
+ * 存 '1'/'0' 两种值而不是「有/无」—— 因为两档的默认值不一样,得能把
+ * 「手机上显式展开过」与「手机上从没碰过」分开。
+ */
+const COMPOSER_KEY = 'ocs.composerHidden';
+const COMPOSER_KEY_NARROW = 'ocs.composerHiddenNarrow';
+
+function composerStoreKey() {
+  return document.documentElement.classList.contains('narrow') ? COMPOSER_KEY_NARROW : COMPOSER_KEY;
+}
+
+/* 这一档现在该不该收起:记过就听记的,没记过就看是桌面还是手机。 */
+function composerHidden() {
+  const v = localStorage.getItem(composerStoreKey());
+  if (v === '1') return true;
+  if (v === '0') return false;
+  return document.documentElement.classList.contains('narrow');
+}
+
+/* 收起时细边左侧还得交代两件容易被误会成「丢了」的事:
+ * 输入框里的草稿、待发送的附件。不然字被收没了会以为没了。 */
+function syncComposerMeta() {
+  const el = $('#cstripMeta');
+  if (!el) return;
+  const inp = $('#input');
+  const draft = !!(inp && inp.value.trim());
+  const n = (store.attachments || []).length;
+  const show = composerIsCollapsed() && (draft || n > 0);
+  el.hidden = !show;
+  if (!show) {
+    el.innerHTML = '';
+    return;
+  }
+  let html = '';
+  if (n) html += '<span class="cm-badge" title="待发送的附件">📎 ' + n + '</span>';
+  if (draft) html += '<span class="cm-badge" title="输入框里还有没发出去的草稿">● 草稿</span>';
+  el.innerHTML = html;
+}
+
+/* 现在【实际】是不是收起的 —— 看渲染结果,不再重新推导一遍 */
+function composerIsCollapsed() {
+  const comp = $('#composer');
+  return !!comp && comp.classList.contains('collapsed');
+}
+
+/* 按当前存储 / 当前断点画一次(只读,不写存储) */
+function paintComposer() {
+  const comp = $('#composer');
+  const btn = $('#btnComposer');
+  /* 手柄不在就【整个不收起】。收起之后唯一的出口就是那个手柄,没有它等于把底板锁死 ——
+   * 新 app.js 配上还没更新的旧 index.html 时就是这个情形。 */
+  if (!comp || !btn) return;
+  const hidden = composerHidden();
+  comp.classList.toggle('collapsed', hidden);
+  btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  btn.setAttribute('aria-label', hidden ? '展开输入区' : '收起输入区');
+  btn.title = hidden ? '展开输入区(智能体 / 模型 / 附件 / 输入框)' : '收起输入区(只留一条细边)';
+  btn.textContent = hidden ? '▴ 输入' : '▾ 收起';
+  syncComposerMeta();
+}
+
+function setComposerHidden(hidden, opts) {
+  if (!$('#btnComposer')) return;
+  localStorage.setItem(composerStoreKey(), hidden ? '1' : '0');
+  paintComposer();
+  if (!hidden && opts && opts.focus) {
+    const inp = $('#input');
+    if (inp) inp.focus();
+  }
+}
+
+/* 展开(收起时拖文件进来顺带把底板拉开,不用先去点手柄) */
+function expandComposer() {
+  if (!$('#btnComposer')) return;
+  if (!composerHidden()) return;
+  setComposerHidden(false, { focus: true });
+}
+
+function setupComposerToggle() {
+  const comp = $('#composer');
+  const btn = $('#btnComposer');
+  if (!comp) return;
+  // 重复接线只重画(与 setupListToggle 同款):两次绑定会让一次点击翻两次、看起来没反应
+  if (btn && btn.dataset.wired !== '1') {
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', () => setComposerHidden(!composerHidden(), { focus: true }));
+  }
+  if (comp.dataset.wired !== '1') {
+    comp.dataset.wired = '1';
+    // 收起时点细边空白处也展开;手柄与「中断」各有各的事,不抢
+    comp.addEventListener('click', (e) => {
+      if (!composerHidden()) return;
+      const t = e.target;
+      if (t && t.closest && (t.closest('#btnComposer') || t.closest('#interrupt'))) return;
+      setComposerHidden(false, { focus: true });
+    });
+  }
+  paintComposer();
+}
+
 /* ----------------------------- 绑定 ----------------------------- */
 
 function debounce(fn, ms) {
@@ -4337,6 +4448,8 @@ function syncNarrowClass() {
   };
   apply('narrow', window.OCS_NARROW_MQ);
   apply('short', window.OCS_SHORT_MQ);
+  // 跨断点(转屏 / 拉窗口)后重读这一档自己的那份记忆:桌面与手机是两份,别互相串
+  paintComposer();
 }
 
 function setupNarrow() {
@@ -4381,6 +4494,7 @@ function init() {
   setupResizers();
   setupListToggle();
   setupNarrow();
+  setupComposerToggle(); // 底板收起/展开(手机默认收起,见上面那一节)
   setupHistoryNav();
   setupScrollMemory();
   setupAttachments();
