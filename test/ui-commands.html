@@ -50,6 +50,11 @@
     <div class="keys" id="helpKeys"></div>
     <div class="dlgacts"><button type="button" class="chip primary" data-close>关闭</button></div>
   </div></dialog>
+  <dialog id="dlgPick" class="dlg"><div class="dlgform"><h3 id="pickTitle">选择</h3>
+    <input id="pickFilter" class="pickfilter" type="text" autocomplete="off" hidden>
+    <div id="pickList" class="picklist" role="listbox"></div>
+    <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div>
+  </div></dialog>
   <pre id="results"></pre>
 
   <script>
@@ -514,18 +519,38 @@
 
       window.calls.length = 0;
       idle();
-      idle();
+      // 前面 /archive 那条把唯一一个会话标成了已归档;选择框和左栏一样会滤掉它,先还原
+      if (store.sessions.get('ses_a')) store.sessions.get('ses_a').metadata = {};
       setCaret('/sessions');
       await send();
-      T('/sessions:焦点落到列表搜索框', document.activeElement === q('#search'));
+      T('/sessions:弹出选择框(不再是只聚焦)',
+        picksOpen() === true && q('#dlgPick').open === true);
+      T('/sessions:标题是「切换会话」', q('#pickTitle').textContent === '切换会话');
+      T('/sessions:列的就是左栏那批(同源同序)',
+        store.pickShown.length === visibleSessions().length && store.pickShown.length > 0 &&
+          store.pickShown[0].key === visibleSessions()[0].id,
+        [store.pickShown.length, visibleSessions().length]);
+      closePick();
+
       idle();
       setCaret('/models');
       await send();
-      T('/models:焦点落到模型选择', document.activeElement === q('#modelSel'));
+      T('/models:弹出选择框', picksOpen() === true);
+      T('/models:列出当前工程可用的模型(带 provider 分组)',
+        store.pickShown.length === 1 && store.pickShown[0].key === 'company/deepseek-v4-flash' &&
+          store.pickShown[0].group === 'company',
+        store.pickShown);
+      closePick();
+
       idle();
       setCaret('/agents');
       await send();
-      T('/agents:焦点落到智能体选择', document.activeElement === q('#agentSel'));
+      T('/agents:弹出选择框', picksOpen() === true);
+      T('/agents:列出可切换的智能体', store.pickShown.length === 2 && store.pickShown[0].key === 'build',
+        store.pickShown);
+      closePick();
+      q('#dlgPick').dispatchEvent(new Event('close'));
+      T('/agents:关掉后焦点回到输入框', document.activeElement === q('#input'));
 
       /* ================= 输入历史(↑/↓) ================= */
       store.history.clear();

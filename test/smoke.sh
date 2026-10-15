@@ -435,6 +435,51 @@ for f in test/ui-commands.html test/ui-commands-run.js test/e2e-commands.sh; do
   fi
 done
 
+# ---- 选择框对话框:/models · /agents · /sessions 从「只聚焦」改成「弹框让你选」----
+if has "$HOME_HTML" 'id="dlgPick"' && has "$HOME_HTML" 'id="pickList"' &&
+   has "$HOME_HTML" 'id="pickTitle"' && has "$HOME_HTML" 'id="pickFilter"'; then
+  echo "PASS: 页面有选择框对话框(#dlgPick / #pickList / #pickTitle / #pickFilter)"; pass=$((pass + 1))
+else
+  echo "FAIL: 页面缺选择框对话框的节点"; fail=$((fail + 1))
+fi
+if has "$CSS" '.picklist' && has "$CSS" '.pick-item' && has "$CSS" '.pick-group'; then
+  echo "PASS: styles.css 有选择框列表样式"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺选择框列表样式"; fail=$((fail + 1))
+fi
+PICKFN_MISSING=$(for fn in openPick closePick pickChoose pickKey pickVisible renderPick setupPick \
+                          picksOpen openSessionPick openModelPick pickVariant openAgentPick applyModel visibleSessions; do
+  has "$APPJS" "function $fn(" || printf '%s ' "$fn"
+done)
+ck "$PICKFN_MISSING" "" "app.js 有选择框与三条命令的全部函数"
+# 旧做法(只 focus 原生 <select>,而浏览器不会因此展开它)必须已经不存在
+if has "$APPJS" 'focusEl'; then
+  echo "FAIL: 还留着 focusEl 这个「只聚焦、不弹框」的旧做法"; fail=$((fail + 1))
+else
+  echo "PASS: 已经没有 focusEl 这个只会聚焦的旧做法"; pass=$((pass + 1))
+fi
+PICK_CMDS=$(printf '%s' "$APPJS" | python3 -c "
+import re, sys
+src = sys.stdin.read()
+block = src.split('const PANEL_COMMANDS', 1)[1].split('];', 1)[0]
+want = {'sessions': 'openSessionPick', 'models': 'openModelPick', 'agents': 'openAgentPick'}
+bad = [k for k, fn in want.items() if not re.search(r\"name: '\" + k + r\"'[^}]*\" + fn + r'\(\)', block)]
+print(','.join(bad))
+")
+ck "$PICK_CMDS" "" "/sessions /models /agents 三条命令都接到了选择框"
+if has "$APPJS" 'setupPick();'; then
+  echo "PASS: init() 里接上了 setupPick()"; pass=$((pass + 1))
+else
+  echo "FAIL: init() 里没有接 setupPick()"; fail=$((fail + 1))
+fi
+for f in test/ui-picks.html test/ui-picks-run.js; do
+  if [ -f "$(dirname "$0")/$(basename "$f")" ]; then
+    echo "PASS: 有选择框的测试文件 $f"; pass=$((pass + 1))
+  else
+    echo "FAIL: 缺测试文件 $f"; fail=$((fail + 1))
+  fi
+done
+
 # 顺序锁:init() 里 setupFilters() 必须排在 loadSessions 之前,否则会按默认值白拉一次
 INIT_ORDER=$(printf '%s' "$APPJS" | awk '
   /^function init\(\)/ { ininit = 1 }

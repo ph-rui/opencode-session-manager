@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>picks unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"></select></label>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
+    <label class="chk"><input type="checkbox" id="showArchived"></label>
+    <span id="count"></span><span id="archivedCount"></span>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div id="attach" hidden></div>
+        <div class="cinput">
+          <button type="button" id="btnAttach">📎</button>
+          <textarea id="input"></textarea>
+          <button id="send"></button>
+        </div>
+        <div id="mentions" hidden></div>
+        <div id="cmds" hidden></div>
+        <input type="file" id="filePick" multiple hidden>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <dialog id="dlgHelp" class="dlg"><div class="dlgform"><h3>命令与快捷键</h3>
+    <div class="keys" id="helpKeys"></div>
+    <div class="dlgacts"><button type="button" class="chip primary" data-close>关闭</button></div>
+  </div></dialog>
+  <dialog id="dlgPick" class="dlg"><div class="dlgform"><h3 id="pickTitle">选择</h3>
+    <input id="pickFilter" class="pickfilter" type="text" autocomplete="off" hidden>
+    <div id="pickList" class="picklist" role="listbox"></div>
+    <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div>
+  </div></dialog>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '甲会话', projectID: 'pj1', time: { created: 1, updated: 900 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/alpha' },
+        agent: 'build', model: { providerID: 'company', id: 'deepseek-v4-flash', variant: 'low' } },
+      { id: 'ses_b', title: '乙会话', projectID: 'pj1', time: { created: 2, updated: 800 },
+        tokens: {}, cost: 0, location: { directory: '/proj/beta' } },
+      { id: 'ses_arch', title: '已归档会话', projectID: 'pj1', time: { created: 3, updated: 700 },
+        tokens: {}, cost: 0, location: { directory: '/proj/beta' }, metadata: { ocs: { archived: 1 } } },
+    ];
+
+    /* 真实 GET /api/agent:隐藏的与 subagent 都要被 loadAgents 滤掉 */
+    var AGENTS = [
+      { id: 'build', name: 'Build', mode: 'primary', hidden: false },
+      { id: 'plan', name: 'Plan', mode: 'primary', hidden: false },
+      { id: 'general', name: 'General', mode: 'subagent', hidden: false },
+      { id: 'compaction', name: 'Compaction', mode: 'primary', hidden: true },
+    ];
+
+    /* 真实 GET /api/model:两个 provider、一个 disabled、两个带 variants */
+    var MODELS = [
+      { providerID: 'company', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true,
+        variants: [{ id: 'low', settings: {} }, { id: 'high', settings: {} }] },
+      { providerID: 'company', modelID: 'tiny', name: 'Tiny', enabled: true, variants: [] },
+      { providerID: 'google', modelID: 'gemini-4-argon', name: 'Gemini 4 Argon', enabled: true,
+        variants: [{ id: 'high', settings: {} }] },
+      { providerID: 'google', modelID: 'off-model', name: 'Off Model', enabled: false, variants: [] },
+    ];
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    var noContent = function () { return { ok: true, status: 204, text: async function () { return ''; } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      if (u === '/__health') return json({ ok: true, base: 'http://127.0.0.1:1', uploadDir: '/tmp/oc-up' });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
+      if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) return json({ data: { id: 'msg_new' } });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: [
+        { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '第一句' },
+        { id: 'msg_a1', type: 'assistant', time: { created: 200 }, content: [] },
+      ], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+    window.confirm = function () { return true; };
+    window.prompt = function () { return '新标题'; };
+    window.alert = function () {};
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var settle = async function (pred, tries) {
+      for (var i = 0; i < (tries || 300); i++) {
+        if (pred()) return true;
+        await Promise.resolve();
+      }
+      return pred();
+    };
+    var lastCall = function (re) {
+      for (var i = window.calls.length - 1; i >= 0; i--) if (re.test(window.calls[i].url)) return window.calls[i];
+      return null;
+    };
+    var bodyOf = function (c) { return c && c.body ? JSON.parse(c.body) : null; };
+    var hadCall = function (re) { return window.calls.some(function (c) { return re.test(c.url); }); };
+    var key = function (k, target) {
+      var e = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true });
+      (target || q('#dlgPick')).dispatchEvent(e);
+      return e;
+    };
+    var items = function () { return store.pickShown; };
+
+    try {
+      setupPick();
+      await loadSessions({ reset: true });
+      store.selected = 'ses_a';
+      await renderControls(store.sessions.get('ses_a'));
+
+      /* ================= 通用选择框:openPick / renderPick ================= */
+      openPick({ title: '测试', filter: false, current: 'b',
+        items: [{ key: 'a', label: '甲' }, { key: 'b', label: '乙', sub: 'sub-b' }, { key: 'c', label: '丙' }] });
+      T('openPick:打开对话框', q('#dlgPick').open === true && picksOpen() === true);
+      T('openPick:标题写进 #pickTitle', q('#pickTitle').textContent === '测试');
+      T('openPick:current 那一项默认高亮', store.pickAt === 1, store.pickAt);
+      T('openPick:没有 current 时停在第一条', (function () {
+        openPick({ title: 'x', items: [{ key: 'a', label: '甲' }, { key: 'b', label: '乙' }] });
+        return store.pickAt === 0;
+      })());
+      T('openPick:current 不在列表里也停在第一条', (function () {
+        openPick({ title: 'x', current: 'zzz', items: [{ key: 'a', label: '甲' }] });
+        return store.pickAt === 0;
+      })());
+      T('openPick:filter=false 时过滤框藏起来', q('#pickFilter').hidden === true);
+      openPick({ title: 'x', filter: true, items: [{ key: 'a', label: '甲' }] });
+      T('openPick:filter=true 时过滤框露出来且清空', q('#pickFilter').hidden === false && q('#pickFilter').value === '');
+      T('openPick:过滤框有 placeholder', q('#pickFilter').placeholder.length > 0);
+
+      /* renderPick:分组、高亮、空态 */
+      openPick({ title: 'g', items: [
+        { key: 'a', label: '甲', group: 'P1' }, { key: 'b', label: '乙', group: 'P1' },
+        { key: 'c', label: '丙', group: 'P2' }] });
+      T('renderPick:每组标题只出现一次',
+        qa('#pickList .pick-group').length === 2 &&
+        qa('#pickList .pick-group')[0].textContent === 'P1',
+        qa('#pickList .pick-group').map(function (e) { return e.textContent; }));
+      T('renderPick:条目数与 items 一致', qa('#pickList .pick-item').length === 3);
+      T('renderPick:高亮项带 active', qa('#pickList .pick-item.active').length === 1);
+      T('renderPick:sub 会显示出来', q('#pickList .pi-sub') !== null || true);
+      openPick({ title: 's', items: [{ key: 'a', label: '甲', sub: 'S' }] });
+      T('renderPick:sub 写进 .pi-sub', q('#pickList .pi-sub') && q('#pickList .pi-sub').textContent === 'S');
+      openPick({ title: 'e', filter: true, items: [{ key: 'a', label: '甲' }] });
+      store.pickFilter = '不存在的东西';
+      renderPick();
+      T('renderPick:无匹配时给空态而不是空框', q('#pickList .pick-empty') !== null);
+      T('renderPick:无匹配时 pickShown 为空', store.pickShown.length === 0);
+      T('renderPick:无匹配时不崩高亮', store.pickAt <= 0, store.pickAt);
+
+      /* ================= 过滤:pickVisible ================= */
+      store.pickItems = [
+        { key: 'a', label: 'DeepSeek Flash', sub: 'company/deepseek-v4-flash' },
+        { key: 'b', label: 'Gemini Argon', sub: 'google/gemini-4-argon' },
+      ];
+      store.pickFilter = '';
+      T('pickVisible:没查询词就是全部', pickVisible().length === 2);
+      store.pickFilter = 'flash';
+      T('pickVisible:按 label 过滤且大小写不敏感', pickVisible().length === 1 && pickVisible()[0].key === 'a');
+      store.pickFilter = 'google';
+      T('pickVisible:也按 sub 过滤', pickVisible().length === 1 && pickVisible()[0].key === 'b');
+      store.pickFilter = '   ';
+      T('pickVisible:只有空白等于没过滤', pickVisible().length === 2);
+      store.pickFilter = 'zzz';
+      T('pickVisible:无匹配返回空数组', pickVisible().length === 0);
+
+      /* ================= 键位:pickKey ================= */
+      openPick({ title: 'k', items: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }, { key: 'c', label: 'C' }] });
+      T('pickKey:↓ 往下走', pickKey({ key: 'ArrowDown' }) === true && store.pickAt === 1);
+      T('pickKey:↑ 往回走', pickKey({ key: 'ArrowUp' }) === true && store.pickAt === 0);
+      T('pickKey:↑ 到头绕回最后一条', pickKey({ key: 'ArrowUp' }) === true && store.pickAt === 2);
+      T('pickKey:↓ 到尾绕回第一条', pickKey({ key: 'ArrowDown' }) === true && store.pickAt === 0);
+      T('pickKey:方向键会 preventDefault(不滚页面)', key('ArrowDown').defaultPrevented === true);
+      T('pickKey:不认识的键不管', pickKey({ key: 'x' }) === false && pickKey({ key: 'Tab' }) === false);
+      T('pickKey:对话框没开时不管', (function () {
+        closePick();
+        return pickKey({ key: 'ArrowDown' }) === false;
+      })());
+      openPick({ title: 'k', items: [] });
+      T('pickKey:空列表时不吞方向键', pickKey({ key: 'ArrowDown' }) === false);
+      T('pickKey:空列表时 Enter 也不吞', pickKey({ key: 'Enter' }) === false);
+      openPick({ title: 'k', items: [{ key: 'a', label: 'A' }] });
+      T('pickKey:Enter 会 preventDefault', key('Enter').defaultPrevented === true);
+      T('pickKey:点「关闭」按钮的 Enter 不抢',
+        pickKey({ key: 'Enter', target: q('#dlgPick button[data-close]') }) === false);
+
+      /* ================= 选中:pickChoose ================= */
+      var got = null;
+      openPick({ title: 'c', items: [{ key: 'a', label: 'A' }, { key: 'd', label: 'D', disabled: true }],
+        onPick: function (it) { got = it.key; } });
+      T('pickChoose:选中后回调拿到 key', pickChoose(items()[0]) === undefined && got === 'a', got);
+      T('pickChoose:选中后对话框关掉', picksOpen() === false);
+      got = null;
+      openPick({ title: 'c', items: [{ key: 'd', label: 'D', disabled: true }], onPick: function (it) { got = it.key; } });
+      pickChoose(items()[0]);
+      T('pickChoose:disabled 的项点不动', got === null && picksOpen() === true, got);
+      closePick();
+
+      /* ================= 接线:setupPick ================= */
+      var picked = null;
+      openPick({ title: 'w', filter: true, items: [{ key: 'a', label: '甲' }, { key: 'b', label: '乙' }],
+        onPick: function (it) { picked = it.key; } });
+      /* 过滤框打字 */
+      q('#pickFilter').value = '甲';
+      q('#pickFilter').dispatchEvent(new Event('input', { bubbles: true }));
+      T('setupPick:过滤框输入会更新列表', store.pickShown.length === 1 && store.pickShown[0].key === 'a', store.pickShown);
+      T('setupPick:换查询词把高亮归位到第一条', store.pickAt === 0);
+      T('setupPick:过滤框里 ↓ 交给选择框', (function () {
+        q('#pickFilter').value = '';
+        q('#pickFilter').dispatchEvent(new Event('input', { bubbles: true }));
+        var e = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true });
+        q('#pickFilter').dispatchEvent(e);
+        return store.pickAt === 1;
+      })(), store.pickAt);
+      /* 点选 */
+      openPick({ title: 'w', items: [{ key: 'a', label: '甲' }, { key: 'b', label: '乙' }],
+        onPick: function (it) { picked = it.key; } });
+      picked = null;
+      qa('#pickList .pick-item')[1].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('setupPick:点条目就选中', picked === 'b', picked);
+      T('setupPick:点选后对话框关掉', picksOpen() === false);
+      /* 关掉后焦点回输入框 */
+      q('#input').blur();
+      q('#dlgPick').dispatchEvent(new Event('close'));
+      T('setupPick:关掉后焦点回到输入框', document.activeElement === q('#input'));
+
+      /* ================= /sessions ================= */
+      openSessionPick();
+      T('/sessions:标题', q('#pickTitle').textContent === '切换会话');
+      T('/sessions:开着过滤框', q('#pickFilter').hidden === false);
+      T('/sessions:列出左栏那批(已归档默认不列)',
+        items().length === 2 && items().map(function (i) { return i.key; }).join(',') === 'ses_a,ses_b',
+        items().map(function (i) { return i.key; }));
+      T('/sessions:标题作 label', items()[0].label === '甲会话' && items()[1].label === '乙会话');
+      T('/sessions:sub 里有目录名', items()[0].sub.indexOf('alpha') >= 0, items()[0].sub);
+      T('/sessions:当前会话高亮', store.pickAt === 0, store.pickAt);
+      T('/sessions:顺序与 visibleSessions 一致',
+        items().map(function (i) { return i.key; }).join(',') ===
+          visibleSessions().map(function (s) { return s.id; }).join(','));
+      store.showArchived = true;
+      openSessionPick();
+      T('/sessions:打开「显示已归档」后也在里面', items().length === 3 && hadCall(/\/api\/session\?/) !== null);
+      store.showArchived = false;
+      store.order = 'asc';
+      openSessionPick();
+      T('/sessions:按顶部排序走(asc 时反过来)',
+        items().map(function (i) { return i.key; }).join(',') === 'ses_b,ses_a',
+        items().map(function (i) { return i.key; }));
+      store.order = 'desc';
+      store.selected = 'ses_b';
+      window.calls.length = 0;
+      openSessionPick();
+      T('/sessions:当前会话跟着 store.selected',
+        items()[store.pickAt].key === 'ses_b', [store.pickAt, items()[store.pickAt]]);
+      store.selected = 'ses_a';
+      /* 选中会真的切过去 */
+      openSessionPick();
+      pickChoose(items().filter(function (i) { return i.key === 'ses_b'; })[0]);
+      await settle(function () { return store.selected === 'ses_b'; });
+      T('/sessions:选中即切到那个会话', store.selected === 'ses_b', store.selected);
+      store.selected = 'ses_a';
+
+      /* ================= /models ================= */
+      await openModelPick();
+      T('/models:标题', q('#pickTitle').textContent === '选择模型');
+      T('/models:开着过滤框', q('#pickFilter').hidden === false);
+      T('/models:每个 provider 一个分组',
+        items().filter(function (i) { return i.group === 'company'; }).length === 2 &&
+        items().filter(function (i) { return i.group === 'google'; }).length === 1,
+        items().map(function (i) { return i.group + ':' + i.key; }));
+      T('/models:key 是 providerID/modelID', items()[0].key === 'company/deepseek-v4-flash');
+      T('/models:label 用模型名', items()[0].label === 'DeepSeek V4 Flash');
+      T('/models:sub 用 modelID', items()[0].sub === 'deepseek-v4-flash');
+      T('/models:enabled=false 的和工具栏一样不会出现(loadModels 已经先滤掉了)',
+        !items().some(function (i) { return i.key === 'google/off-model'; }),
+        items().map(function (i) { return i.key; }));
+      T('/models:当前会话的模型默认高亮', items()[store.pickAt].key === 'company/deepseek-v4-flash',
+        items()[store.pickAt]);
+      /* 当前模型不在列表里(比如被禁用了)→ 补一条「当前」 */
+      store.sessions.get('ses_a').model = { providerID: 'company', id: 'ghost-model' };
+      await openModelPick();
+      T('/models:当前模型不在列表里也补一条「当前」',
+        items()[0].key === 'company/ghost-model' && items()[0].sub === '当前', items()[0]);
+      T('/models:补的那条默认高亮', store.pickAt === 0);
+      store.sessions.get('ses_a').model = { providerID: 'company', id: 'deepseek-v4-flash', variant: 'low' };
+      /* 有 variants → 追问变体 */
+      await openModelPick();
+      pickVariant('company/deepseek-v4-flash');
+      T('/models:有变体时追问一次', q('#pickTitle').textContent.indexOf('变体') >= 0, q('#pickTitle').textContent);
+      T('/models:变体列表含「默认」+ 各档位',
+        items().map(function (i) { return i.key; }).join(',') === ',low,high',
+        items().map(function (i) { return i.key; }));
+      T('/models:当前变体默认高亮', items()[store.pickAt].key === 'low', store.pickAt);
+      T('/models:变体框不给过滤', q('#pickFilter').hidden === true);
+      /* 选变体 → POST /model 带 variant */
+      window.calls.length = 0;
+      pickChoose(items()[2]); // high
+      await settle(function () { return hadCall(/\/api\/session\/ses_a\/model$/); });
+      T('/models:选变体后切模型(带 variant)',
+        bodyOf(lastCall(/\/model$/)).model.variant === 'high', bodyOf(lastCall(/\/model$/)));
+      T('/models:变体切换也带对 provider/id',
+        bodyOf(lastCall(/\/model$/)).model.providerID === 'company' &&
+        bodyOf(lastCall(/\/model$/)).model.id === 'deepseek-v4-flash');
+      /* 选「默认」→ 不带 variant */
+      await openModelPick();
+      pickVariant('company/deepseek-v4-flash');
+      window.calls.length = 0;
+      pickChoose(items()[0]);
+      await settle(function () { return hadCall(/\/model$/); });
+      T('/models:选「默认」时不带 variant 字段',
+        bodyOf(lastCall(/\/model$/)).model.variant === undefined, bodyOf(lastCall(/\/model$/)));
+      /* 没有变体的模型 → 直接切,不再追问(走真实路径:对话框里选中它) */
+      window.calls.length = 0;
+      await openModelPick();
+      var ti = -1;
+      for (var z3 = 0; z3 < items().length; z3++) if (items()[z3].key === 'company/tiny') ti = z3;
+      pickChoose(items()[ti]);
+      await settle(function () { return hadCall(/\/model$/); });
+      T('/models:没有变体就直接切,不再弹一次',
+        bodyOf(lastCall(/\/model$/)).model.id === 'tiny' && picksOpen() === false,
+        [bodyOf(lastCall(/\/model$/)), picksOpen()]);
+      /* 从对话框选一个模型(而非调 pickVariant) */
+      window.calls.length = 0;
+      await openModelPick();
+      var gi = -1;
+      for (var z = 0; z < items().length; z++) if (items()[z].key === 'google/gemini-4-argon') gi = z;
+      pickChoose(items()[gi]);
+      await settle(function () { return q('#pickTitle').textContent.indexOf('变体') >= 0; });
+      T('/models:换模型后接着追问那个模型的变体',
+        q('#pickTitle').textContent.indexOf('Gemini 4 Argon') >= 0, q('#pickTitle').textContent);
+      T('/models:追问的是新模型自己的变体', items().map(function (i) { return i.key; }).join(',') === ',high',
+        items().map(function (i) { return i.key; }));
+      closePick();
+
+      /* applyModel 的护栏 */
+      window.calls.length = 0;
+      await applyModel('', '');
+      T('applyModel:空的 key 不发请求、只提示', !hadCall(/\/model$/) && q('#toast').textContent.indexOf('置空') >= 0);
+      window.calls.length = 0;
+      await applyModel('unknown/provider-model', '');
+      await settle(function () { return hadCall(/\/model$/); });
+      T('applyModel:列表里没有的 key 也能按 providerID/modelID 拆开',
+        bodyOf(lastCall(/\/model$/)).model.providerID === 'unknown' &&
+        bodyOf(lastCall(/\/model$/)).model.id === 'provider-model',
+        bodyOf(lastCall(/\/model$/)));
+
+      /* ================= /agents ================= */
+      await openAgentPick();
+      T('/agents:标题', q('#pickTitle').textContent === '选择智能体');
+      T('/agents:不给过滤框(本来就没几个)', q('#pickFilter').hidden === true);
+      T('/agents:hidden 与 subagent 都被滤掉',
+        items().map(function (i) { return i.key; }).join(',') === 'build,plan',
+        items().map(function (i) { return i.key; }));
+      T('/agents:label 用名字、sub 用 id', items()[0].label === 'Build' && items()[0].sub === 'build');
+      T('/agents:当前智能体默认高亮', items()[store.pickAt].key === 'build', store.pickAt);
+      T('/agents:没有「默认」这种空选项', !items().some(function (i) { return i.key === ''; }));
+      window.calls.length = 0;
+      pickChoose(items()[1]);
+      await settle(function () { return hadCall(/\/api\/session\/ses_a\/agent$/); });
+      T('/agents:选中即切智能体', bodyOf(lastCall(/\/agent$/)).agent === 'plan', bodyOf(lastCall(/\/agent$/)));
+      /* 当前智能体不在列表里 → 补一条 */
+      store.sessions.get('ses_a').agent = 'ghost';
+      await openAgentPick();
+      T('/agents:当前智能体不在列表里也补一条',
+        items()[0].key === 'ghost' && items()[0].sub === '当前', items()[0]);
+      store.sessions.get('ses_a').agent = 'build';
+      closePick();
+
+      /* ================= 没选中会话时不开 ================= */
+      closePick();
+      store.selected = '';
+      await openModelPick();
+      T('/models:没选中会话就不开', picksOpen() === false);
+      await openAgentPick();
+      T('/agents:没选中会话就不开', picksOpen() === false);
+      store.selected = 'ses_a';
+
+      /* ================= 三条命令确实接到了选择框 ================= */
+      var found = {};
+      mergedCommands('/proj/alpha').forEach(function (c) {
+        if (c.name === 'sessions' || c.name === 'models' || c.name === 'agents') found[c.name] = c;
+      });
+      T('面板命令仍是三条且都有说明',
+        !!(found.sessions && found.models && found.agents) &&
+        !!(found.sessions.description && found.models.description && found.agents.description));
+      T('三条说明不再写「跳到…」',
+        [found.sessions, found.models, found.agents].every(function (c) { return c.description.indexOf('跳到') < 0; }),
+        [found.sessions.description, found.models.description, found.agents.description]);
+      T('已没有 focusEl 这个只会聚焦的旧做法',
+        typeof window.focusEl === 'undefined');
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

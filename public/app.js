@@ -38,6 +38,10 @@ const store = {
   history: new Map(), // sessionID -> [已发送文本](↑/↓ 取用,每会话独立)
   histAt: -1, // 历史游标;-1 = 不在历史里(停在草稿)
   histDraft: '', // 进入历史前暂存的草稿
+  pickItems: [], // 选择框对话框的全部条目
+  pickShown: [], // 当前过滤后真正显示的条目(↑/↓ 在它里面走)
+  pickAt: -1, // 选择框当前高亮项(下标指向 pickShown)
+  pickOnPick: null, // 选中回调
 };
 
 const $ = (s) => document.querySelector(s);
@@ -285,24 +289,17 @@ async function switchAgent(id) {
   loadMessages({ older: false });
 }
 
-async function switchModel() {
+// 切模型只有这一条路径:工具栏那个下拉和服务端命令 /models 都走它
+async function applyModel(key, variant) {
   const sid = store.selected;
   if (!sid) return;
   const s = store.sessions.get(sid);
-  const key = $('#modelSel').value;
   if (!key) {
     flash('模型不能置空,已保留当前设置', 'warn');
     renderControls(s);
     return;
   }
-  const info = store.modelIndex.get(key);
-  const slash = key.indexOf('/');
-  const ref = {
-    providerID: info ? info.providerID : key.slice(0, slash),
-    id: info ? info.modelID : key.slice(slash + 1),
-  };
-  const variant = $('#variantSel').value;
-  if (variant) ref.variant = variant;
+  const ref = modelRefOf(key, variant);
   try {
     await api('/api/session/' + enc(sid) + '/model', {
       method: 'POST',
@@ -316,7 +313,12 @@ async function switchModel() {
   }
   flash('已切换模型:' + ref.providerID + '/' + ref.id + (variant ? ' · ' + variant : ''), 'ok');
   await loadSessions({});
+  renderControls(store.sessions.get(sid));
   loadMessages({ older: false });
+}
+
+async function switchModel() {
+  await applyModel($('#modelSel').value, $('#variantSel').value);
 }
 
 /* ----------------------------- 投递方式 / 中断 ----------------------------- */
@@ -853,14 +855,21 @@ async function loadSessions(opts) {
   }
 }
 
-function renderSessions() {
+// 当前顶部筛选/排序下,左栏真正列出来的那些会话 —— 会话选择框(/sessions)与左栏共用这一份,
+// 保证对话框里看到的永远是同一批、同一序。
+function visibleSessions() {
   const all = Array.from(store.sessions.values());
-  const archived = all.filter(isArchived);
-  const rows = (store.showArchived ? all : all.filter((s) => !isArchived(s))).sort((a, b) => {
+  return (store.showArchived ? all : all.filter((s) => !isArchived(s))).sort((a, b) => {
     const ta = (a.time && a.time.updated) || 0;
     const tb = (b.time && b.time.updated) || 0;
     return store.order === 'asc' ? ta - tb : tb - ta;
   });
+}
+
+function renderSessions() {
+  const all = Array.from(store.sessions.values());
+  const archived = all.filter(isArchived);
+  const rows = visibleSessions();
   const tb = $('#list tbody');
   tb.innerHTML = '';
   $('#count').textContent = rows.length;
@@ -2908,9 +2917,9 @@ const PANEL_COMMANDS = [
   { name: 'archive', description: '归档 / 取消归档当前会话', run: (sid) => toggleArchive(sid) },
   { name: 'tui', description: '在 TUI 中打开当前会话', run: () => openTui() },
   { name: 'copy', description: '复制「在 TUI 打开」的命令', run: () => copyTui() },
-  { name: 'sessions', description: '跳到会话列表搜索框', run: () => focusEl('#search') },
-  { name: 'models', description: '跳到模型选择', run: () => focusEl('#modelSel') },
-  { name: 'agents', description: '跳到智能体选择', run: () => focusEl('#agentSel') },
+  { name: 'sessions', description: '切换会话(列表选择)', run: () => openSessionPick() },
+  { name: 'models', description: '选择模型(含推理档位)', run: () => openModelPick() },
+  { name: 'agents', description: '选择智能体', run: () => openAgentPick() },
   { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
   { name: 'help', description: '命令与快捷键', run: () => openHelp() },
 ];
@@ -2927,13 +2936,6 @@ const HELP_KEYS = [
   { k: 'Enter', d: '发送(Shift+Enter 换行)' },
   { k: '@', d: '补全工程内的文件' },
 ];
-
-function focusEl(sel) {
-  const el = $(sel);
-  if (!el) return;
-  if (el.focus) el.focus();
-  if (el.select) el.select();
-}
 
 function clearInput() {
   const el = $('#input');
@@ -2964,6 +2966,233 @@ function commandsOpen() {
 function mentionsOpen() {
   const b = $('#mentions');
   return !!b && !b.hidden;
+}
+
+/* ================= 选择框对话框(/models · /agents · /sessions) =================
+ * 这三条命令在 TUI 里都是「弹出列表让你选」。此前面板只是把焦点丢给工具栏里的原生
+ * <select> —— 浏览器不会因为 focus() 就展开它,所以看起来什么都没发生。这里用一个
+ * 通用选择框把它们统一成 TUI 那种「列表 + ↑/↓ + Enter」。
+ */
+
+function picksOpen() {
+  const d = $('#dlgPick');
+  return !!d && d.open === true;
+}
+
+// 过滤后真正显示的条目(↑/↓ 在它里面走,所以 pickAt 是它的下标)
+function pickVisible() {
+  const q = (store.pickFilter || '').trim().toLowerCase();
+  if (!q) return store.pickItems;
+  return store.pickItems.filter(
+    (it) => ((it.label || '') + ' ' + (it.sub || '')).toLowerCase().indexOf(q) >= 0
+  );
+}
+
+function renderPick() {
+  const box = $('#pickList');
+  if (!box) return;
+  store.pickShown = pickVisible();
+  if (store.pickAt >= store.pickShown.length) store.pickAt = store.pickShown.length - 1;
+  if (store.pickAt < 0 && store.pickShown.length) store.pickAt = 0;
+  let html = '';
+  let lastGroup = null;
+  if (!store.pickShown.length) {
+    html = '<div class="pick-empty">没有匹配项</div>';
+  }
+  store.pickShown.forEach((it, i) => {
+    if (it.group && it.group !== lastGroup) {
+      html += '<div class="pick-group">' + esc(it.group) + '</div>';
+      lastGroup = it.group;
+    }
+    html +=
+      '<div class="pick-item' + (i === store.pickAt ? ' active' : '') + (it.disabled ? ' disabled' : '') +
+      '" role="option" data-i="' + i + '">' +
+      '<span class="pi-label">' + esc(it.label || '') + '</span>' +
+      (it.sub ? '<span class="pi-sub">' + esc(it.sub) + '</span>' : '') +
+      '</div>';
+  });
+  box.innerHTML = html;
+  const act = box.querySelector('.pick-item.active');
+  if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
+}
+
+// 打开选择框:items = [{ key, label, sub?, group?, disabled? }];current 的那项默认高亮。
+function openPick(opts) {
+  const dlg = $('#dlgPick');
+  if (!dlg) return;
+  store.pickItems = opts.items || [];
+  store.pickOnPick = opts.onPick || null;
+  store.pickFilter = '';
+  const cur = (opts.items || []).findIndex((it) => it.key === opts.current);
+  store.pickAt = cur >= 0 ? cur : 0;
+  const t = $('#pickTitle');
+  if (t) t.textContent = opts.title || '选择';
+  const f = $('#pickFilter');
+  if (f) {
+    f.hidden = !opts.filter;
+    f.value = '';
+    f.placeholder = opts.filterHint || '过滤…';
+  }
+  renderPick();
+  openDlg(dlg);
+  // 有过滤框就先把光标放进去(直接打字即过滤);没有就把焦点放列表上,↑/↓ 立刻可用
+  if (f && opts.filter) f.focus();
+  else if ($('#pickList')) $('#pickList').focus();
+}
+
+function closePick() {
+  closeDlg($('#dlgPick'));
+}
+
+// 选中一项:先关框再回调,免得回调里又弹一个选择框(选模型 → 再选变体)时打架
+function pickChoose(it) {
+  if (!it || it.disabled) return;
+  const fn = store.pickOnPick;
+  closePick();
+  if (fn) fn(it);
+}
+
+// 选择框里的键位:↑/↓ 环绕、Enter 选中(Esc 交给 <dialog> 自己关)
+function pickKey(e) {
+  if (!picksOpen()) return false;
+  if (e.target && e.target.closest && e.target.closest('button')) return false; // 别抢「关闭」按钮的 Enter
+  const stop = () => {
+    if (e.preventDefault) e.preventDefault();
+  };
+  const n = store.pickShown.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!n) return false;
+    stop();
+    const d = e.key === 'ArrowDown' ? 1 : -1;
+    store.pickAt = (store.pickAt + d + n) % n;
+    renderPick();
+    return true;
+  }
+  if (e.key === 'Enter') {
+    if (!n) return false;
+    stop();
+    pickChoose(store.pickShown[store.pickAt]);
+    return true;
+  }
+  return false;
+}
+
+function setupPick() {
+  const dlg = $('#dlgPick');
+  if (!dlg) return;
+  const f = $('#pickFilter');
+  if (f) {
+    f.addEventListener('input', () => {
+      store.pickFilter = f.value;
+      store.pickAt = 0; // 换了查询词就回到第一条
+      renderPick();
+    });
+    // 过滤框里的 ↑/↓ 不需要单独接线:keydown 会冒泡到 #dlgPick,由下面那个处理器统一接
+  }
+  const box = $('#pickList');
+  if (box) {
+    box.addEventListener('click', (e) => {
+      const it = e.target.closest('.pick-item');
+      if (!it) return;
+      pickChoose(store.pickShown[Number(it.dataset.i)]);
+    });
+  }
+  dlg.addEventListener('keydown', pickKey);
+  // 关掉之后焦点回输入框(TUI 里也是回到提示框),这样能接着打字
+  dlg.addEventListener('close', () => {
+    const i = $('#input');
+    if (i) i.focus();
+  });
+}
+
+/* ---------------------- 三条命令各自把数据装配成 items ---------------------- */
+
+// /sessions:列的就是左栏那批(同一筛选、同一排序),选中即切过去
+function openSessionPick() {
+  const items = visibleSessions().map((s) => ({
+    key: s.id,
+    label: s.title || '(无标题)',
+    sub: [
+      dirBase((s.location && s.location.directory) || ''),
+      rel(s.time && s.time.updated),
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  }));
+  openPick({
+    title: '切换会话',
+    filter: true,
+    filterHint: '按标题过滤…',
+    current: store.selected,
+    items,
+    onPick: (it) => selectSession(it.key),
+  });
+}
+
+// /models:按 provider 分组;选定后再追问一次变体(模型有 variants 时),与 TUI 一致
+async function openModelPick() {
+  const s = store.sessions.get(store.selected);
+  if (!s) return;
+  const dir = (s.location && s.location.directory) || '';
+  const models = await loadModels(dir);
+  const cur = modelKey(s.model);
+  const items = models.map((m) => ({
+    key: m.providerID + '/' + m.modelID,
+    label: m.name || m.modelID,
+    sub: m.modelID,
+    group: m.providerID,
+    // loadModels 已经把 enabled === false 的滤掉了(与工具栏那个下拉一致),
+    // 这里照样标一下,是防它哪天改了过滤规则
+    disabled: m.enabled === false,
+  }));
+  if (cur && !items.some((it) => it.key === cur)) {
+    items.unshift({ key: cur, label: cur, sub: '当前', disabled: false });
+  }
+  openPick({
+    title: '选择模型',
+    filter: true,
+    filterHint: '按名字或 modelID 过滤…',
+    current: cur,
+    items,
+    onPick: (it) => pickVariant(it.key),
+  });
+}
+
+async function pickVariant(key) {
+  const info = store.modelIndex.get(key);
+  const variants = (info && info.variants) || [];
+  if (!variants.length) return applyModel(key, '');
+  const s = store.sessions.get(store.selected);
+  const cur = s && modelKey(s.model) === key ? (s.model && s.model.variant) || '' : '';
+  openPick({
+    title: '选择变体 · ' + ((info && (info.name || info.modelID)) || key),
+    filter: false,
+    current: cur,
+    items: [{ key: '', label: '默认', sub: '' }].concat(
+      variants.map((v) => ({ key: v.id, label: v.id, sub: '' }))
+    ),
+    onPick: (it) => applyModel(key, it.key),
+  });
+}
+
+// /agents:loadAgents 已滤掉 hidden 与 subagent,所以列出来的就是能切的那些
+async function openAgentPick() {
+  const s = store.sessions.get(store.selected);
+  if (!s) return;
+  const dir = (s.location && s.location.directory) || '';
+  const agents = await loadAgents(dir);
+  const cur = s.agent || '';
+  const items = agents.map((a) => ({ key: a.id, label: a.name || a.id, sub: a.id }));
+  if (cur && !items.some((it) => it.key === cur)) {
+    items.unshift({ key: cur, label: cur, sub: '当前', disabled: false });
+  }
+  openPick({
+    title: '选择智能体',
+    filter: false,
+    current: cur,
+    items,
+    onPick: (it) => switchAgent(it.key),
+  });
 }
 
 // 光标前最后一个 /token(必须在行首)→ 它在输入框里的 [start, end) 与查询词。
@@ -3989,6 +4218,7 @@ function init() {
   setupScrollMemory();
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
+  setupPick(); // 选择框对话框(/models · /agents · /sessions)
   paintDelivery();
 
   $('#refresh').addEventListener('click', () => {

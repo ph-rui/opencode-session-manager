@@ -751,6 +751,51 @@ table#list { width: 100%; border-collapse: collapse; }
 .keys .keys-sec { grid-column: 1 / -1; margin-top: 6px; font-weight: 600; }
 .keys .keys-sec:first-child { margin-top: 0; }
 
+/* 选择框对话框(/models · /agents · /sessions):终端风的列表,不是下拉 */
+.pickfilter {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-family: var(--mono);
+  color: var(--fg);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.pickfilter:focus { outline: none; border-color: var(--accent); }
+.pickfilter[hidden] { display: none; }
+.picklist {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.pick-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.pick-item + .pick-item { border-top: 1px solid #f1f1f1; }
+.pick-item.active { background: #eef6ff; }
+.pick-item.disabled { opacity: 0.5; cursor: default; }
+.pick-item .pi-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-item .pi-sub { flex: none; color: var(--muted); }
+.pick-item.active .pi-label { color: var(--accent); }
+.pick-group {
+  padding: 4px 10px;
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel);
+}
+.pick-empty { padding: 8px 10px; color: var(--muted); }
+
 /* 列表中的运行中标记 */
 .run-badge { color: var(--accent); font-size: 11px; white-space: nowrap; }
 .state.retry { color: #b8860b; }
