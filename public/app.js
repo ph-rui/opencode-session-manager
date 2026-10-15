@@ -1924,12 +1924,9 @@ function paintProgressBar(mode) {
   if (pbarTimer) return;
   pbarFrame = 0;
   drawProgressFrame();
-  // 会晕动的人不逐帧推,钉在中途一格上;「还在跑」这层意思由旁边的「● 运行中」承担
-  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    pbarFrame = 4;
-    drawProgressFrame();
-    return;
-  }
+  // 【一律逐帧推】,不看 prefers-reduced-motion:这条是照 TUI 抄的,终端里没有「减少动画」
+  // 这个概念。原先这里给晕动的人让路(钉在中途一格不动),结果系统里「动画效果=关」的电脑上
+  // 看到的是一条死掉的状态条,而同一份页面在手机上正常 —— 那条让步已经删掉。
   pbarTimer = setInterval(drawProgressFrame, PBAR_MS);
 }
 

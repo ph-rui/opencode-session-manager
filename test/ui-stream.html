@@ -177,16 +177,19 @@
       T('推一帧后变成第 1 帧(前两格实心)',
         q('#progress .pbar').children[1].classList.contains('on') &&
         !q('#progress .pbar').children[2].classList.contains('on'));
-      // 晕动症:不逐帧走,钉在中途一格(「还在跑」由旁边的「● 运行中」承担)
+      // 与 TUI 一致:终端里没有「减少动画」这回事,系统设不设都逐帧推。
+      // (原来这里给晕动症让路、钉在第 5 帧不动,结果「电脑上状态条不动、手机上正常」,
+      //  因为 Windows 的「动画效果」关掉会让浏览器报 prefers-reduced-motion。已删。)
       paintProgressBar(false);
       var _mm = window.matchMedia;
       window.matchMedia = function (qy) { return { matches: /reduced-motion/.test(qy), addEventListener: function () {}, addListener: function () {} }; };
       window.__intervals.length = 0;
       paintProgressBar('run');
-      T('prefers-reduced-motion 下不挂表', window.__intervalMs().length === 0, window.__intervalMs());
-      T('prefers-reduced-motion 下钉在第 5 帧(半个条,看得出在跑)',
-        q('#progress .pbar').children[4].classList.contains('on') &&
-        !q('#progress .pbar').children[5].classList.contains('on'));
+      T('系统要求减少动画时也照样挂表(不再钉住)', window.__intervalMs().indexOf(90) >= 0, window.__intervalMs());
+      window.__tick();
+      T('减少动画时也推得动(第 1 帧:前两格实心)',
+        q('#progress .pbar').children[1].classList.contains('on') &&
+        !q('#progress .pbar').children[2].classList.contains('on'));
       window.matchMedia = _mm;
       paintProgressBar(false);
       updateChatStatus();
