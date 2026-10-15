@@ -315,6 +315,9 @@ async function proxy(req, res, attempt) {
     outHeaders[k] = v;
   });
 
+  // API 一律不缓存:会话/消息/状态是活的,别让浏览器(或中间的 http 缓存)拿旧的糊弄。
+  outHeaders['cache-control'] = 'no-store';
+
   res.writeHead(upstream.status, outHeaders);
   res.flushHeaders && res.flushHeaders();
 
@@ -358,14 +361,39 @@ function serveStatic(req, res) {
     res.end('forbidden');
     return;
   }
-  fs.readFile(file, (err, data) => {
-    if (err) {
+  // 这里【必须】发校验头。index.html / app.js / styles.css 是三份要配套的文件,
+  // 浏览器手里若留着旧的一份,就会出现「新 HTML + 旧 CSS」这种半新半旧的页面 ——
+  // 实测过一次:旧 styles.css 里 #progress 还是「贴下沿的 2px 条」(position:absolute
+  // + overflow:hidden),配上新 markup 正好把整条状态条裁没了,看起来像功能丢了。
+  // 没有 Cache-Control / ETag / Last-Modified 时,浏览器只能靠启发式乱猜,猜错就是这个下场。
+  // no-cache = 仍然缓存,但每次用之前必须来问一声;内容没变就回 304,不算重下。
+  fs.stat(file, (serr, st) => {
+    if (serr || !st.isFile()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('not found');
       return;
     }
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
-    res.end(data);
+    const etag = '"' + st.size.toString(16) + '-' + Math.floor(st.mtimeMs).toString(16) + '"';
+    const lastMod = st.mtime.toUTCString();
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': 'no-cache', 'last-modified': lastMod });
+      res.end();
+      return;
+    }
+    fs.readFile(file, (err, data) => {
+      if (err) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('not found');
+        return;
+      }
+      res.writeHead(200, {
+        'content-type': MIME[path.extname(file)] || 'application/octet-stream',
+        etag,
+        'last-modified': lastMod,
+        'cache-control': 'no-cache',
+      });
+      res.end(data);
+    });
   });
 }
 

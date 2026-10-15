@@ -667,6 +667,38 @@ else
   echo "FAIL: setupNarrow 出现次数不对(应当 2:定义 + init 里那次)"; fail=$((fail + 1))
 fi
 
+# L 组:静态资源缓存头 —— index.html / app.js / styles.css 是三份要配套的文件。
+# 没有 Cache-Control / ETag 时,浏览器只能靠启发式乱猜,猜错就出现「新 HTML + 旧 CSS」
+# 这种半新半旧的页面:实测过一次,旧 styles.css 的 #progress 还是贴下沿的 2px 条
+# (position:absolute + overflow:hidden),配上新 markup 正好把整条状态条裁没了。
+H_STYLES=$(curl -s -D - -o /dev/null "${AUTH[@]}" "$PROXY/styles.css")
+H_APPJS=$(curl -s -D - -o /dev/null "${AUTH[@]}" "$PROXY/app.js")
+H_HOME=$(curl -s -D - -o /dev/null "${AUTH[@]}" "$PROXY/")
+if has "$H_STYLES" 'etag: "' && has "$H_APPJS" 'etag: "' && has "$H_HOME" 'etag: "'; then
+  echo "PASS: 三份文件都带 ETag(改完能立刻认出新旧)"; pass=$((pass + 1))
+else
+  echo "FAIL: index.html / app.js / styles.css 里有不带 ETag 的"; fail=$((fail + 1))
+fi
+if has "$H_STYLES" 'cache-control: no-cache' && has "$H_HOME" 'cache-control: no-cache'; then
+  echo "PASS: 静态资源是 no-cache(每次用之前必须来问一声,不是不听劝的强缓存)"; pass=$((pass + 1))
+else
+  echo "FAIL: 静态资源缺 cache-control: no-cache"; fail=$((fail + 1))
+fi
+ETAG=$(printf '%s' "$H_STYLES" | grep -i '^etag:' | tr -d '\r' | cut -d' ' -f2)
+SIZE304=$(curl -s -o /dev/null -w '%{size_download}' "${AUTH[@]}" -H "If-None-Match: $ETAG" -D /tmp/oc-304.h "$PROXY/styles.css")
+if has "$(cat /tmp/oc-304.h)" '304 Not Modified' && [ "$SIZE304" = 0 ]; then
+  echo "PASS: 内容没变时回 304 且不重发正文(省流量,但绝不给你旧内容)"; pass=$((pass + 1))
+else
+  echo "FAIL: 带 if-none-match 重发没拿到 304(拿到 $(head -1 /tmp/oc-304.h) / ${SIZE304} 字节)"; fail=$((fail + 1))
+fi
+H_API=$(curl -s -D - -o /dev/null "${AUTH[@]}" "$PROXY/api/session?limit=1")
+if has "$H_API" 'cache-control: no-store'; then
+  echo "PASS: /api/ 一律 no-store(会话与消息是活的,不许缓存)"; pass=$((pass + 1))
+else
+  echo "FAIL: /api/ 响应没有 cache-control: no-store"; fail=$((fail + 1))
+fi
+rm -f /tmp/oc-304.h
+
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if has "$sse" 'server.connected'; then
   echo "PASS: 经代理 SSE 收到 server.connected"; pass=$((pass + 1))
