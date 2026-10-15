@@ -206,10 +206,10 @@ table#list { width: 100%; border-collapse: collapse; }
 #list td.actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
 #chatpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; font-size: var(--chat-fs); }
-#chatHeader { position: relative; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+#chatHeader { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .chline { display: flex; align-items: center; gap: 10px; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.state { font-size: 0.96em; color: var(--muted); }
+.state { font-size: 0.96em; color: var(--muted); white-space: nowrap; }
 .state.running { color: var(--accent); }
 #chatMeta { font-size: 0.88em; color: var(--muted); margin-top: 3px; word-break: break-all; }
 #older { width: auto; margin-top: 8px; padding: 4px 10px; font-size: 0.96em; }
@@ -912,8 +912,6 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
 }
 @media (prefers-reduced-motion: reduce) {
   .cursor { animation: none; }
-  /* 以下元素不硬塞动画,改成静止但仍看得出状态的形态 */
-  #progress > i { animation: none; left: 0; width: 100%; opacity: 0.6; }
 }
 
 /* 标题行的「输出中」标记 */
@@ -930,39 +928,24 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
   opacity: 0.85;
 }
 
-/* 运行中的「走来走去」进度条 —— 给「还在跑」一个一直动着的信号。
-   桌面上原来只有静态的「● 运行中」文字 + 长在消息里的「输出中」标签,
-   后者一滚动就看不见,盯着一屏不动确实分不清是在跑还是卡死。
-
-   贴在对话头部下沿(#chatHeader 是它的定位上下文),absolute 定位,
-   所以头部的高度与内边距一像素不变 —— 出现/消失不会让下面的消息跳动。
-   显示与否【只由 updateChatStatus() 一处切】:那里已经是唯一知道
-   运行中 / 重试中 / 空闲三态的地方,SSE 事件、切会话、清空选中、
-   中断后刷新都会各自调它,不会再冒出一个「忘了同步」的地方。 */
-#progress {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  overflow: hidden;
-  background: var(--panel2);
-}
+/* 运行中的状态条 —— 照 TUI 那条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」做的。
+   8 格字符:■ = 已走过,⬝ = 还没到;一个 14 帧的循环从左边长出来、整段往右
+   滑出、空一拍再重来(帧序在 app.js 的 progressCells 里,那边有逐帧对表测试)。
+   颜色没有照抄 TUI —— 它是暗底(#0a0a0a)配 #5c9cf5 / #192434,搬到这个
+   浅色主题上不成样子;这里改成面板自己的 --accent,空位用 --border 那种淡淡的。 */
+#progress { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 #progress[hidden] { display: none; }
-#progress > i {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 34%;
-  background: var(--accent);
-  animation: ocs-sweep 1.15s ease-in-out infinite;
-}
-#progress.retry > i { background: #b8860b; } /* 与「◌ 重试中」同色 */
-@keyframes ocs-sweep {
-  0% { left: 0; }
-  50% { left: 66%; } /* 34%(自身宽)+ 66% = 100%,正好贴着右沿 */
-  100% { left: 0; }
-}
+.pbar { font-family: var(--mono); font-size: 0.9em; line-height: 1; }
+.pbar i { display: inline-block; width: 0.7em; text-align: center; font-style: normal; }
+.pbar i::before { content: '⬝'; color: var(--border); }
+.pbar i.on::before { content: '■'; color: var(--accent); }
+#progress.retry .pbar i.on::before { color: #b8860b; } /* 与「◌ 重试中」同色 */
+.phint { font-size: 0.86em; color: var(--muted); white-space: nowrap; }
+.phint b { font-weight: 400; color: var(--fg); }
+/* 手机上没 Esc 键:只留那条走动的格子,中断入口是输入框边上的「■ 中断」按钮 */
+html.narrow .phint { display: none; }
+/* 窄屏标题行里挤着「‹ 会话 + 标题 + ● 运行中 + 状态条」,间距收一点给标题留地方 */
+html.narrow .chline { gap: 6px; }
 
 /* 流式消息:左侧色条做一个轻微的呼吸,提示内容在增长 */
 .msg.assistant.live { border-left-color: var(--accent); }

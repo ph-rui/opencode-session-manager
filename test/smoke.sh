@@ -497,49 +497,69 @@ case "$INIT_ORDER" in
   *)             echo "FAIL: init() 没有先回填顶栏条件 (got '$INIT_ORDER')"; fail=$((fail + 1)) ;;
 esac
 
-# I 组:运行中的「走来走去」进度条(贴在对话头部下沿的 indeterminate 条)
+# I 组:运行中的状态条(TUI 同款 8 格字符条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」)
 if has "$HOME_HTML" 'id="progress" hidden'; then
   echo "PASS: 首页有 #progress 且默认 hidden(脚本起来前不会先闪一条出来)"; pass=$((pass + 1))
 else
   echo "FAIL: 首页缺 #progress / 没默认 hidden"; fail=$((fail + 1))
 fi
 if has "$HOME_HTML" 'title="正在执行 · 按 Esc 中断"'; then
-  echo "PASS: 进度条挂着「按 Esc 中断」的提示"; pass=$((pass + 1))
+  echo "PASS: 状态条挂着「按 Esc 中断」的提示"; pass=$((pass + 1))
 else
-  echo "FAIL: 进度条缺「按 Esc 中断」提示"; fail=$((fail + 1))
+  echo "FAIL: 状态条缺「按 Esc 中断」提示"; fail=$((fail + 1))
 fi
-if has "$CSS" '@keyframes ocs-sweep' && has "$CSS" '#progress > i'; then
-  echo "PASS: styles.css 有扫动动画与它作用的那一段(#progress > i)"; pass=$((pass + 1))
+# 8 格,一格一个 <i>,数量对不上就跟 TUI 的 8 格条不是一回事了
+PROG_CELLS=$(printf '%s' "$HOME_HTML" | sed -n 's/.*<span class="pbar"[^>]*>\(.*\)<\/span>.*/\1/p' | grep -o '<i></i>' | wc -l)
+if [ "$PROG_CELLS" = 8 ]; then
+  echo "PASS: 状态条正好 8 格"; pass=$((pass + 1))
 else
-  echo "FAIL: styles.css 缺 @keyframes ocs-sweep / #progress > i"; fail=$((fail + 1))
+  echo "FAIL: 状态条格子数不对(got $PROG_CELLS,want 8)"; fail=$((fail + 1))
 fi
-if has "$CSS" '#chatHeader { position: relative'; then
-  echo "PASS: #chatHeader 是定位上下文(否则进度条会贴到别的祖先下沿去)"; pass=$((pass + 1))
+if has "$HOME_HTML" '<b>esc</b> interrupt'; then
+  echo "PASS: 状态条带着 TUI 那句 esc interrupt(esc 亮、interrupt 暗)"; pass=$((pass + 1))
 else
-  echo "FAIL: #chatHeader 不是定位上下文,进度条会贴错地方"; fail=$((fail + 1))
+  echo "FAIL: 状态条缺 esc interrupt 字样"; fail=$((fail + 1))
 fi
-if has "$CSS" '#progress.retry > i'; then
-  echo "PASS: 重试中进度条换色(#progress.retry > i)"; pass=$((pass + 1))
+if has "$CSS" ".pbar i.on::before" && has "$CSS" "content: '■'" && has "$CSS" "content: '⬝'"; then
+  echo "PASS: styles.css 用 ■/⬝ 两种字符区分走过的格与没到的格"; pass=$((pass + 1))
 else
-  echo "FAIL: 缺重试中的换色规则(#progress.retry > i)"; fail=$((fail + 1))
+  echo "FAIL: styles.css 缺 ■/⬝ 的字符规则(.pbar i.on::before)"; fail=$((fail + 1))
 fi
-if has "$CSS" '#progress > i { animation: none'; then
-  echo "PASS: prefers-reduced-motion 下进度条降级成静止色带"; pass=$((pass + 1))
+if has "$CSS" '#progress.retry .pbar i.on::before'; then
+  echo "PASS: 重试中状态条换色(#progress.retry)"; pass=$((pass + 1))
 else
-  echo "FAIL: 进度条没有 reduced-motion 降级"; fail=$((fail + 1))
+  echo "FAIL: 缺重试中的换色规则(#progress.retry)"; fail=$((fail + 1))
 fi
-# 显示与否只由 updateChatStatus() 一处切。多一处就必然会漏同步,所以上锁。
+if has "$CSS" 'html.narrow .phint { display: none; }'; then
+  echo "PASS: 手机上不显示 esc interrupt(那会儿没 Esc 键)"; pass=$((pass + 1))
+else
+  echo "FAIL: 手机上还显示 esc interrupt,等于教用户按一个不存在的键"; fail=$((fail + 1))
+fi
+# 旧的「平滑扫一条」做法必须清干净,免得两套并存
+if has "$CSS" 'ocs-sweep'; then
+  echo "FAIL: styles.css 还留着旧的平滑扫动(ocs-sweep)"; fail=$((fail + 1))
+else
+  echo "PASS: 旧的平滑扫动已清除(只剩 TUI 那套 8 格)"; pass=$((pass + 1))
+fi
+# 帧表本身:8 格、14 帧。逐帧对表在 test/ui-stream.html 里测。
+if has "$APPJS" 'const PBAR_CELLS = 8' && has "$APPJS" 'const PBAR_FRAMES = 14'; then
+  echo "PASS: app.js 里是 8 格 14 帧(和 TUI 实测的一致)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺 PBAR_CELLS=8 / PBAR_FRAMES=14"; fail=$((fail + 1))
+fi
+# 显示与否仍然只由 updateChatStatus() 一处决定:它调 paintProgressBar(),
+# 而 paintProgressBar 在 app.js 里只应该出现两次(定义 1 次 + 被调 1 次)。
 CHATSTATUS_FN=$(printf '%s' "$APPJS" | awk '/^function updateChatStatus\(\)/{f=1} f{print} f&&/^}/{exit}')
-if has "$CHATSTATUS_FN" "#progress"; then
-  echo "PASS: 进度条在 updateChatStatus() 里切(与状态文字同一处)"; pass=$((pass + 1))
+if has "$CHATSTATUS_FN" 'paintProgressBar'; then
+  echo "PASS: 状态条在 updateChatStatus() 里切(与状态文字同一处)"; pass=$((pass + 1))
 else
-  echo "FAIL: updateChatStatus() 里没有切进度条"; fail=$((fail + 1))
+  echo "FAIL: updateChatStatus() 里没有切状态条"; fail=$((fail + 1))
 fi
-PROG_HITS=$(printf '%s' "$APPJS" | grep -oF "'#progress'" | wc -l)
-if [ "$PROG_HITS" = 1 ]; then
-  echo "PASS: #progress 在 app.js 里只被碰一次(没有第二处同步点)"; pass=$((pass + 1))
+PROG_HITS=$(printf '%s' "$APPJS" | grep -oF 'paintProgressBar' | wc -l)
+if [ "$PROG_HITS" = 2 ]; then
+  echo "PASS: paintProgressBar 只被调一处(没有第二处同步点)"; pass=$((pass + 1))
 else
-  echo "FAIL: #progress 在 app.js 里出现 $PROG_HITS 次(应当只有 updateChatStatus 那一处)"; fail=$((fail + 1))
+  echo "FAIL: paintProgressBar 在 app.js 里出现 $PROG_HITS 次(want 2:定义 + updateChatStatus 里那一次)"; fail=$((fail + 1))
 fi
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)

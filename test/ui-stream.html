@@ -16,13 +16,12 @@
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">
       <div id="chatHeader">
-        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span><span id="progress" hidden><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span></div>
         <div id="chatMeta"></div>
         <div id="chatOps" hidden>
           <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
         </div>
         <button id="older" hidden></button>
-        <div id="progress" hidden><i></i></div>
       </div>
       <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
       <div id="composer">
@@ -85,7 +84,12 @@
       return json({});
     };
     window.EventSource = class { constructor() {} close() {} };
-    window.setInterval = function () { return 0; };
+    /* 只记录、不真跑:运行状态条是按 interval 一帧一帧推的,测试里手动 __tick() 驱动 */
+    window.__intervals = [];
+    window.setInterval = function (fn, ms) { window.__intervals.push({ fn: fn, ms: ms }); return window.__intervals.length; };
+    window.clearInterval = function (id) { window.__intervals[id - 1] = null; };
+    window.__tick = function () { window.__intervals.forEach(function (r) { if (r) r.fn(); }); };
+    window.__intervalMs = function () { return window.__intervals.filter(Boolean).map(function (r) { return r.ms; }); };
     /* 关掉防抖对账(由测试显式调用 loadMessages),但记录被排了哪些定时器,
        用来断言「有本地缓冲的 delta 不再触发消息重取」。 */
     window.__timeouts = [];
@@ -143,17 +147,50 @@
       T('运行状态显示运行中', q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
       T('该会话被判定为有流式内容', !!liveForSid('ses_a'));
 
-      /* ---------------- 运行中那条「走来走去」的进度条 ---------------- */
-      T('有进度条元素', !!q('#progress'));
-      T('进度条挂在对话头部里(贴它下沿)', q('#progress') && q('#progress').parentElement === q('#chatHeader'));
-      T('运行中进度条露出来', q('#progress') && q('#progress').hidden === false);
-      T('运行中用 accent 色(不带 retry 类)', q('#progress') && !q('#progress').classList.contains('retry'));
-      T('进度条 absolute 定位(不占高度,不会把消息挤下去)',
-        getComputedStyle(q('#progress')).position === 'absolute', getComputedStyle(q('#progress')).position);
-      T('进度条贴着头部下沿', getComputedStyle(q('#progress')).bottom === '0px', getComputedStyle(q('#progress')).bottom);
-      T('进度条有在动的那一段', !!q('#progress > i'));
-      T('那段挂了扫动动画', getComputedStyle(q('#progress > i')).animationName === 'ocs-sweep',
-        getComputedStyle(q('#progress > i')).animationName);
+      /* ---------------- 运行中的状态条:TUI 同款 8 格字符条 ---------------- */
+      T('有状态条元素', !!q('#progress'));
+      T('状态条在标题行里(和「● 运行中」同一行,不额外占高度)',
+        q('#progress') && q('#progress').parentElement === q('.chline'));
+      T('运行中状态条露出来', q('#progress') && q('#progress').hidden === false);
+      T('运行中不带 retry 类', q('#progress') && !q('#progress').classList.contains('retry'));
+      T('8 个格子', q('#progress .pbar') && q('#progress .pbar').children.length === 8,
+        q('#progress .pbar') ? q('#progress .pbar').children.length : '(没有 .pbar)');
+      T('带着 TUI 那句 esc interrupt',
+        (q('#progress .phint') || {}).textContent.replace(/\s+/g, ' ').trim() === 'esc interrupt',
+        (q('#progress .phint') || {}).textContent);
+      // 逐帧对表:TUI 实测到的 14 帧,一格都不能错
+      var PBAR_WANT = ['■⬝⬝⬝⬝⬝⬝⬝', '■■⬝⬝⬝⬝⬝⬝', '■■■⬝⬝⬝⬝⬝', '■■■■⬝⬝⬝⬝', '■■■■■⬝⬝⬝', '■■■■■■⬝⬝',
+                       '⬝■■■■■■⬝', '⬝⬝■■■■■■', '⬝⬝⬝■■■■■', '⬝⬝⬝⬝■■■■', '⬝⬝⬝⬝⬝■■■', '⬝⬝⬝⬝⬝⬝■■', '⬝⬝⬝⬝⬝⬝⬝■', '⬝⬝⬝⬝⬝⬝⬝⬝'];
+      var PBAR_GOT = [];
+      for (var pf = 0; pf < 14; pf++) {
+        PBAR_GOT.push(progressCells(pf).map(function (on) { return on ? '■' : '⬝'; }).join(''));
+      }
+      T('14 帧逐帧与 TUI 实测一致', PBAR_GOT.join(' ') === PBAR_WANT.join(' '), PBAR_GOT.join(' '));
+      T('第 15 帧绕回第 1 帧(循环)', progressCells(14).join() === progressCells(0).join());
+      T('负数帧也当作循环内(不越界)', progressCells(-1).length === 8 && progressCells(-1).join() === progressCells(13).join());
+      T('开头写的就是第 0 帧(只有第一格实心)',
+        q('#progress .pbar').children[0].classList.contains('on') &&
+        !q('#progress .pbar').children[1].classList.contains('on'));
+      T('状态条按 TUI 的节奏在推(挂了 90ms 的表)',
+        window.__intervalMs().indexOf(90) >= 0, window.__intervalMs());
+      window.__tick();
+      T('推一帧后变成第 1 帧(前两格实心)',
+        q('#progress .pbar').children[1].classList.contains('on') &&
+        !q('#progress .pbar').children[2].classList.contains('on'));
+      // 晕动症:不逐帧走,钉在中途一格(「还在跑」由旁边的「● 运行中」承担)
+      paintProgressBar(false);
+      var _mm = window.matchMedia;
+      window.matchMedia = function (qy) { return { matches: /reduced-motion/.test(qy), addEventListener: function () {}, addListener: function () {} }; };
+      window.__intervals.length = 0;
+      paintProgressBar('run');
+      T('prefers-reduced-motion 下不挂表', window.__intervalMs().length === 0, window.__intervalMs());
+      T('prefers-reduced-motion 下钉在第 5 帧(半个条,看得出在跑)',
+        q('#progress .pbar').children[4].classList.contains('on') &&
+        !q('#progress .pbar').children[5].classList.contains('on'));
+      window.matchMedia = _mm;
+      paintProgressBar(false);
+      updateChatStatus();
+      T('复位后又是正常在跑(90ms 的表挂回来了)', window.__intervalMs().indexOf(90) >= 0, window.__intervalMs());
 
       /* ---------------- text.started + deltas:只刷局部 ---------------- */
       var r2 = handleStreamEvent(ev('session.text.started', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0 }));

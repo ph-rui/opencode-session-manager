@@ -1868,17 +1868,76 @@ function renderMessages() {
   updateChatStatus();
 }
 
+/* ------------------- 运行中的状态条(TUI 同款) ------------------- */
+
+const PBAR_CELLS = 8;
+const PBAR_FRAMES = 14;
+const PBAR_MS = 90;
+
+/* 第 i 帧里哪些格子是实心的。这张表就是 TUI 实测到的 14 帧:
+ *   0-5   从左边长出来,1 格长到 6 格
+ *   6-12  整段往右滑出去,同时从 6 格缩到 1 格
+ *   13    空一拍(整条都是 ⬝)
+ * 然后回到第 0 帧。TUI 是 8 格、14 帧一循环,这里逐帧照搬。 */
+function progressCells(i) {
+  const n = ((i % PBAR_FRAMES) + PBAR_FRAMES) % PBAR_FRAMES;
+  const on = [];
+  for (let k = 0; k < PBAR_CELLS; k++) on.push(false);
+  if (n < 6) {
+    for (let k = 0; k <= n; k++) on[k] = true;
+  } else if (n < 13) {
+    const lo = n - 5;
+    for (let k = lo; k <= Math.min(lo + 5, PBAR_CELLS - 1); k++) on[k] = true;
+  }
+  return on;
+}
+
+let pbarTimer = null;
+let pbarFrame = 0;
+
+function drawProgressFrame() {
+  const el = $('#progress');
+  if (!el) return;
+  const cells = el.querySelectorAll('.pbar i');
+  const on = progressCells(pbarFrame++);
+  for (let k = 0; k < cells.length; k++) cells[k].classList.toggle('on', !!on[k]);
+}
+
+/* 只由 updateChatStatus() 调 —— 和状态文字共用同一个同步点。
+ * mode:false=收起,'run'=正常,'retry'=换琥珀色。
+ * 已经在走的时候【不重开】,否则每来一个 SSE 事件都会跳回第 0 帧、看着像卡住。 */
+function paintProgressBar(mode) {
+  const el = $('#progress');
+  if (!el) return; // 测试页可能没这个元素,缺了也不能崩
+  if (!mode) {
+    if (pbarTimer) { clearInterval(pbarTimer); pbarTimer = null; }
+    pbarFrame = 0;
+    el.hidden = true;
+    el.classList.remove('retry'); // 收起来的时候不留模式痕迹
+    return;
+  }
+  el.hidden = false;
+  el.classList.toggle('retry', mode === 'retry');
+  if (pbarTimer) return;
+  pbarFrame = 0;
+  drawProgressFrame();
+  // 会晕动的人不逐帧推,钉在中途一格上;「还在跑」这层意思由旁边的「● 运行中」承担
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    pbarFrame = 4;
+    drawProgressFrame();
+    return;
+  }
+  pbarTimer = setInterval(drawProgressFrame, PBAR_MS);
+}
+
 function updateChatStatus() {
   const el = $('#chatState');
-  const pg = $('#progress');
-  // 文字状态与「走来走去」的进度条一起画:两者永远同步,不会各写各的。
-  // 这里的 `bar` 三态:false=收起, 'run'=accent 扫动, 'retry'=琥珀色扫动。
+  // 文字状态与状态条一起画:两者永远同步,不会各写各的。
+  // 第三个参数三态:false=收起,'run'=在跑,'retry'=重试中。
   const paint = (text, cls, bar) => {
     el.textContent = text;
     el.className = cls;
-    if (!pg) return; // 测试页可能没有这个元素,缺了也不能崩
-    pg.hidden = !bar;
-    pg.classList.toggle('retry', bar === 'retry');
+    paintProgressBar(bar);
   };
   if (!store.selected) {
     paint('', 'state', false);

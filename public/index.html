@@ -63,6 +63,8 @@
         <div class="chline">
           <span id="chatTitle">未选择会话</span>
           <span id="chatState" class="state"></span>
+          <!-- 运行中的状态条,照 TUI 那条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」做的(帧序见 app.js 的 progressCells) -->
+          <span id="progress" hidden title="正在执行 · 按 Esc 中断"><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
         </div>
         <div id="chatMeta" class="meta"></div>
         <div id="chatOps" hidden>
@@ -71,7 +73,6 @@
           <button type="button" id="opArchive" class="chip" title="在本面板归档/取消归档">归档</button>
         </div>
         <button id="older" hidden>加载更旧消息</button>
-        <div id="progress" hidden title="正在执行 · 按 Esc 中断"><i></i></div>
       </div>
       <div id="messages"></div>
       <div id="asks" hidden></div>
