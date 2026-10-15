@@ -797,15 +797,21 @@ for f in test/ui-composer.html test/ui-composer-run.js; do
   fi
 done
 
-# ---- N 组:「运行中」只说一遍 ----
+# ---- N 组:「运行中」一个标记都不画 ----
 # 对话头部那套(标题旁的「● 运行中」+ 进度条)是唯一该说这个状态的地方;
-# 工具行再写一遍就成了重复,手机竖屏上还会把「运行中」折成两行。
+# 工具行再来一个标记(字或点)就是重复,手机竖屏上那个「运行中」还会折成两行。
 STATUS_FN=$(printf '%s' "$APPJS" | awk '/^function statusInfo\(p\)/{f=1} f{print} f&&/^\}$/{exit}')
-if has "$STATUS_FN" "running: { icon: '●', cls: 'run', label: '' }" &&
-   has "$STATUS_FN" "streaming: { icon: '●', cls: 'run', label: '' }"; then
-  echo "PASS: 工具行运行中不再写「运行中」,只留状态色圆点"; pass=$((pass + 1))
+if has "$STATUS_FN" "running: { icon: '', cls: 'run', label: '' }" &&
+   has "$STATUS_FN" "streaming: { icon: '', cls: 'run', label: '' }"; then
+  echo "PASS: 运行中的工具行不写字也不画点(icon 与 label 都是空的)"; pass=$((pass + 1))
 else
-  echo "FAIL: statusInfo 的 running/streaming 又带上标签了"; fail=$((fail + 1))
+  echo "FAIL: statusInfo 的 running/streaming 又带上图标或标签了"; fail=$((fail + 1))
+fi
+TOOLHEAD_FN=$(printf '%s' "$APPJS" | awk '/^function toolHead\(/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$TOOLHEAD_FN" 's.icon || s.label'; then
+  echo "PASS: 状态标记空着就整个 <span> 都不输出(不留空壳)"; pass=$((pass + 1))
+else
+  echo "FAIL: toolHead 无条件画状态 <span>"; fail=$((fail + 1))
 fi
 # 但头部那个不能跟着一起没了 —— 状态只说一遍,但必须说
 if has "$APPJS" "'● 运行中', 'state running', 'run'"; then

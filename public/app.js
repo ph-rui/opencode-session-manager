@@ -1425,14 +1425,15 @@ function md(text) {
 /* 工具调用与状态 */
 function statusInfo(p) {
   const st = (p.state && p.state.status) || (p.executed ? 'completed' : 'running');
-  // 运行中/流式【不写「运行中」这几个字】:对话头部那套(标题旁的「● 运行中」+ 进度条)
-  // 已经把这个状态说清楚了,工具行再写一遍是重复 —— 手机竖屏上它还会折成「● 运」「行中」两行。
-  // 只留彩色的 ● 圆点:.cls='run' 的配色还在,一眼仍看得出这一条在跑。
+  // 运行中/流式【什么都不画】:对话头部那套(标题旁的「● 运行中」+ 进度条)已经把这个状态
+  // 说清楚了,工具行再来一个标记就是重复 —— 手机竖屏上那个「运行中」还会折成两行。
+  // cls 留着('run')是为了别处按状态分类的代码不用改(见 test/ui-stream.html);
+  // toolHead 见 icon/label 双双为空就整个 <span> 都不输出,不留空壳。
   const map = {
     completed: { icon: '✓', cls: 'ok', label: '' },
     error: { icon: '✗', cls: 'err', label: '出错' },
-    running: { icon: '●', cls: 'run', label: '' },
-    streaming: { icon: '●', cls: 'run', label: '' },
+    running: { icon: '', cls: 'run', label: '' },
+    streaming: { icon: '', cls: 'run', label: '' },
   };
   return map[st] || { icon: '●', cls: 'run', label: String(st) };
 }
@@ -1599,7 +1600,10 @@ function toolHead(p, s, desc, counts) {
     (desc ? '<span class="tdesc">' + esc(desc) + '</span>' : '') +
     (counts && counts.additions ? '<span class="tadd">+' + counts.additions + '</span>' : '') +
     (counts && counts.deletions ? '<span class="tdel">-' + counts.deletions + '</span>' : '') +
-    '<span class="tstate ' + s.cls + '">' + s.icon + (s.label ? ' ' + esc(s.label) : '') + '</span>'
+    // 状态标记:运行中/流式两个都空 → 什么都不输出(别留一个空 <span> 占着位置)
+    (s.icon || s.label
+      ? '<span class="tstate ' + s.cls + '">' + s.icon + (s.label ? ' ' + esc(s.label) : '') + '</span>'
+      : '')
   );
 }
 
