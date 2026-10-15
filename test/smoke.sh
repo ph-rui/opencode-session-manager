@@ -467,6 +467,12 @@ bad = [k for k, fn in want.items() if not re.search(r\"name: '\" + k + r\"'[^}]*
 print(','.join(bad))
 ")
 ck "$PICK_CMDS" "" "/sessions /models /agents 三条命令都接到了选择框"
+# 完整命令名 + Enter 直接执行(省掉「补全一次再发一次」的第二下)
+if has "$APPJS" 'function exactCommand' && has "$APPJS" 'exactCommand()'; then
+  echo "PASS: 完整命令名 + Enter 直接执行(不用按第二次)"; pass=$((pass + 1))
+else
+  echo "FAIL: 没有「完整命令名 + Enter 直接执行」"; fail=$((fail + 1))
+fi
 if has "$APPJS" 'setupPick();'; then
   echo "PASS: init() 里接上了 setupPick()"; pass=$((pass + 1))
 else

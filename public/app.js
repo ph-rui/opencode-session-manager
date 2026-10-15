@@ -3333,6 +3333,15 @@ function acceptCommand(i) {
   return it;
 }
 
+/* 输入框里已经把命令名整个敲完了(后面没有参数)→ Enter 直接执行,不用再按一次。
+ * 只敲了前缀时 Enter 仍然只是补全,免得把「想接着打参数」误判成执行。 */
+function exactCommand() {
+  const el = $('#input');
+  const it = store.cmdItems[store.cmdAt];
+  if (!el || !it) return false;
+  return el.value.trim() === '/' + it.name;
+}
+
 // 面板开着时,把方向键/Enter/Tab/Esc 抢过来;返回 true 表示已消费
 function commandKey(e) {
   const box = $('#cmds');
@@ -3345,6 +3354,11 @@ function commandKey(e) {
   }
   if (e.key === 'Enter' || e.key === 'Tab') {
     if (e.preventDefault) e.preventDefault();
+    if (e.key === 'Enter' && exactCommand()) {
+      closeCommands();
+      send();
+      return true;
+    }
     acceptCommand();
     return true;
   }

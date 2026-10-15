@@ -725,6 +725,47 @@
       await settle(function () { return hadCall(/\/prompt$/); });
       T('输入框按键:Enter 仍然发送', hadCall(/\/prompt$/), window.calls);
 
+      /* ================= 完整命令名 + Enter 直接执行 ================= */
+      idle();
+      setCaret('/models');
+      await openCommands();
+      T('命令面板里选中了 /models',
+        store.cmdItems[store.cmdAt] && store.cmdItems[store.cmdAt].name === 'models',
+        store.cmdItems[store.cmdAt]);
+      window.calls.length = 0;
+      var ex = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(ex);
+      await settle(function () { return picksOpen(); });
+      T('完整命令名 + Enter:直接执行(选择框弹出来,不用按第二次)',
+        picksOpen() === true);
+      T('完整命令名 + Enter:命令面板已关', q('#cmds').hidden === true);
+      T('完整命令名 + Enter:输入框被清空(没有停在 /models )', q('#input').value === '');
+      closePick();
+
+      /* 只敲前缀 → Enter 仍然只是补全 */
+      idle();
+      setCaret('/mod');
+      await openCommands();
+      var pa = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(pa);
+      T('只敲前缀时:Enter 只是补全成 /models ', q('#input').value === '/models ', q('#input').value);
+      T('只敲前缀时:没有真的执行', !picksOpen() && !hadCall(/\/prompt$/));
+      closeCommands();
+
+      /* 高亮移到别的命令上时,Enter 补全成那个命令(而不是执行) */
+      idle();
+      setCaret('/re');
+      await openCommands();
+      var ke4 = new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(ke4);
+      var hi = store.cmdItems[store.cmdAt] && store.cmdItems[store.cmdAt].name;
+      var ex3 = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(ex3);
+      T('高亮在别的命令上时:Enter 补全成那个命令(不是执行)',
+        hi && hi !== 'review' && q('#input').value === '/' + hi + ' ',
+        [hi, q('#input').value]);
+      closeCommands();
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));
