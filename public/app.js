@@ -185,6 +185,7 @@ async function selectSession(id) {
   ]
     .filter(Boolean)
     .join('  ·  ');
+  msgEls.clear();
   $('#messages').innerHTML = '';
   updateChatStatus();
   await loadMessages({ older: false });
@@ -209,9 +210,159 @@ async function loadMessages(opts) {
   }
 }
 
-function toolStatus(p) {
+/* 简易 Markdown 渲染(输入先经 esc 转义,再处理行内标记) */
+function renderInline(s) {
+  let out = '';
+  const parts = String(s).split(/(`[^`]*`)/g);
+  for (const part of parts) {
+    if (part.length >= 2 && part.startsWith('`') && part.endsWith('`')) {
+      out += '<code>' + part.slice(1, -1) + '</code>';
+    } else {
+      let t = part;
+      t = t.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener">$1</a>'
+      );
+      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+      out += t;
+    }
+  }
+  return out;
+}
+
+function md(text) {
+  const lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+  let html = '';
+  let para = [];
+  let list = null;
+  const flushPara = () => {
+    if (para.length) {
+      html += '<p>' + renderInline(para.join('<br>')) + '</p>';
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      html +=
+        '<' + list.type + '>' +
+        list.items.map((it) => '<li>' + renderInline(it) + '</li>').join('') +
+        '</' + list.type + '>';
+      list = null;
+    }
+  };
+  const flushAll = () => {
+    flushPara();
+    flushList();
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*```(.*)$/);
+    if (fence) {
+      flushAll();
+      const lang = fence[1].trim();
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++;
+      html +=
+        '<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
+        esc(buf.join('\n')) + '</code></pre>';
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      flushAll();
+      const lvl = h[1].length;
+      html += '<h' + lvl + '>' + renderInline(esc(h[2])) + '</h' + lvl + '>';
+      i++;
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushAll();
+      html += '<hr>';
+      i++;
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      flushAll();
+      const buf = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        buf.push(esc(lines[i].replace(/^\s*>\s?/, '')));
+        i++;
+      }
+      html += '<blockquote>' + renderInline(buf.join('<br>')) + '</blockquote>';
+      continue;
+    }
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (ul) {
+      flushPara();
+      if (!list || list.type !== 'ul') {
+        flushList();
+        list = { type: 'ul', items: [] };
+      }
+      list.items.push(esc(ul[1]));
+      i++;
+      continue;
+    }
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ol) {
+      flushPara();
+      if (!list || list.type !== 'ol') {
+        flushList();
+        list = { type: 'ol', items: [] };
+      }
+      list.items.push(esc(ol[1]));
+      i++;
+      continue;
+    }
+    if (/^\s*$/.test(line)) {
+      flushAll();
+      i++;
+      continue;
+    }
+    flushList();
+    para.push(esc(line));
+    i++;
+  }
+  flushAll();
+  return html;
+}
+
+/* 工具调用与状态 */
+function statusInfo(p) {
+  const st = (p.state && p.state.status) || (p.executed ? 'completed' : 'running');
+  const map = {
+    completed: { icon: '✓', cls: 'ok', label: '已完成' },
+    error: { icon: '✗', cls: 'err', label: '出错' },
+    running: { icon: '●', cls: '', label: '运行中' },
+    streaming: { icon: '●', cls: '', label: '运行中' },
+  };
+  return map[st] || { icon: '●', cls: '', label: String(st) };
+}
+
+function toolHtml(p) {
+  const s = statusInfo(p);
   const st = p.state || {};
-  return st.status || st.state || st.type || (p.executed ? 'done' : '…');
+  let body = '';
+  if (st.input && Object.keys(st.input).length) {
+    body += '<pre>' + esc(JSON.stringify(st.input, null, 2)) + '</pre>';
+  }
+  if (Array.isArray(st.content)) {
+    const txt = st.content.map((c) => (c && c.text) || '').join('\n').trim();
+    if (txt) body += '<pre>' + esc(txt) + '</pre>';
+  }
+  return (
+    '<details class="tool"><summary>' +
+    '<span class="tmark">⏺</span>' +
+    '<span class="tname">' + esc(p.name || 'tool') + '</span>' +
+    '<span class="tstate ' + s.cls + '">' + s.icon + ' ' + esc(s.label) + '</span>' +
+    '</summary>' + body + '</details>'
+  );
 }
 
 function renderMessage(m) {
@@ -220,40 +371,32 @@ function renderMessage(m) {
 
   if (m.type === 'user') {
     el.innerHTML =
-      '<div class="role">你</div><div class="bubble">' + esc(m.text || '') + '</div>';
+      '<div class="turn-head"><span class="marker">❯</span><span class="who">你</span></div>' +
+      '<div class="content">' + esc(m.text || '') + '</div>';
     return el;
   }
 
   if (m.type === 'assistant') {
-    const parts = m.content || [];
     let html =
-      '<div class="role">助手' +
+      '<div class="turn-head"><span class="marker">⏺</span>' +
+      '<span class="who">助手' +
       (m.model && m.model.id ? ' · ' + esc(m.model.id) : '') +
-      '</div>';
-    for (const p of parts) {
+      '</span></div>';
+    for (const p of m.content || []) {
       if (p.type === 'text') {
-        html += '<div class="bubble">' + esc(p.text || '') + '</div>';
+        html += '<div class="content">' + md(p.text || '') + '</div>';
       } else if (p.type === 'reasoning') {
         html +=
-          '<details class="reasoning"><summary>思考</summary><pre>' +
-          esc(p.text || '') +
-          '</pre></details>';
+          '<details class="reasoning"><summary>▸ 思考</summary>' +
+          '<div class="content">' + md(p.text || '') + '</div></details>';
       } else if (p.type === 'tool') {
-        html +=
-          '<div class="tool">🔧 ' +
-          esc(p.name || 'tool') +
-          ' <span class="tstate">' +
-          esc(toolStatus(p)) +
-          '</span></div>';
+        html += toolHtml(p);
       }
     }
     if (m.tokens) {
       html +=
-        '<div class="meta">' +
-        esc(fmtTokens(m.tokens)) +
-        ' tokens' +
-        (m.cost ? ' · ' + esc(fmtCost(m.cost)) : '') +
-        '</div>';
+        '<div class="meta">' + esc(fmtTokens(m.tokens)) + ' tokens' +
+        (m.cost ? ' · ' + esc(fmtCost(m.cost)) : '') + '</div>';
     }
     el.innerHTML = html;
     return el;
@@ -266,14 +409,42 @@ function renderMessage(m) {
   return el;
 }
 
+const msgEls = new Map(); // message id -> { sig, el }
+
 function renderMessages() {
   const box = $('#messages');
   const msgs = Array.from(store.messages.values()).sort(
     (a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0)
   );
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  box.innerHTML = '';
-  for (const m of msgs) box.appendChild(renderMessage(m));
+
+  // 删除已不存在的消息
+  for (const [id, rec] of msgEls) {
+    if (!store.messages.has(id)) {
+      rec.el.remove();
+      msgEls.delete(id);
+    }
+  }
+
+  // 增量渲染:仅重建变化的消息,其余复用 DOM(保留已展开的 details)
+  let prev = null;
+  for (const m of msgs) {
+    const sig = JSON.stringify(m);
+    let rec = msgEls.get(m.id);
+    if (!rec) {
+      rec = { sig, el: renderMessage(m) };
+      msgEls.set(m.id, rec);
+    } else if (rec.sig !== sig) {
+      const el = renderMessage(m);
+      rec.el.replaceWith(el);
+      rec.el = el;
+      rec.sig = sig;
+    }
+    const anchor = prev ? prev.nextSibling : box.firstChild;
+    if (rec.el !== anchor) box.insertBefore(rec.el, anchor);
+    prev = rec.el;
+  }
+
   if (nearBottom) box.scrollTop = box.scrollHeight;
   $('#older').hidden = !store.msgOlderCursor;
 
@@ -337,6 +508,7 @@ async function onAction(act, id) {
     if (store.selected === id) {
       store.selected = null;
       store.messages.clear();
+      msgEls.clear();
       $('#messages').innerHTML = '';
       $('#chatTitle').textContent = '未选择会话';
       $('#chatMeta').textContent = '';
