@@ -1870,22 +1870,28 @@ function renderMessages() {
 
 function updateChatStatus() {
   const el = $('#chatState');
+  const pg = $('#progress');
+  // 文字状态与「走来走去」的进度条一起画:两者永远同步,不会各写各的。
+  // 这里的 `bar` 三态:false=收起, 'run'=accent 扫动, 'retry'=琥珀色扫动。
+  const paint = (text, cls, bar) => {
+    el.textContent = text;
+    el.className = cls;
+    if (!pg) return; // 测试页可能没有这个元素,缺了也不能崩
+    pg.hidden = !bar;
+    pg.classList.toggle('retry', bar === 'retry');
+  };
   if (!store.selected) {
-    el.textContent = '';
-    el.className = 'state';
+    paint('', 'state', false);
     updateComposerControls();
     return;
   }
   const st = runStatus(store.selected);
   if (st === 'retry') {
-    el.textContent = '◌ 重试中';
-    el.className = 'state retry';
+    paint('◌ 重试中', 'state retry', 'retry');
   } else if (st || store.running) {
-    el.textContent = '● 运行中';
-    el.className = 'state running';
+    paint('● 运行中', 'state running', 'run');
   } else {
-    el.textContent = '空闲';
-    el.className = 'state';
+    paint('空闲', 'state', false);
   }
   updateComposerControls();
 }

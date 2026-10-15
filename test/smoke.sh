@@ -497,6 +497,51 @@ case "$INIT_ORDER" in
   *)             echo "FAIL: init() 没有先回填顶栏条件 (got '$INIT_ORDER')"; fail=$((fail + 1)) ;;
 esac
 
+# I 组:运行中的「走来走去」进度条(贴在对话头部下沿的 indeterminate 条)
+if has "$HOME_HTML" 'id="progress" hidden'; then
+  echo "PASS: 首页有 #progress 且默认 hidden(脚本起来前不会先闪一条出来)"; pass=$((pass + 1))
+else
+  echo "FAIL: 首页缺 #progress / 没默认 hidden"; fail=$((fail + 1))
+fi
+if has "$HOME_HTML" 'title="正在执行 · 按 Esc 中断"'; then
+  echo "PASS: 进度条挂着「按 Esc 中断」的提示"; pass=$((pass + 1))
+else
+  echo "FAIL: 进度条缺「按 Esc 中断」提示"; fail=$((fail + 1))
+fi
+if has "$CSS" '@keyframes ocs-sweep' && has "$CSS" '#progress > i'; then
+  echo "PASS: styles.css 有扫动动画与它作用的那一段(#progress > i)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 @keyframes ocs-sweep / #progress > i"; fail=$((fail + 1))
+fi
+if has "$CSS" '#chatHeader { position: relative'; then
+  echo "PASS: #chatHeader 是定位上下文(否则进度条会贴到别的祖先下沿去)"; pass=$((pass + 1))
+else
+  echo "FAIL: #chatHeader 不是定位上下文,进度条会贴错地方"; fail=$((fail + 1))
+fi
+if has "$CSS" '#progress.retry > i'; then
+  echo "PASS: 重试中进度条换色(#progress.retry > i)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺重试中的换色规则(#progress.retry > i)"; fail=$((fail + 1))
+fi
+if has "$CSS" '#progress > i { animation: none'; then
+  echo "PASS: prefers-reduced-motion 下进度条降级成静止色带"; pass=$((pass + 1))
+else
+  echo "FAIL: 进度条没有 reduced-motion 降级"; fail=$((fail + 1))
+fi
+# 显示与否只由 updateChatStatus() 一处切。多一处就必然会漏同步,所以上锁。
+CHATSTATUS_FN=$(printf '%s' "$APPJS" | awk '/^function updateChatStatus\(\)/{f=1} f{print} f&&/^}/{exit}')
+if has "$CHATSTATUS_FN" "#progress"; then
+  echo "PASS: 进度条在 updateChatStatus() 里切(与状态文字同一处)"; pass=$((pass + 1))
+else
+  echo "FAIL: updateChatStatus() 里没有切进度条"; fail=$((fail + 1))
+fi
+PROG_HITS=$(printf '%s' "$APPJS" | grep -oF "'#progress'" | wc -l)
+if [ "$PROG_HITS" = 1 ]; then
+  echo "PASS: #progress 在 app.js 里只被碰一次(没有第二处同步点)"; pass=$((pass + 1))
+else
+  echo "FAIL: #progress 在 app.js 里出现 $PROG_HITS 次(应当只有 updateChatStatus 那一处)"; fail=$((fail + 1))
+fi
+
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if has "$sse" 'server.connected'; then
   echo "PASS: 经代理 SSE 收到 server.connected"; pass=$((pass + 1))

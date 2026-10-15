@@ -22,6 +22,7 @@
           <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
         </div>
         <button id="older" hidden></button>
+        <div id="progress" hidden><i></i></div>
       </div>
       <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
       <div id="composer">
@@ -141,6 +142,18 @@
       T('显示模型名', aEl.textContent.indexOf('deepseek-v4-flash') >= 0);
       T('运行状态显示运行中', q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
       T('该会话被判定为有流式内容', !!liveForSid('ses_a'));
+
+      /* ---------------- 运行中那条「走来走去」的进度条 ---------------- */
+      T('有进度条元素', !!q('#progress'));
+      T('进度条挂在对话头部里(贴它下沿)', q('#progress') && q('#progress').parentElement === q('#chatHeader'));
+      T('运行中进度条露出来', q('#progress') && q('#progress').hidden === false);
+      T('运行中用 accent 色(不带 retry 类)', q('#progress') && !q('#progress').classList.contains('retry'));
+      T('进度条 absolute 定位(不占高度,不会把消息挤下去)',
+        getComputedStyle(q('#progress')).position === 'absolute', getComputedStyle(q('#progress')).position);
+      T('进度条贴着头部下沿', getComputedStyle(q('#progress')).bottom === '0px', getComputedStyle(q('#progress')).bottom);
+      T('进度条有在动的那一段', !!q('#progress > i'));
+      T('那段挂了扫动动画', getComputedStyle(q('#progress > i')).animationName === 'ocs-sweep',
+        getComputedStyle(q('#progress > i')).animationName);
 
       /* ---------------- text.started + deltas:只刷局部 ---------------- */
       var r2 = handleStreamEvent(ev('session.text.started', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0 }));
@@ -298,6 +311,25 @@
         getComputedStyle(el(AID).querySelector('.reasoning > summary'), '::before').content.indexOf('▸') >= 0);
       T('三块内容(reasoning/text/tool)都在', qa('#messages [data-lk], #messages details.tool').length >= 0 && el(AID).textContent.indexOf('ONE') >= 0);
       T('回收后状态回到空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
+      T('回到空闲后进度条收起来', q('#progress').hidden === true);
+
+      /* ---------------- 进度条的其余状态:重试中 / 无选中 ---------------- */
+      var savedSel = store.selected;
+      store.active.set('ses_a', 'retry');
+      updateChatStatus();
+      T('重试中进度条仍在(还是要让人看见在动)',
+        q('#progress').hidden === false && q('#chatState').textContent === '◌ 重试中',
+        [q('#progress').hidden, q('#chatState').textContent]);
+      T('重试中换成琥珀色(retry 类)', q('#progress').classList.contains('retry'));
+      store.active.delete('ses_a');
+      updateChatStatus();
+      T('重试结束后进度条收起来', q('#progress').hidden === true);
+      T('重试结束后 retry 类也摘掉', !q('#progress').classList.contains('retry'));
+
+      store.selected = '';
+      updateChatStatus();
+      T('清空选中(窄屏按「返回」走的就是这条路)进度条也收起来', q('#progress').hidden === true);
+      store.selected = savedSel;
 
       /* ---------------- 多文本块:序号映射 ---------------- */
       store.messages.clear();

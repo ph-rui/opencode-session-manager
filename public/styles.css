@@ -206,7 +206,7 @@ table#list { width: 100%; border-collapse: collapse; }
 #list td.actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
 #chatpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; font-size: var(--chat-fs); }
-#chatHeader { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+#chatHeader { position: relative; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .chline { display: flex; align-items: center; gap: 10px; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { font-size: 0.96em; color: var(--muted); }
@@ -912,6 +912,8 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
 }
 @media (prefers-reduced-motion: reduce) {
   .cursor { animation: none; }
+  /* 以下元素不硬塞动画,改成静止但仍看得出状态的形态 */
+  #progress > i { animation: none; left: 0; width: 100%; opacity: 0.6; }
 }
 
 /* 标题行的「输出中」标记 */
@@ -926,6 +928,40 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
   border: 1px solid currentColor;
   border-radius: 999px;
   opacity: 0.85;
+}
+
+/* 运行中的「走来走去」进度条 —— 给「还在跑」一个一直动着的信号。
+   桌面上原来只有静态的「● 运行中」文字 + 长在消息里的「输出中」标签,
+   后者一滚动就看不见,盯着一屏不动确实分不清是在跑还是卡死。
+
+   贴在对话头部下沿(#chatHeader 是它的定位上下文),absolute 定位,
+   所以头部的高度与内边距一像素不变 —— 出现/消失不会让下面的消息跳动。
+   显示与否【只由 updateChatStatus() 一处切】:那里已经是唯一知道
+   运行中 / 重试中 / 空闲三态的地方,SSE 事件、切会话、清空选中、
+   中断后刷新都会各自调它,不会再冒出一个「忘了同步」的地方。 */
+#progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  overflow: hidden;
+  background: var(--panel2);
+}
+#progress[hidden] { display: none; }
+#progress > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  background: var(--accent);
+  animation: ocs-sweep 1.15s ease-in-out infinite;
+}
+#progress.retry > i { background: #b8860b; } /* 与「◌ 重试中」同色 */
+@keyframes ocs-sweep {
+  0% { left: 0; }
+  50% { left: 66%; } /* 34%(自身宽)+ 66% = 100%,正好贴着右沿 */
+  100% { left: 0; }
 }
 
 /* 流式消息:左侧色条做一个轻微的呼吸,提示内容在增长 */
