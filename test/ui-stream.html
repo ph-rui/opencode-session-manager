@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>stream unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div><div id="status" class="status"></div></header>
+  <main>
+    <aside id="filters">
+      <input id="search"><select id="dirFilter"></select><select id="order"></select>
+      <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
+      <label class="chk"><input type="checkbox" id="showArchived"></label>
+      <span id="count"></span><span id="archivedCount"></span>
+    </aside>
+    <div class="resizer" id="resizer-left"></div>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '流式会话', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+      { id: 'ses_b', title: '另一个会话', projectID: 'pj1', time: { created: 1, updated: 4 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/b' } },
+    ];
+    var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+
+    /* 服务端消息:测试里手动推进,模拟「服务端慢慢才给出权威版本」 */
+    window.SERVER = {
+      'ses_a': [
+        { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '第一个问题' },
+        { id: 'msg_u2', type: 'user', time: { created: 200 }, text: '第二个问题' },
+      ],
+      'ses_b': [],
+    };
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({});
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    /* 关掉防抖对账(由测试显式调用 loadMessages),但记录被排了哪些定时器,
+       用来断言「有本地缓冲的 delta 不再触发消息重取」。 */
+    window.__timeouts = [];
+    window.setTimeout = function (fn, ms) { window.__timeouts.push(ms); return 0; };
+    window.clearTimeout = function () {};
+    window.__pending = function (ms) { return window.__timeouts.filter(function (m) { return m === ms; }).length; };
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var AID = 'msg_a1';
+    var ev = function (type, data) { return { id: 'evt_x', type: type, data: data }; };
+    var feed = function (type, data) { handleEvent(ev(type, data)); };
+    var view = function (id) { return liveView(id); };
+    var el = function (id) { var r = msgEls.get(id); return r && r.el; };
+    var lkNode = function (t, o) { var e = el(AID); return e && e.querySelector('[data-lk="' + t + ':' + o + '"]'); };
+
+    try {
+      /* ---------------- 基本分类 ---------------- */
+      T('text.delta 属于纯文本增量', isStreamDelta('session.text.delta') === true);
+      T('reasoning.delta 属于纯文本增量', isStreamDelta('session.reasoning.delta') === true);
+      T('text.started 不属于纯文本增量', isStreamDelta('session.text.started') === false);
+      T('tool.called 不属于纯文本增量', isStreamDelta('session.tool.called') === false);
+
+      /* ---------------- 准备:选中会话并载入两条历史消息 ---------------- */
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); });
+      renderSessions();
+      await selectSession('ses_a');
+      T('历史消息已渲染', qa('#messages .msg').length === 2, qa('#messages .msg').length);
+      var u2el = el('msg_u2');
+      T('有历史消息元素', !!u2el);
+
+      /* ---------------- step.started:立刻出现助手气泡 ---------------- */
+      var r1 = handleStreamEvent(ev('session.step.started', {
+        sessionID: 'ses_a', agent: 'build', assistantMessageID: AID, started: 300,
+        model: { id: 'deepseek-v4-flash', providerID: 'company', variant: 'default' },
+      }));
+      T('step.started 判定为结构变化', r1 === true);
+      T('step.started 建立本地缓冲', !!view(AID));
+      T('step.started 后仍未落到服务端消息表', !store.messages.has(AID));
+      renderMessages();
+      var aEl = el(AID);
+      T('助手气泡已出现', !!aEl);
+      T('助手气泡排在最后', qa('#messages .msg').pop() === aEl);
+      T('助手气泡带 live 类', aEl.classList.contains('live'));
+      T('标题行显示「输出中」', aEl.querySelector('.live-tag').textContent === '输出中');
+      T('显示模型名', aEl.textContent.indexOf('deepseek-v4-flash') >= 0);
+      T('运行状态显示运行中', q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
+      T('该会话被判定为有流式内容', !!liveForSid('ses_a'));
+
+      /* ---------------- text.started + deltas:只刷局部 ---------------- */
+      var r2 = handleStreamEvent(ev('session.text.started', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0 }));
+      T('text.started 判定为结构变化', r2 === true);
+      renderMessages();
+      var aEl = el(AID);
+      var nodeBefore = lkNode('text', 0);
+      var headBefore = el(AID).querySelector('.turn-head');
+      T('文本块带 data-lk 定位键', !!nodeBefore);
+      T('空文本时也有光标', !!nodeBefore.querySelector('.cursor'));
+      T('光标落在最后一个文本块', nodeBefore.dataset.lkLast === '1');
+
+      var sigBefore = liveSig(view(AID));
+      feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0, delta: '第一段' });
+      T('delta 后文本已累积', view(AID).byKey['text:0'].text === '第一段');
+      T('delta 后结构指纹不变(不会整条重建)', liveSig(view(AID)) === sigBefore, liveSig(view(AID)));
+      T('delta 后消息元素是同一个(未重建)', el(AID) === aEl);
+      T('delta 后文本节点是同一个', lkNode('text', 0) === nodeBefore);
+      T('delta 后标题行节点未动', el(AID).querySelector('.turn-head') === headBefore);
+      T('其它消息元素未重建', el('msg_u2') === u2el);
+      T('DOM 里出现增量文本', lkNode('text', 0).textContent.indexOf('第一段') >= 0);
+
+      feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0, delta: '**加粗**' });
+      T('第二次 delta 继续累积', view(AID).byKey['text:0'].text === '第一段**加粗**');
+      T('增量文本按 Markdown 渲染', lkNode('text', 0).querySelector('strong').textContent === '加粗');
+
+      feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0, delta: '\n- 条目' });
+      T('换行增量渲染成列表', !!lkNode('text', 0).querySelector('li'));
+      // 光标必须落在最后一段内容的行内,不能因为是块级元素(</ol>)而另起一行
+      T('光标落进最后一个列表项内部', !!lkNode('text', 0).querySelector('li .cursor'));
+
+      /* ---------------- reasoning 走独立序号 ---------------- */
+      feed('session.reasoning.started', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0 });
+      feed('session.reasoning.delta', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0, delta: '先想一想' });
+      T('reasoning 与 text 的序号互不干扰', !!view(AID).byKey['reasoning:0'] && !!view(AID).byKey['text:0']);
+      var rnode = q('#messages [data-lk="reasoning:0"]');
+      T('思考块渲染出来', !!rnode);
+      T('思考块内容正确', rnode.textContent.indexOf('先想一想') >= 0);
+      T('reasoning 与 text 是不同节点', rnode !== lkNode('text', 0));
+      feed('session.reasoning.ended', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0, text: '想好了:直接回答。' });
+      T('reasoning.ended 用权威全文覆盖', view(AID).byKey['reasoning:0'].text === '想好了:直接回答。');
+      T('reasoning 标记为已完成', view(AID).byKey['reasoning:0'].final === true);
+      T('流式期间思考块自动展开', el(AID).querySelector('details.reasoning').hasAttribute('open'));
+      T('展开时箭头朝下(▾)',
+        getComputedStyle(el(AID).querySelector('.reasoning > summary'), '::before').content.indexOf('▾') >= 0);
+
+      /* ---------------- text.ended 权威覆盖 ---------------- */
+      feed('session.text.ended', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0, text: '1) **权威版本**\n\n- 由服务端给出' });
+      T('text.ended 用权威全文覆盖累加结果', view(AID).byKey['text:0'].text === '1) **权威版本**\n\n- 由服务端给出');
+      T('text.ended 后 DOM 同步', lkNode('text', 0).textContent.indexOf('权威版本') >= 0);
+      // 光标永远跟随「最后一个块」:reasoning 后出现,于是从 text 块移交过去
+      var lastNode = el(AID).querySelector('[data-lk-last="1"]');
+      T('光标跟随最后一个块', lastNode === lkNode('reasoning', 0));
+      T('text 块不再是最后一块', lkNode('text', 0).dataset.lkLast === '0');
+      T('光标仍在最后一块内容内部(不另起一行)',
+        !!lastNode.querySelector('.cursor') && lastNode.querySelector('.cursor').parentElement !== lastNode);
+      T('光标没有落在 text 块里', !lkNode('text', 0).querySelector('.cursor'));
+
+      /* ---------------- 工具卡片 ---------------- */
+      var r3 = handleStreamEvent(ev('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', name: 'shell' }));
+      T('tool.input.started 判定为结构变化', r3 === true);
+      renderMessages();
+      T('工具卡片出现且名为 shell', q('#messages .toolrow, #messages details.tool') && el(AID).textContent.indexOf('shell') >= 0);
+      T('工具初始为运行中', statusInfo(view(AID).byKey['tool:call_1']).cls === 'run');
+      var elBeforeTool = el(AID);
+      feed('session.tool.called', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', input: { command: 'echo ONE' } });
+      T('tool.called 写入 input', view(AID).byKey['tool:call_1'].state.input.command === 'echo ONE');
+      T('工具状态变化触发整条重绘(状态在结构指纹里)', el(AID) !== elBeforeTool);
+      T('工具卡片在 DOM 里展开出参数',
+        !!el(AID).querySelector('details.tool pre') &&
+        el(AID).querySelector('details.tool pre').textContent.indexOf('echo ONE') >= 0);
+      var elBeforeOk = el(AID);
+      feed('session.tool.success', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', content: [{ type: 'text', text: 'ONE\n' }], metadata: { exit: 0 } });
+      T('tool.success 变为已完成', statusInfo(view(AID).byKey['tool:call_1']).cls === 'ok');
+      T('工具输出进入 DOM', el(AID).textContent.indexOf('ONE') >= 0);
+      T('完成后状态标记出现在 DOM', el(AID).querySelector('.tstate.ok') !== null && el(AID) !== elBeforeOk);
+
+      // progress 不改变结构,也不该造出卡片
+      var before = view(AID).parts.length;
+      var rp = handleStreamEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', metadata: { shellID: 'sh_1' } }));
+      T('tool.progress 不算结构变化', rp === false);
+      T('tool.progress 不新增 part', view(AID).parts.length === before, view(AID).parts.length);
+      var rp2 = handleStreamEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_unknown', metadata: {} }));
+      T('未知工具的 progress 不造卡片', rp2 === false && !view(AID).byKey['tool:call_unknown']);
+
+      /* ---------------- step.ended:用量 ---------------- */
+      feed('session.step.ended', { sessionID: 'ses_a', assistantMessageID: AID, finish: 'stop', cost: 0.012,
+        tokens: { input: 100, output: 42, reasoning: 7, cache: { read: 0, write: 0 } } });
+      T('step.ended 记录 tokens', view(AID).tokens.output === 42);
+      T('DOM 显示 tokens 与「流式中」', el(AID).textContent.indexOf('42') >= 0 && el(AID).textContent.indexOf('流式中') >= 0);
+
+      /* ---------------- 服务端半成品不得覆盖本地增量 ---------------- */
+      window.SERVER['ses_a'] = window.SERVER['ses_a'].concat([{
+        id: AID, type: 'assistant', time: { created: 300 },
+        model: { id: 'deepseek-v4-flash', providerID: 'company' },
+        content: [{ type: 'reasoning', text: '' }, { type: 'text', text: '' }, { type: 'tool', id: 'call_1', name: 'shell', state: { status: 'running' } }],
+      }]);
+      await loadMessages({ older: false });
+      T('服务端半成品出现后仍走本地缓冲', !!view(AID));
+      T('半成品不会清空本地文本', lkNode('text', 0).textContent.indexOf('权威版本') >= 0);
+      T('半成品不带 completed 所以不回收缓冲', store.live.has(AID));
+
+      /* ---------------- execution 收束:标记关闭但仍显示 ---------------- */
+      var re = handleStreamEvent(ev('session.execution.succeeded', { sessionID: 'ses_a' }));
+      T('execution.succeeded 判定为结构变化', re === true);
+      T('收束后缓冲标记关闭', view(AID).open === false);
+      T('收束后仍显示(等权威版本)', !!view(AID));
+
+      /* ---------------- 服务端权威版本到达:交回服务端 ---------------- */
+      window.SERVER['ses_a'] = window.SERVER['ses_a'].map(function (m) {
+        if (m.id !== AID) return m;
+        return Object.assign({}, m, {
+          time: { created: 300, streamed: 320, completed: 330 },
+          tokens: { input: 100, output: 42, reasoning: 7, cache: { read: 0, write: 0 } },
+          content: [
+            { type: 'reasoning', text: '想好了:直接回答。' },
+            { type: 'text', text: '1) **权威版本**\n- 由服务端给出' },
+            { type: 'tool', id: 'call_1', name: 'shell', executed: false, state: { status: 'completed', input: { command: 'echo ONE' }, content: [{ type: 'text', text: 'ONE\n' }] } },
+          ],
+        });
+      });
+      await loadMessages({ older: false });
+      T('权威版本到达后回收本地缓冲', !store.live.has(AID));
+      T('回收后不再视为流式', !liveView(AID));
+      T('消息仍然存在', !!el(AID));
+      T('消息不再带 live 类', !el(AID).classList.contains('live'));
+      T('光标消失', !el(AID).querySelector('.cursor'));
+      T('「输出中」标记消失', !el(AID).querySelector('.live-tag'));
+      T('仍只渲染一条该消息(无重复)', qa('#messages .msg.assistant').length === 1, qa('#messages .msg.assistant').length);
+      T('权威文本已渲染', el(AID).textContent.indexOf('权威版本') >= 0);
+      T('回收后思考块回落到折叠态(与服务端版本一致)',
+        !el(AID).querySelector('details.reasoning').hasAttribute('open'));
+      T('折叠时箭头朝右(▸)',
+        getComputedStyle(el(AID).querySelector('.reasoning > summary'), '::before').content.indexOf('▸') >= 0);
+      T('三块内容(reasoning/text/tool)都在', qa('#messages [data-lk], #messages details.tool').length >= 0 && el(AID).textContent.indexOf('ONE') >= 0);
+      T('回收后状态回到空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
+
+      /* ---------------- 多文本块:序号映射 ---------------- */
+      store.messages.clear();
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      window.SERVER['ses_a'] = [];
+      feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_m1', started: 400, model: { id: 'm' } });
+      feed('session.reasoning.started', { sessionID: 'ses_a', assistantMessageID: 'msg_m1', ordinal: 0 });
+      feed('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_m1', ordinal: 0 });
+      feed('session.text.ended', { sessionID: 'ses_a', assistantMessageID: 'msg_m1', ordinal: 0, text: '第一块' });
+      feed('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_m1', ordinal: 1 });
+      feed('session.text.ended', { sessionID: 'ses_a', assistantMessageID: 'msg_m1', ordinal: 1, text: '第二块' });
+      renderMessages();
+      var e1 = el('msg_m1');
+      T('两个文本块各自独立编号', e1.querySelectorAll('[data-lk^="text:"]').length === 2, e1.querySelectorAll('[data-lk^="text:"]').length);
+      T('reasoning 与 text 序号各从 0 起', !!e1.querySelector('[data-lk="reasoning:0"]') && !!e1.querySelector('[data-lk="text:0"]') && !!e1.querySelector('[data-lk="text:1"]'));
+      T('第一块内容正确', e1.querySelector('[data-lk="text:0"]').textContent.indexOf('第一块') >= 0);
+      T('第二块内容正确', e1.querySelector('[data-lk="text:1"]').textContent.indexOf('第二块') >= 0);
+      T('光标只在最后一个文本块', e1.querySelector('[data-lk="text:0"]').dataset.lkLast === '0' && e1.querySelector('[data-lk="text:1"]').dataset.lkLast === '1');
+
+      /* ---------------- 不干扰当前未选中的会话 ---------------- */
+      store.messages.clear();
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      await selectSession('ses_a');
+      var nBefore = qa('#messages .msg').length;
+      feed('session.step.started', { sessionID: 'ses_b', assistantMessageID: 'msg_b1', started: 500, model: { id: 'm' } });
+      feed('session.text.started', { sessionID: 'ses_b', assistantMessageID: 'msg_b1', ordinal: 0 });
+      feed('session.text.delta', { sessionID: 'ses_b', assistantMessageID: 'msg_b1', ordinal: 0, delta: '别人的输出' });
+      T('别的会话的缓冲不进入当前视图', qa('#messages .msg').length === nBefore, qa('#messages .msg').length);
+      T('别的会话的缓冲仍被记录', !!view('msg_b1'));
+      T('当前会话没有流式内容', !liveForSid('ses_a'));
+      feed('session.execution.succeeded', { sessionID: 'ses_b' });
+      await loadMessages({ older: false });   // 触发 pruneLive
+      T('已收束且非当前会话的陈旧缓冲被回收', !store.live.has('msg_b1'));
+
+      /* ---------------- 边界 ---------------- */
+      T('无 assistantMessageID 的 delta 被忽略', handleStreamEvent(ev('session.text.delta', { delta: 'x' })) === false);
+      T('未知事件类型返回 false', handleStreamEvent(ev('session.whatever', {})) === false);
+      T('未知的 session.text.* 子事件不认领、也不误标完成', (function () {
+        store.live.clear();
+        feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_w', started: 1 });
+        feed('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_w', ordinal: 0 });
+        var r = handleStreamEvent(ev('session.text.weird', { sessionID: 'ses_a', assistantMessageID: 'msg_w', ordinal: 0 }));
+        return r === false && view('msg_w').byKey['text:0'].final === false;
+      })());
+      T('liveSig 不含文本长度', (function () {
+        store.live.clear();
+        feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_s', started: 1 });
+        feed('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_s', ordinal: 0 });
+        var a = liveSig(view('msg_s'));
+        feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_s', ordinal: 0, delta: '一二三四五' });
+        return liveSig(view('msg_s')) === a;
+      })());
+      T('paintLiveDelta 对无 DOM 的缓冲会退回整条重绘', (function () {
+        store.live.clear(); msgEls.clear(); q('#messages').innerHTML = '';
+        feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_z', started: 2 });
+        feed('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_z', ordinal: 0 });
+        paintLiveDelta();
+        return !!el('msg_z');
+      })());
+
+      /* ---------------- 防抖对账的分流规则 ---------------- */
+      // 有本地缓冲的纯文本 delta 不必再拉一次消息(省掉每秒数次无谓请求);
+      // 没有缓冲时的 delta(中途接入)必须退回重取,否则内容会漏。
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', started: 3 });
+      feed('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', ordinal: 0 });
+
+      window.__timeouts.length = 0;
+      feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', ordinal: 0, delta: '甲' });
+      T('有缓冲的 delta 不排消息重取(150ms)', window.__pending(150) === 0, window.__timeouts);
+      T('有缓冲的 delta 仍排列表刷新(1500ms)', window.__pending(1500) === 1, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_none', ordinal: 0, delta: '乙' });
+      T('无缓冲的 delta 退回对账重取', window.__pending(150) === 1, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.text.ended', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', ordinal: 0, text: '甲' });
+      T('*.ended 排一次对账重取', window.__pending(150) === 1, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', id: 'c9', name: 'read' });
+      T('工具事件排一次对账重取', window.__pending(150) === 1, window.__timeouts);
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      // 中途抛错时也要把已经跑过的断言交出来,否则无从定位
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

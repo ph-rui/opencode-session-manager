@@ -256,6 +256,9 @@ table#list { width: 100%; border-collapse: collapse; }
 .reasoning { margin: 6px 0; }
 .reasoning > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 11px; }
 .reasoning > summary::-webkit-details-marker { display: none; }
+/* 箭头随展开状态变化(流式期间会被自动展开) */
+.reasoning > summary::before { content: '▸ '; }
+.reasoning[open] > summary::before { content: '▾ '; }
 .reasoning .content { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
 
 /* --------------------------- 问询卡片 --------------------------- */
@@ -554,3 +557,38 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
   border-radius: 6px;
 }
 .cmdbox textarea { resize: vertical; white-space: pre-wrap; word-break: break-all; }
+
+/* --------------------------- 逐 token 流式 --------------------------- */
+
+/* 流式光标(▌ 闪烁) */
+.cursor {
+  display: inline-block;
+  width: 0.55em;
+  margin-left: 1px;
+  color: var(--accent);
+  animation: ocs-blink 1.1s steps(1) infinite;
+}
+@keyframes ocs-blink {
+  50% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cursor { animation: none; }
+}
+
+/* 标题行的「输出中」标记 */
+.live-tag {
+  flex: none;
+  align-self: center;
+  margin-left: 2px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.85;
+}
+
+/* 流式消息:左侧色条做一个轻微的呼吸,提示内容在增长 */
+.msg.assistant.live { border-left-color: var(--accent); }
+.msg.assistant.live .meta { opacity: 0.75; }

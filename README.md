@@ -65,6 +65,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 - 按工程目录过滤(服务端 `directory`)
 - 管理动作:重命名、删除、移动到其它工程目录、分叉
 - 点击会话打开对话:加载历史消息、发送消息、`/api/event` SSE 实时刷新
+- **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **会话控制**(输入框上方的工具栏):
   - **运行状态**:列表与标题栏显示 `● 运行中` / `◌ 重试中`,数据来自 `GET /api/session/active` 与 `session.status` / `session.idle` 事件
   - **中断**:运行中才出现 `■ 中断`,调用 `POST /api/session/:id/interrupt`
@@ -129,9 +130,54 @@ chmod 600 ~/.config/opencode-session-manager/env
   (help 原文:「Session ID to continue, or to create if it does not exist」)。面板给出这条命令并提供「复制」;
   局域网是 http(非 secure context),`navigator.clipboard` 多半不可用,此时回落到选中文本 + `document.execCommand('copy')`。
 
+## 流式渲染(逐 token)
+
+**为什么必须在前端自己拼**:OpenCode 在流式过程中**不会**把半成品文本写进消息接口 ——
+`GET /api/session/:id/message` 里助手消息的 parts 会随 step 逐个出现,但 `text` 一直是空串,
+直到整段结束才一次性写入(实测:90 秒的等待里 `text` 长度始终为 0,结束时从 0 跳到 904)。所以只靠「事件触发重取消息」是看不到逐字效果的。
+
+面板订阅 `/api/event` 并**直接消费 part 增量事件**,维护一份本地缓冲,再与服务端权威版本对账。
+
+### 消费的事件
+
+| 事件 | 载荷 | 用途 |
+| --- | --- | --- |
+| `session.step.started` | `{assistantMessageID, agent, model, started}` | 建立本地缓冲,立刻显示助手气泡 |
+| `session.reasoning.started` / `.delta` / `.ended` | `{assistantMessageID, ordinal, delta?, text?}` | 思考块流式 |
+| `session.text.started` / `.delta` / `.ended` | 同上 | 正文流式 |
+| `session.tool.input.started` / `.delta` / `.ended` | `{assistantMessageID, id, name, delta?, text?}` | 工具参数流式 |
+| `session.tool.called` / `.progress` / `.success` / `.failed` | `{assistantMessageID, id, input?, content?, metadata?}` | 工具状态与输出 |
+| `session.step.ended` | `{assistantMessageID, finish, cost, tokens}` | 用量落定 |
+| `session.usage.updated` | `{sessionID, cost, tokens}` | 用量刷新 |
+
+### 三条容易踩的语义
+
+1. **一个 step 就是一条助手消息**。`assistantMessageID` 每 step 都不同,所以不会跨 step 撞序号。
+2. **`ordinal` 是「同一类型里的第几个」,不是 `content` 下标**。一条消息里 `reasoning` 与 `text` 的 `ordinal` 都从 0 开始
+   (实测 content 为 `[reasoning, text]` 时两者都是 0),因此前端按 `类型:序号` 建键,而不是直接索引 `content`。
+3. **`*.ended` 带权威全文**,实测与增量累加**完全一致**(457/457、706/706、36/36)。所以覆盖是幂等的:
+   正常路径靠增量渲染,`ended` 兜住任何丢包。
+
+### 对账规则(本地缓冲 vs 服务端)
+
+- 只要服务端消息**还没有** `time.completed`,就用本地缓冲渲染该条消息(服务端此时只有空骨架,覆盖不会倒退)。
+- 一旦服务端消息带上 `time.completed`,立刻丢掉本地缓冲、回到服务端版本(它是权威),并按需要重新拉取一次。
+- 回合收束(`session.execution.*`)把缓冲标记为关闭 —— 但**仍然显示**,直到服务端给出权威版本,避免文字闪没。
+
+### 增量重绘(不整条重建)
+
+- 消息签名分两种:非流式用 `JSON.stringify(消息)`,流式用**结构指纹**(part 类型 / 序号 / 工具状态 / 有无 tokens),
+  **刻意不含文本长度** —— 所以每次 delta 都不会触发整条消息重建。
+- 纯文本变化走 `paintLiveText()`:只把受影响的那个 block 节点重新渲染 Markdown,其它消息、同一条消息的其它块、
+  标题行都不动(DOM 节点 identity 保持不变,已展开的 `<details>` 状态也不会丢)。
+- 纯文本增量事件(`session.text.delta` / `session.reasoning.delta`)**不再触发消息重取**,省掉每秒数次的无谓请求;
+  其余事件仍保留 150ms 防抖对账。
+- 光标 `▌` 总是落在**最后一个文本/思考块**内部的行内末尾(直接拼在 Markdown 结果后面会掉到块级元素之外、单独占一行)。
+- 流式期间思考块自动展开(`▾ 思考`),回合结束后回落到折叠态(`▸ 思考`)—— 与服务端版本一致。
+
 ## 尚未实现(v2+ 剩余项)
 
-文件附件;以及事件增量驱动的逐 token 流式渲染(目前仍是「事件触发重取消息」)。
+文件附件。
 
 ## 测试
 
@@ -143,18 +189,23 @@ bash test/e2e-asks.sh         # 问询端到端(纯 curl):创建表单→应答/
 bash test/e2e-controls.sh     # 会话控制端到端(纯 curl):agent/model 切换、中断、inbox 改投递/取消
 OCS_E2E_LLM=1 bash test/e2e-controls.sh   # 追加真实运行中的 queue/steer/interrupt 用例(会消耗一次很小的模型调用)
 bash test/e2e-capabilities.sh # 能力扩展端到端(纯 curl):新建→归档→导出→导入(含 409/400 负例)→清理
+bash test/e2e-stream.sh       # 流式端到端(纯 curl):事件流形状;默认只跑不消耗模型的部分
+OCS_E2E_LLM=1 OCS_E2E_MODEL=company/deepseek-v4-flash bash test/e2e-stream.sh   # 追加真实逐 token 流式断言
 node test/ui-asks-run.js      # 问询前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-controls-run.js  # 会话控制前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
 - `smoke.sh`:35 项。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
 - `e2e-capabilities.sh`:26 项。只用临时会话与 `/tmp` 临时目录,结束时全部删除;验证新建的字段落库、`PATCH metadata` 的整体替换语义、导出脱敏与否、导入的换 ID 与 `location` 重挂、以及 `409`/`400` 负例。
+- `e2e-stream.sh`:4 项(开 `OCS_E2E_LLM=1` 为 27 项)。默认部分只验证事件流形状(单行 `data:`、无 `event:` 行、首帧 `server.connected`、每帧合法 JSON);开了 LLM 后追加真实流式断言:出现 `step.started`、增量 `>= 5` 个且**累加严格等于** `ended.text`、事件顺序 `started→delta→ended`、`step.ended` 带 finish 与 output tokens、`execution.succeeded`,以及**流式期间服务端不提供半成品文本**(这正是前端必须自己消费增量的原因)。默认模型未必配好,可用 `OCS_E2E_MODEL=provider/modelID` 指定。
 - `ui-asks-run.js`:39 项浏览器内断言(真实 `public/app.js`),覆盖字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装、本地校验分支、非 http(s) 链接不可点击。
 - `ui-controls-run.js`:83 项浏览器内断言,覆盖 agent/model 选择器的过滤与分组、切换请求体、变体显隐、中断/投递控件的显隐、运行状态文案与列表标记、待发送队列渲染与操作请求、发送时的 `delivery` 选择、事件到运行状态的映射。
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
+- `ui-stream-run.js`:96 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。
 
 ## 开机自启(systemd 用户服务)
 
@@ -201,3 +252,8 @@ journalctl --user -u opencode-session-manager.service -f
 - 发送消息时若不显式给 `delivery`,服务端会补成 `steer`;只有会话正在运行时 `queue` 才会真正滞留在 inbox 里(`turn` 结束后自动投递)。空闲会话即使传 `queue` 也会立即执行。
 - 切换到 Plan 智能体会往 inbox 注入一条 `type:"synthetic"` 的系统提醒;是否仍留在队列取决于时机,因此前端一律按 `type` 过滤。
 - `PATCH /api/session/{id}/inbox/{iid}` 对不存在的条目返回 **409**(而非 `404`);`DELETE` 则幂等返回 **204**。前端据此提示并重新拉取队列。
+- **流式期间消息接口不给半成品文本**:`GET /api/session/{id}/message` 里助手消息的 parts 会随着 step 出现,但 `text` 一直是空串,整段结束才一次性写入(实测等待期间长度为 0 → 结束时 904)。因此逐字显示只能靠消费 `session.text.delta` / `session.reasoning.delta`。
+- `session.text.ended` / `session.reasoning.ended` 的 `text` 与增量累加**逐字节一致**(457/457、706/706、36/36),所以「以 `ended.text` 覆盖」是幂等的兜底,不会与增量冲突。
+- `ordinal` 是**同一类型内的序号**,不是 `content` 下标:content 为 `[reasoning, text]` 时两者的 `ordinal` 都是 0。前端按 `类型:序号` 建键。
+- **一个 step 对应一条助手消息**:多 step 回合(如先调工具再总结)里 `assistantMessageID` 每 step 都不同,所以不会跨 step 撞序号。
+- 工具事件的载荷:`tool.input.started` 带 `{id, name}`(**没有** `ordinal`),`tool.input.ended` 带完整 JSON 参数字符串,`tool.called` 带已解析的 `input`,`tool.success` 带 `content` / `metadata`。

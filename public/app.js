@@ -23,6 +23,7 @@ const store = {
   delivery: 'queue', // 运行中消息的投递方式
   ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
   showArchived: false, // 列表是否显示已归档会话
+  live: new Map(), // assistantMessageID -> 流式本地缓冲(见「逐 token 流式」)
 };
 
 const $ = (s) => document.querySelector(s);
@@ -944,9 +945,23 @@ async function loadMessages(opts) {
     const j = await api('/api/session/' + encodeURIComponent(id) + '/message?' + q.toString());
     (j.data || []).forEach((m) => store.messages.set(m.id, m));
     store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
+    pruneLive();
     renderMessages();
   } catch (e) {
     console.error('loadMessages', e);
+  }
+}
+
+// 服务端一旦给出权威完整版本(time.completed),本地缓冲就失去意义;
+// 另外顺手回收「已结束且不属于当前会话」的陈旧缓冲,避免无限增长。
+function pruneLive() {
+  for (const [id, L] of store.live) {
+    const base = store.messages.get(id);
+    if (base && base.time && base.time.completed) {
+      store.live.delete(id);
+      continue;
+    }
+    if (!L.open && L.sid !== store.selected && !store.messages.has(id)) store.live.delete(id);
   }
 }
 
@@ -1160,7 +1175,7 @@ function toolHtml(p) {
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
-  el.className = 'msg ' + m.type;
+  el.className = 'msg ' + m.type + (m.live ? ' live' : '');
 
   if (m.type === 'user') {
     el.innerHTML =
@@ -1170,20 +1185,43 @@ function renderMessage(m, opts) {
   }
 
   if (m.type === 'assistant') {
+    const content = m.content || [];
+    // 流式时光标落在最后一个文本/思考块上
+    let lastBlock = -1;
+    for (let i = 0; i < content.length; i++) {
+      const q = content[i];
+      if (q.type === 'text' || q.type === 'reasoning') lastBlock = i;
+    }
+    let nText = 0;
+    let nReason = 0;
     let html =
       '<div class="turn-head"><span class="marker">⏺</span>' +
       '<span class="who">助手</span>' +
       (opts.showModel && m.model && m.model.id
         ? '<span class="model">' + esc(m.model.id) + '</span>'
         : '') +
+      (m.live ? '<span class="live-tag">输出中</span>' : '') +
       '</div>';
-    for (const p of m.content || []) {
+    for (let i = 0; i < content.length; i++) {
+      const p = content[i];
+      const isLast = i === lastBlock;
+      // data-lk 让增量重绘定位到对应节点;data-lk-last 标记光标落在哪一块
+      const lk = m.live
+        ? ' data-lk="' + p.type + ':' + (p.type === 'text' ? nText : nReason) + '"' +
+          ' data-lk-last="' + (isLast ? '1' : '0') + '"' +
+          ' data-lk-key="' + (p.text || '').length + ':0"'
+        : '';
+      const body = md(p.text || '');
+      const shown = m.live && isLast ? cursorInto(body) : body;
       if (p.type === 'text') {
-        html += '<div class="content">' + md(p.text || '') + '</div>';
+        nText++;
+        html += '<div class="content"' + lk + '>' + shown + '</div>';
       } else if (p.type === 'reasoning') {
+        nReason++;
+        // 流式期间展开思考块,回合结束后仍回落成折叠态(与服务端版本一致)
         html +=
-          '<details class="reasoning"><summary>▸ 思考</summary>' +
-          '<div class="content">' + md(p.text || '') + '</div></details>';
+          '<details class="reasoning"' + (m.live ? ' open' : '') + '><summary>思考</summary>' +
+          '<div class="content"' + lk + '>' + shown + '</div></details>';
       } else if (p.type === 'tool') {
         html += toolHtml(p);
       }
@@ -1191,7 +1229,9 @@ function renderMessage(m, opts) {
     if (m.tokens) {
       html +=
         '<div class="meta">' + esc(fmtTokens(m.tokens)) + ' tokens' +
-        (m.cost ? ' · ' + esc(fmtCost(m.cost)) : '') + '</div>';
+        (m.cost ? ' · ' + esc(fmtCost(m.cost)) : '') +
+        (m.live ? ' · 流式中' : '') +
+        '</div>';
     }
     el.innerHTML = html;
     return el;
@@ -1208,16 +1248,22 @@ const msgEls = new Map(); // message id -> { sig, el }
 
 function renderMessages() {
   const box = $('#messages');
-  const msgs = Array.from(store.messages.values()).sort(
-    (a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0)
-  );
+  const msgs = Array.from(store.messages.values());
+  // 本地流式缓冲里已有、但服务端消息列表还没出现的助手消息,补进渲染列表
+  for (const [id, L] of store.live) {
+    if (L.sid !== store.selected) continue;
+    if (!liveView(id)) continue;
+    if (store.messages.has(id)) continue;
+    msgs.push(liveMessage(L));
+  }
+  msgs.sort((a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0));
   const force = store.forceBottom;
   store.forceBottom = false;
   const nearBottom = force || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
 
-  // 删除已不存在的消息
+  // 删除已不存在的消息(live 缓冲里的消息不算「不存在」)
   for (const [id, rec] of msgEls) {
-    if (!store.messages.has(id)) {
+    if (!store.messages.has(id) && !liveView(id)) {
       rec.el.remove();
       msgEls.delete(id);
     }
@@ -1227,19 +1273,24 @@ function renderMessages() {
   let prev = null;
   let prevModel = null;
   for (const m of msgs) {
+    const L = liveView(m.id);
+    const view = L ? liveMessage(L) : m;
     const showModel =
-      m.type === 'assistant' && !!(m.model && m.model.id) && m.model.id !== prevModel;
-    if (m.type === 'assistant' && m.model && m.model.id) prevModel = m.model.id;
-    const sig = JSON.stringify(m) + '|' + (showModel ? '1' : '0');
+      view.type === 'assistant' && !!(view.model && view.model.id) && view.model.id !== prevModel;
+    if (view.type === 'assistant' && view.model && view.model.id) prevModel = view.model.id;
+    // 流式消息用结构指纹做签名(不含文本长度),文本增量走 paintLiveText 局部重绘
+    const sig = (L ? 'live|' + liveSig(L) : JSON.stringify(view)) + '|' + (showModel ? '1' : '0');
     let rec = msgEls.get(m.id);
     if (!rec) {
-      rec = { sig, el: renderMessage(m, { showModel }) };
+      rec = { sig: sig, el: renderMessage(view, { showModel }) };
       msgEls.set(m.id, rec);
     } else if (rec.sig !== sig) {
-      const el = renderMessage(m, { showModel });
+      const el = renderMessage(view, { showModel });
       rec.el.replaceWith(el);
       rec.el = el;
       rec.sig = sig;
+    } else if (L) {
+      paintLiveText(rec.el, L);
     }
     const anchor = prev ? prev.nextSibling : box.firstChild;
     if (rec.el !== anchor) box.insertBefore(rec.el, anchor);
@@ -1252,7 +1303,7 @@ function renderMessages() {
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
   const streaming = !!(last && last.type === 'assistant' && last.time && !last.time.completed);
-  store.running = store.pending || streaming;
+  store.running = store.pending || streaming || !!liveForSid(store.selected);
   updateChatStatus();
 }
 
@@ -1952,6 +2003,314 @@ async function send() {
   }, 300);
 }
 
+/* ----------------------------- 逐 token 流式 ----------------------------- */
+//
+// 为什么需要本地缓冲:OpenCode 在流式过程中**不会**把半成品文本写进消息接口 ——
+// parts 会随 step 出现,但 text 一直是空串,直到整段结束才一次性写入(实测)。
+// 所以想要逐字显示,只能在会话里消费增量事件自己拼。
+//
+// 事件契约(实测 v2.0.28;一个 step = 一条助手消息,assistantMessageID 每 step 不同):
+//   session.step.started        {assistantMessageID, agent, model, started}
+//   session.reasoning.started   {assistantMessageID, ordinal}
+//   session.reasoning.delta     {assistantMessageID, ordinal, delta}
+//   session.reasoning.ended     {assistantMessageID, ordinal, text}   ← text 为权威全文
+//   session.text.started|delta|ended   同上
+//   session.tool.input.started  {assistantMessageID, id, name}
+//   session.tool.input.delta    {assistantMessageID, id, delta}
+//   session.tool.input.ended    {assistantMessageID, id, text}        ← 完整 JSON 参数
+//   session.tool.called         {assistantMessageID, id, input}
+//   session.tool.progress       {assistantMessageID, id, metadata}
+//   session.tool.success        {assistantMessageID, id, content, metadata}
+//   session.tool.failed         {assistantMessageID, id, ...}
+//   session.step.ended          {assistantMessageID, finish, cost, tokens}
+//   session.usage.updated       {sessionID, cost, tokens}
+//
+// 注意 `ordinal` 是「同一类型里的第几个」,不是 content 下标:
+// 一条消息里 reasoning 与 text 的 ordinal 都会从 0 开始(实测 content=[reasoning, text] 时两者都是 0)。
+//
+// 对账策略:本地缓冲只在「服务端还没有权威完整版本」时覆盖渲染;
+// 一旦服务端消息带上了 time.completed,就丢掉缓冲、回到服务端版本(它是权威)。
+
+function liveRecord(id) {
+  return store.live.get(id) || null;
+}
+
+function liveBlock(L, type, ordinal) {
+  const key = type + ':' + ordinal;
+  let p = L.byKey[key];
+  if (!p) {
+    p = { kind: 'block', type: type, ordinal: ordinal, text: '', final: false };
+    L.byKey[key] = p;
+    L.parts.push(p);
+  }
+  return p;
+}
+
+function liveTool(L, id) {
+  const key = 'tool:' + id;
+  let p = L.byKey[key];
+  if (!p) {
+    p = { kind: 'tool', id: id, name: '', state: { status: 'streaming' }, time: {} };
+    L.byKey[key] = p;
+    L.parts.push(p);
+  }
+  return p;
+}
+
+function liveStart(e) {
+  const d = e.data || {};
+  const id = d.assistantMessageID;
+  if (!id) return null;
+  let L = store.live.get(id);
+  if (!L) {
+    L = {
+      id: id,
+      sid: d.sessionID,
+      started: d.started || Date.now(),
+      agent: d.agent || null,
+      model: d.model || null,
+      parts: [],
+      byKey: {},
+      tokens: null,
+      cost: null,
+      finish: null,
+      open: true,
+    };
+    store.live.set(id, L);
+  }
+  return L;
+}
+
+function liveForSid(sid) {
+  for (const L of store.live.values()) {
+    if (L.sid === sid && liveView(L.id)) return L;
+  }
+  return null;
+}
+
+// 服务端已有权威完整版本时返回 null,表示不再用本地缓冲覆盖
+function liveView(id) {
+  const L = store.live.get(id);
+  if (!L) return null;
+  const base = store.messages.get(id);
+  if (base && base.time && base.time.completed) return null;
+  return L;
+}
+
+// 纯文本增量:本地已经渲染,不需要再拉一次消息接口
+function isStreamDelta(t) {
+  return t === 'session.text.delta' || t === 'session.reasoning.delta';
+}
+
+// 会改动本地缓冲、需要立刻局部重绘的事件(含 *.ended:它用权威全文覆盖)
+function isStreamLocal(t) {
+  return (
+    t === 'session.text.delta' || t === 'session.reasoning.delta' ||
+    t === 'session.text.ended' || t === 'session.reasoning.ended'
+  );
+}
+
+// 事件入口。返回 true 表示「结构变了」(新增 part / 工具状态变化),需要整条重绘;
+// 返回 false 表示只是文本增量,交给 paintLiveDelta 做局部重绘。
+function handleStreamEvent(e) {
+  const t = e.type || '';
+  const d = e.data || {};
+
+  if (t.indexOf('session.text.') === 0 || t.indexOf('session.reasoning.') === 0) {
+    const kind = t.indexOf('session.text.') === 0 ? 'text' : 'reasoning';
+    const id = d.assistantMessageID;
+    if (!id) return false;
+    if (t === 'session.text.started' || t === 'session.reasoning.started') {
+      const L = liveStart(e);
+      if (!L) return false;
+      liveBlock(L, kind, d.ordinal || 0);
+      return true;
+    }
+    const L = store.live.get(id);
+    if (!L) return false;
+    const p = liveBlock(L, kind, d.ordinal || 0);
+    if (t === 'session.text.delta' || t === 'session.reasoning.delta') {
+      p.text += d.delta || '';
+      return false;
+    }
+    if (t === 'session.text.ended' || t === 'session.reasoning.ended') {
+      // *.ended 带权威全文(实测与增量累加逐字节一致),以它为准可兜住任何丢包
+      if (typeof d.text === 'string') p.text = d.text;
+      p.final = true;
+      return false;
+    }
+    return false; // 未知的 session.text.* / session.reasoning.*,不认领
+  }
+
+  if (t.indexOf('session.tool.') === 0) {
+    if (!d.assistantMessageID) return false;
+    // 进度事件不改变结构,也不该凭空造出工具卡片
+    if (t === 'session.tool.progress') {
+      const L0 = store.live.get(d.assistantMessageID);
+      const p0 = L0 && L0.byKey['tool:' + d.id];
+      if (p0) p0.state.metadata = d.metadata || p0.state.metadata;
+      return false;
+    }
+    const L = liveStart(e);
+    if (!L) return false;
+    const p = liveTool(L, d.id);
+    if (t === 'session.tool.input.started') {
+      p.name = d.name || p.name;
+      p.state.status = 'streaming';
+    } else if (t === 'session.tool.input.delta') {
+      p.state.status = 'streaming';
+    } else if (t === 'session.tool.input.ended') {
+      p.name = d.name || p.name;
+    } else if (t === 'session.tool.called') {
+      p.state.status = 'running';
+      p.state.input = d.input;
+      p.time.ran = Date.now();
+    } else if (t === 'session.tool.success') {
+      p.state.status = 'completed';
+      p.state.content = d.content;
+      p.state.metadata = d.metadata;
+      p.time.completed = Date.now();
+    } else if (t === 'session.tool.failed') {
+      p.state.status = 'error';
+      if (d.error) p.state.error = d.error;
+      p.time.completed = Date.now();
+    }
+    return true;
+  }
+
+  if (t === 'session.step.started') {
+    return !!liveStart(e);
+  }
+
+  if (t === 'session.step.ended') {
+    const L = store.live.get(d.assistantMessageID);
+    if (L) {
+      L.finish = d.finish || null;
+      if (d.tokens) L.tokens = d.tokens;
+      if (typeof d.cost === 'number') L.cost = d.cost;
+    }
+    return !!L;
+  }
+
+  if (t === 'session.usage.updated') {
+    let any = false;
+    for (const L of store.live.values()) {
+      if (L.sid !== d.sessionID || !L.open) continue;
+      if (d.tokens) L.tokens = d.tokens;
+      if (typeof d.cost === 'number') L.cost = d.cost;
+      any = true;
+    }
+    return any;
+  }
+
+  if (t.indexOf('session.execution.') === 0) {
+    // 回合收束:缓冲标记为关闭(但仍显示,直到服务端给出权威版本)
+    let any = false;
+    for (const L of store.live.values()) {
+      if (L.sid === d.sessionID) {
+        L.open = false;
+        any = true;
+      }
+    }
+    return any;
+  }
+
+  return false;
+}
+
+// 把本地缓冲拼成渲染用的助手消息(结构与服务端 Session.Message.Info 对齐)
+function liveMessage(L) {
+  const base = store.messages.get(L.id) || {};
+  return {
+    id: L.id,
+    type: 'assistant',
+    agent: L.agent,
+    model: L.model || base.model,
+    time: base.time || { created: L.started },
+    tokens: L.tokens || base.tokens,
+    cost: L.cost != null ? L.cost : base.cost,
+    content: L.parts.map((p) =>
+      p.kind === 'tool'
+        ? { type: 'tool', id: p.id, name: p.name, executed: false, state: p.state, time: p.time }
+        : { type: p.type, text: p.text }
+    ),
+    live: true,
+  };
+}
+
+// 结构指纹:刻意不含文本长度,这样纯文本增量不会触发整条重建
+function liveSig(L) {
+  return (
+    L.parts
+      .map((p) =>
+        p.kind === 'tool'
+          ? 't:' + p.id + ':' + ((p.state && p.state.status) || '')
+          : p.type + ':' + p.ordinal + ':' + (p.final ? 1 : 0)
+      )
+      .join(',') +
+    '|' + (L.tokens ? 1 : 0) +
+    '|' + (L.open ? 1 : 0) +
+    '|' + (L.finish || '')
+  );
+}
+
+// 把流式光标放进「最后一段内容」的行内末尾。
+// 直接拼在 md() 结果后面会落在块级元素之外(如 </ol> 之后),于是单独占一行。
+function cursorInto(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const blocks = tmp.querySelectorAll('p, li, pre, blockquote, h1, h2, h3, h4, h5, h6, td, th');
+  const host = blocks.length ? blocks[blocks.length - 1] : tmp;
+  const c = document.createElement('span');
+  c.className = 'cursor';
+  c.textContent = '▌';
+  host.appendChild(c);
+  return tmp.innerHTML;
+}
+
+// 纯文本增量:只重刷受影响的 block 节点,不重建整条消息、也不动其它消息
+function paintLiveText(el, L) {
+  let changed = false;
+  for (const p of L.parts) {
+    if (p.kind !== 'block') continue;
+    const node = el.querySelector('[data-lk="' + p.type + ':' + p.ordinal + '"]');
+    if (!node) continue;
+    const key = p.text.length + ':' + (p.final ? 1 : 0);
+    if (node.dataset.lkKey === key) continue;
+    const body = md(p.text);
+    node.innerHTML = node.dataset.lkLast === '1' ? cursorInto(body) : body;
+    node.dataset.lkKey = key;
+    changed = true;
+  }
+  return changed;
+}
+
+function paintLiveDelta() {
+  const sid = store.selected;
+  if (!sid) return;
+  const box = $('#messages');
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  let changed = false;
+  let needFull = false;
+  for (const [id, L] of store.live) {
+    if (L.sid !== sid || !liveView(id)) continue;
+    const rec = msgEls.get(id);
+    if (!rec) {
+      needFull = true;
+      continue;
+    }
+    if (paintLiveText(rec.el, L)) changed = true;
+  }
+  if (needFull) {
+    renderMessages();
+    return;
+  }
+  if (changed) {
+    if (nearBottom) box.scrollTop = box.scrollHeight;
+    updateChatStatus();
+  }
+}
+
 /* ----------------------------- 事件流 ----------------------------- */
 
 let msgTimer = null;
@@ -2031,6 +2390,7 @@ function handleControlEvent(e) {
       store.sessions.delete(id);
       store.active.delete(id);
       store.inbox.delete(id);
+      for (const [mid, L] of store.live) if (L.sid === id) store.live.delete(mid);
       if (store.selected === id) {
         store.selected = null;
         renderInbox();
@@ -2056,6 +2416,29 @@ function handleControlEvent(e) {
   }
 }
 
+// 单条事件的统一入口(独立出来便于测试,也让 setupEvents 更薄)
+function handleEvent(e) {
+  if (!e || !e.type) return;
+  handleAskEvent(e);
+  const structural = handleStreamEvent(e);
+  handleControlEvent(e);
+  // 有本地缓冲的文本事件才算「已经渲染过」;没有缓冲(例如中途接入时才收到 delta)
+  // 就退回老的「事件触发重取」路径,不至于把内容漏掉。
+  const local = isStreamLocal(e.type) && !!store.live.get((e.data || {}).assistantMessageID || '');
+  // 结构变化(新 part / 工具状态)立刻重绘;纯文本变化只刷局部节点
+  if (structural && liveForSid(store.selected)) renderMessages();
+  else if (local) paintLiveDelta();
+  // 纯文本增量本地已经渲染,不需要再拉一次消息;*.ended 与其它事件保持防抖对账
+  if (!(local && isStreamDelta(e.type))) {
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(() => {
+      if (store.selected) loadMessages({ older: false });
+    }, 150);
+  }
+  clearTimeout(listTimer);
+  listTimer = setTimeout(() => loadSessions({}), 1500);
+}
+
 function setupEvents() {
   const es = new EventSource('/api/event');
   es.onmessage = (ev) => {
@@ -2063,16 +2446,7 @@ function setupEvents() {
     try {
       e = JSON.parse(ev.data);
     } catch (_) {}
-    if (e && e.type) {
-      handleAskEvent(e);
-      handleControlEvent(e);
-    }
-    clearTimeout(msgTimer);
-    msgTimer = setTimeout(() => {
-      if (store.selected) loadMessages({ older: false });
-    }, 150);
-    clearTimeout(listTimer);
-    listTimer = setTimeout(() => loadSessions({}), 1500);
+    handleEvent(e);
   };
   es.onopen = () => health();
   es.onerror = () => {

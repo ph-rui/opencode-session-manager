@@ -167,7 +167,45 @@ opencode-session-manager/
   - 深链跳回 TUI:OpenCode 没有自定义 URL scheme,落地形式是 CLI 命令 `opencode --session <id> <directory>`
     (help:「Session ID to continue, or to create if it does not exist」)。面板给出可直接粘贴的命令并尝试复制;
     局域网 http 访问不是 secure context,`navigator.clipboard` 通常不可用,故回落到选中文本 + `document.execCommand('copy')`。
-- 渲染升级:直接消费事件里的 part 增量,做逐 token 流式与增量合并。
+- **C 渲染升级(已实现)** — 消费 part 增量做逐 token 流式与增量合并。
+
+  **为什么必须在前端自己拼**:实测 `GET /api/session/:id/message` 在流式过程中**不返回半成品文本** ——
+  助手消息的 parts 会随 step 逐个出现,但 `text` 一直为空串,直到整段结束才一次性写入
+  (一次 90 秒的等待里 `text` 长度始终为 0,`time.completed` 出现时从 0 跳到 904)。
+  所以「事件触发重取消息」最多只能做到整段落地时刷新一次,逐字效果只能靠消费增量事件。
+
+  - 事件契约(实测 v2.0.28):
+    | 事件 | 载荷 |
+    | --- | --- |
+    | `session.step.started` | `{sessionID, agent, model, assistantMessageID, started}` |
+    | `session.reasoning.started/.delta/.ended` | `{sessionID, assistantMessageID, ordinal, delta?/text?}` |
+    | `session.text.started/.delta/.ended` | 同上 |
+    | `session.tool.input.started/.delta/.ended` | `{sessionID, assistantMessageID, id, name, delta?/text?}`(**无 ordinal**) |
+    | `session.tool.called` | `{sessionID, assistantMessageID, id, input, executed}` |
+    | `session.tool.progress` | `{sessionID, assistantMessageID, id, metadata}` |
+    | `session.tool.success` | `{sessionID, assistantMessageID, id, content, metadata}` |
+    | `session.tool.failed` | `{sessionID, assistantMessageID, id, error?}` |
+    | `session.step.ended` | `{sessionID, assistantMessageID, finish, cost, tokens}` |
+    | `session.usage.updated` | `{sessionID, cost, tokens}`(**无 location**) |
+  - 三条关键语义:
+    (a) **一个 step 就是一条助手消息** —— 多 step 回合(先调工具再总结)里 `assistantMessageID` 每 step 都不同,因此不会跨 step 撞序号;
+    (b) **`ordinal` 是「同一类型内的序号」而非 `content` 下标** —— content 为 `[reasoning, text]` 时两者的 `ordinal` 都是 0,
+        所以前端按 `类型:序号` 建键(直接索引 `content` 会错位);
+    (c) **`*.ended` 的 `text` 与增量累加逐字节一致**(457/457、706/706、36/36),因此「以 `ended.text` 覆盖」是幂等的兜底,
+        正常路径靠增量渲染,`ended` 兜住丢包。
+  - 本地缓冲与对账:每个 `assistantMessageID` 一份缓冲(`kind:'block'` 的文本/思考块 + `kind:'tool'` 的工具块,按事件到达顺序)。
+    只要服务端消息**还没有** `time.completed` 就用缓冲渲染该条(服务端此时只有空骨架,覆盖不会倒退);
+    一旦带上 `time.completed` 就丢弃缓冲、回到服务端权威版本。回合收束(`session.execution.*`)只把缓冲标记为关闭,
+    **仍然显示**直到服务端给出权威版本,避免文字闪没。「已关闭且非当前会话且服务端也没有」的缓冲会被回收,避免无限增长。
+  - 增量合并(不整条重建):消息签名分两种 —— 非流式用 `JSON.stringify(消息)`,流式用**结构指纹**
+    (part 类型/序号/工具状态/有无 tokens/finish/开关状态),**刻意不含文本长度**;
+    于是纯文本 delta 不改变签名,由 `paintLiveText()` 只重刷受影响的那个 block 节点(其它消息、同条消息的其它块、标题行都不动,
+    DOM 节点 identity 与已展开的 `<details>` 状态都保持)。
+  - 事件分流:`session.text.delta` / `session.reasoning.delta` **不再触发消息重取**(本地已渲染,省掉每秒数次无谓请求);
+    `*.ended` 也不重取(但要立刻局部重绘);其余事件保持 150ms 防抖对账。结构变化(新 part / 工具状态)立即整条重绘。
+  - 视觉:光标 `▌` 落在**最后一个文本/思考块内部的行内末尾**(直接拼在 Markdown 结果后会掉到块级元素之外、单独占一行);
+    流式期间思考块自动展开(`▾ 思考`),回合结束后回落折叠态(`▸ 思考`),与服务端版本一致;
+    标题行加「输出中」徽标,用量行加「流式中」。
 
 ## 8. 测试
 
@@ -185,7 +223,10 @@ opencode-session-manager/
 - [ ] 移动到新目录后,该会话的工程目录更新。
 - [ ] 删除后会话从列表消失。
 - [ ] 打开会话能看到历史消息(user/assistant/tool 渲染正确)。
-- [ ] 输入并发送消息后,能流式看到助手回复刷新。
+- [ ] 输入并发送消息后,能逐字看到助手回复流出(Markdown 实时重排、末尾有闪烁光标、标题行有「输出中」徽标)。
+- [ ] 流式期间思考块自动展开并逐字增长;回合结束后回落成折叠态(`▸ 思考`)。
+- [ ] 助手调用工具时,工具卡片在参数流式阶段就出现,状态由「运行中」变为「已完成」并展示输出。
+- [ ] 回复落地后与流式过程看到的内容一致,消息不重复、不闪回(本地缓冲被服务端权威版本替换)。
 - [ ] 停掉 OpenCode 服务时,页面给出清晰错误提示而非白屏。
 - [ ] 触发一次 `question` 工具问询:底部出现卡片,提交后助手继续;列表徽标消失。
 - [ ] 触发一次需批准的权限请求(需在配置里把某动作设为 `ask`):三个按钮可用,应答后工具继续。
@@ -220,6 +261,28 @@ opencode-session-manager/
 - 离线渲染核对:`/tmp/ocsm-probe/caps-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=list|new|import|export|tui|arch`)逐个截图,
   确认左栏工具行、归档标记、聊天头部操作区与四个对话框的布局;长目录路径在「在 TUI 打开」里折行完整可见。
 
+### 流式渲染的自动化验证(本次已执行)
+- 端到端 `test/e2e-stream.sh`(4 项;`OCS_E2E_LLM=1` 时 27 项,全部通过):
+  默认部分只验证事件流形状(单行 `data:`、无 `event:` 行、首帧 `server.connected`、每帧合法 JSON);
+  开 LLM 后追加真实流式断言 —— `step.started` 恰好一个、`text.delta` 增量 `>= 5` 个且**累加严格等于** `ended.text`(457/457)、
+  事件顺序 `started < delta < ended`、所有 part 事件的 `assistantMessageID` 都能对上 step、`step.ended` 带 `finish` 与 `output tokens`,
+  `execution.succeeded` 收束、`reasoning` 与 `text` 的 `ordinal` 各自从 0 起,
+  以及**流式期间(已见到 >= 3 个 delta 时)消息接口的助手消息 parts `>= 1` 但 `text` 长度仍为 0** —— 这正是「必须在前端自拼」的直接证据。
+- 浏览器内断言 `test/ui-stream-run.js`(96 项,真实 `public/app.js`,无头 Firefox):
+  事件分类(`isStreamDelta` / `isStreamLocal`)、`step.started` 立即建气泡并置运行态、
+  **结构指纹不含文本长度**所以 delta 不触发整条重建、节点 identity 保持不变(消息元素 / 文本节点 / 标题行 / 其它消息都不重建)、
+  Markdown 增量重排(加粗、列表)、`ordinal` 按类型计(多文本块各占 `text:0` / `text:1` 且与 `reasoning:0` 不冲突)、
+  `*.ended` 权威覆盖、工具卡片出现与状态流转 + 参数展开、`tool.progress` 不算结构变化也不凭空造卡片、
+  `step.ended` 用量上屏、**服务端半成品(空 text)不覆盖本地文本**、回合收束后仍显示、
+  权威版本到达后回收缓冲且**不重复渲染**、光标位置(落在最后一块内部、不另起一行、随最后一块移交)与思考块展开箭头、
+  非当前会话的缓冲不进入视图、陈旧缓冲回收、无 `assistantMessageID` / 未知事件等边界,
+  以及防抖对账的分流规则(有缓冲的 delta 不排 150ms 重取、无缓冲的 delta 退回重取、`*.ended` 与工具事件仍重取)。
+- 离线渲染核对:`/tmp/ocsm-probe/stream-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=mid|reason|tool|done`)
+  截图 `stream-{mid,reason,tool,done}.png`,确认光标贴在上一个字的行内末尾、思考块展开时的箭头、「输出中」徽标不换行、
+  工具行与用量行的位置。这一轮核对实际抓出了两个肉眼可见的问题(光标掉到块级元素之外单独占一行、徽标被挤到下一行),已修。
+
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?
-- 事件流 v1 采用「事件触发重取」而非精细 delta,是否接受?
+- ~~事件流 v1 采用「事件触发重取」而非精细 delta,是否接受?~~ 已由 C 组升级为**增量驱动**(本地缓冲 + 权威版本对账);
+  仍保留 150ms 防抖重取作为对账兜底,纯文本 delta 不再触发重取。
+- 局域网其它机器能否访问取决于主机防火墙(ufw 放行 `49450/tcp` 需要 sudo,尚未核实)。
