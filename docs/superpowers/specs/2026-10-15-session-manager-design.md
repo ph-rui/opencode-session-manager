@@ -372,8 +372,10 @@ opencode-session-manager/
   浏览器内断言 `ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71。
 - 离线渲染核对:`/tmp/ocsm-probe/tools-build.js` → `tools-preview.html`(真实 `index.html` + `styles.css` + `app.js`),
   其中 `edit` 的两条用的是**从真实会话导出的 tool part**(`/tmp/ocsm-probe/real-diff-parts.json`,不是编的),
-  另加自造的 `write` / `patch`(两文件) / 带诊断的 `edit` / 已答 `question` / 通用 `bash` / `skill` / 运行中的 `edit`。
-  截图 `tools-{edit,write,patch,diag,stream,all}.png`(1400px)与 `narrow-{edit,patch,all}.png`(1100px):
+  另加自造的 `write` / `patch`(两文件) / 带诊断的 `edit` / 已答 `question` / 通用 `bash` / `skill` / 运行中的 `edit`;
+  `?only=real` 更进一步,直接把**一整条真实的助手消息**(`/tmp/ocsm-probe/real-full-msg.json`:`reasoning` + `text` + 带 diff 的 `edit`)
+  交给 `renderMessages()` 渲染,确认 diff 卡片在真实消息流里的位置、`思考` 折叠态与用量行都正常(截图 `real-msg.png`)。
+  其余截图 `tools-{edit,write,patch,diag,stream,all}.png`(1400px)与 `narrow-{edit,patch,all}.png`(1100px):
   diff 行号列对齐、配色正确、`+N -M` 靠右、诊断在 diff 下方、窄屏下 diff 横向滚动而不撑破对话栏、底部输入框稳在视口内。
   这一轮核对实际抓出一个保真度问题(运行中的 `edit` 落进通用分支,把 `oldString: x newString: y` 铺了出来),已修。
 
