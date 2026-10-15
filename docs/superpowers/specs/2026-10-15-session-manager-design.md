@@ -361,6 +361,52 @@ opencode-session-manager/
       `@` 的补全范围仍限于会话的工程目录(要引用外部文件请用 📎,它会复制一份进暂存目录)。
   - **H1–H5 明确不做**:`hashchange` 与「手动改 URL」的同步、会话内滚动位置对「点会话」也还原、
     为每次点会话之外的操作 push 历史、可拖动的字号滑块(只给变量)。
+- **I 组:网页端与 TUI 一致(`/` 命令面板 / `Esc` 中断 / 常用键位)**
+  - **先把两边的真实契约钉死再动手**,这一步同样决定了整块做法:
+    - TUI 的键位权威定义:`session.interrupt` 默认就是 **`escape`(按一下,不是两下)**、
+      `command.palette.show` 是 `ctrl+p`、`prompt.autocomplete.hide` 是 `escape`、`agent.cycle` 是 `shift+tab`、
+      `prompt.history.*` 是 `up`/`down`、`prompt.clear` 是 `ctrl+c`。
+    - 命令只有两条接口:`GET /api/command?location[directory]=<目录>` → `{location, data:[{name, description?}]}`;
+      `POST /api/session/:sid/command` body `{name, text, files?, …}` → **204 无内容**。
+      实测:未知 `name` → `404 CommandNotFoundError`;**缺 `text` → `400 InvalidRequestError`**
+      (`text` 是必填 ⇒ 前端永远带 `text:''`);真命令会把模板展开成**一条普通用户提示词**
+      (`说 $ARGUMENTS 好` + `世界` → `说 世界 好`)—— 也就是说,面板只管把 `name`/`text` 原样递过去。
+    - 命令**随工程走**:必须把 `location[directory]` 传对才看得到该工程的 `.opencode/commands/*.md`;
+      本机的 `init`/`review` 是内置的,与工程无关。**新目录的首次查询可能是空表**(注册表惰性建立),所以 e2e 里要轮询。
+    - TUI 的 `/new` `/sessions` `/models` `/help` `/exit` 等是 **TUI 级内置动作,服务端根本没有 command 端点**,
+      所以它们不可能从 `GET /api/command` 里来,只能由面板映射到已有能力。
+  - **`/` 命令面板**:数据源就是上面那条 `GET /api/command`,按**工程目录缓存**(命令跟着工程变,换会话要重取);
+    面板动作(`PANEL_COMMANDS`,16 个)接在后面,**同名时以服务端为准** —— 否则用户在工程里定义的 `/new`
+    会被面板动作盖掉,而那条是能真正执行的命令。
+  - **触发限定在「输入框为空,或以 `/` 开头」**:`a/b` 这种词中间的 `/` 不弹,免得打扰正常书写。
+    `Ctrl+P` 则无视这个限制(`force`)—— 它就是 TUI 里「随时叫出命令面板」的那个入口。
+  - **补进输入框 ≠ 立刻执行**:选中只把 `/名字 ` 插进去(光标落在其后),再按一次 `Enter` 才发 ——
+    与 TUI 里「autocomplete 选中 / 提交」是两次 `return` 完全一致,也给 `review src/a.ts` 这种带参数的命令留出位置。
+  - **发送时的分流只有一条判据**:正文匹配 `^/(名字)( 参数)?` **且命中命令表**才算命令。
+    没命中的 `/foo` 一律当普通消息发 —— 否则用户写「/etc/passwd 是不是有问题」会静默消失。
+    服务端命令走 `POST …/command`(附件照旧作为 `files[]` 带上,`@` 引用与上传文件都支持);
+    面板动作走本地函数。**只有服务端命令成功后才清空附件**(它确实消费了),面板动作不清。
+  - **`Esc`**:挂在 `document` 上(焦点在别处也管用),优先级是**关命令面板 → 关 `@` 补全 → 中断当前回合**。
+    这条顺序是有意的:TUI 里 `Esc` 先关的是最上层的浮层,只有什么都没开时才轮到 `session.interrupt`;
+    面板里「运行中」本来只有一个 `■ 中断` 按钮,`Esc` 就是它的键盘等价物。
+    - 两条护栏:只在该会话确实在跑时才中断(空闲时按 `Esc` 什么都不做);
+      `<dialog>` 打开时**让对话框自己处理**(`<dialog>` 的原生行为就是 `Esc` 关闭,不能顺手把回合也中断掉)。
+    - 为此给 `mentionKey` 原有的 `Esc` 分支补了一句 `preventDefault`:「已消费」这个信号让全局处理器知道该收手。
+      (它原本只 `return true`,而 `return true` 只对输入框那个监听器有效,`document` 上的监听器看不见。)
+  - **输入历史(`↑`/`↓`)**:只在光标位于**首行**(`↑`)/**末行**(`↓`)时接管 —— 多行输入里方向键的第一职责仍是移动光标。
+    历史**按会话隔离**(`store.history` 是 `Map<sid, string[]>`),连续重复只记一次、上限 50 条;
+    进入历史前先把当前草稿存起来,`↓` 退到底能还原草稿。
+  - **`Shift+Tab` 切智能体**:复用现有的 `switchAgent()`,只在下拉里**跳过空值的「默认」**那一项 ——
+    服务端不允许把 `agent` 置空,切到它就是弹一句「智能体不能置空」,循环里不该出现这种空转。
+  - **只做浏览器拦得住的键位**:`Ctrl+T`(新标签)、`Ctrl+N`、`Ctrl+W`、`Ctrl+L`(地址栏)是浏览器保留的,
+    `preventDefault` 无效,做出来只会是「按了没反应」;`Ctrl+P` 能拦(不然会弹打印),所以采用。
+  - **可测性上做的一处小重构**:把输入框的 `keydown` 接线从 `init()` 里抽成 `setupComposerKeys()`,
+    测试页才能只接这一根线去验「按键优先级」,而不必把整个 `init()` 跑起来。
+  - **`/help` 的一处布局坑**:键位表用两列 grid(`auto 1fr`),小节标题靠 `grid-column: 1 / -1` 跨满整行。
+    最初在小节标题后面多写了一个空的 `<div>`,结果它照样占掉「下一行第 1 列」,导致**其后每一行都整体错一格**
+    (截图里成了「说明在左、按键在右」)。删掉那个空格子即可,并补了一条断言盯着「标题之后紧跟的就是 `kbd`」。
+  - **I 组明确不做**:`Ctrl+C` 清空输入(会把网页里的复制弄坏);把 `Esc` 做成「按两下」——
+    TUI 的默认定义就是单次 `escape`,用户感受到的「两下才断」其实是「第一次在关浮层」。
 
 ## 8. 测试
 
@@ -589,6 +635,58 @@ opencode-session-manager/
   `📎 shot.png image/png · 59.4 KB file:///...`)与缩略图、输入区两种 chip(`@ 引用` 与已上传文件)、
   `@` 补全下拉(目录名淡色 / 文件名加粗、当前项高亮)都如预期。
 
+### I 组(命令面板 / `Esc` 中断 / TUI 键位)的自动化验证(本次已执行)
+- 冒烟 `test/smoke.sh`:**92 项全部通过**(由 74 项起,新增 18 项,全部是**静态**断言 —— 行为验证交给下面两套):
+  命令面板的五个函数(`cmdQuery`/`openCommands`/`acceptCommand`/`mergedCommands`/`commandKey`)、
+  列表按工程取自 `GET /api/command?location[directory]`、命中命令走 `/command` 通道、
+  同名以服务端优先、16 个面板动作齐全(用 python 比对 `{ name: '…' }` 的字面量集合,缺哪个就报哪个)、
+  全局键位接线在 `document` 上、只在会话在跑时中断且对话框打开时不抢键、输入历史与 `Shift+Tab`、`Ctrl+P`、
+  `#cmds`/`#dlgHelp`/`#helpKeys` 三个节点、`#cmds`/`.cmd-tag`/`.keys kbd` 样式,以及三个 I 组测试文件都在。
+  其中**两条新的顺序锁**用 `awk` 取函数体:
+  `setupTuiKeys()` 里必须是 `closeCommands()` → `closeMentions()` → `interrupt()`(这就是 `Esc` 的优先级,写反了会变成「一按 Esc 直接中断」),
+  `setupComposerKeys()` 里必须是 `commandKey` → `mentionKey` → `historyKey` → `send`(输入框里的按键让给谁)。
+- 端到端 `test/e2e-commands.sh`:**40 项全部通过**(纯 curl,只建临时会话与 `/tmp` 临时工程目录,结束时全删)。
+  验的是 `GET /api/command` 与 `POST …/command` 的真实行为:
+  ① 回显查询用的 `location.directory`、列表是数组且每项有 `name`、内置 `init`/`review` 与工程无关;
+  ② 全新工程目录的命令表会被惰性建立起来(首次可能是空表,因此要轮询);
+  ③ 工程内 `.opencode/commands/hello.md` 出现在该工程的列表里、换个目录就看不到(命令确实随 `location` 走);
+  ④ 未知命令 → `404 CommandNotFoundError` 且**不落任何消息**;
+  ⑤ 缺 `text` → `400 InvalidRequestError`(报错指明缺的是 `text`)且同样不落消息;
+  ⑥ 真命令 → `204`,并把模板展开成**一条普通用户提示词**(`说 $ARGUMENTS 好` + `世界` → `说 世界 好`,消息数只 +1);
+  ⑦ `POST /compact` → `200` 且返回 `type: compaction`;
+  ⑧ `POST /revert/stage` / `DELETE /revert` 存在,会话忙时回 `409 SessionBusyError`(面板据此提示「正在运行」);
+  ⑨ 面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了命令面板、全局键位与快捷键对话框。
+- 浏览器内断言 `test/ui-commands-run.js`:**143 项全部通过**(真实 `public/app.js`,无头 Firefox):
+  - `cmdQuery`:行首判定、`a/b` 不弹、换行后的行首照弹、嵌套命令名 `team/review`、只看光标之前、
+    没有 `/` 或只剩空白时为 `null`、输入框不在时也不炸。
+  - `mergedCommands`:服务端命令排前、面板项带 `panel` 标记与说明、同名时服务端优先、没有服务端命令时面板动作照旧。
+  - `parseCommand`:带参数 / 无参数 / 多个空格后的参数整体保留 / 大小写不敏感但取表里的写法 / 非行首不当命令 /
+    未命中不静默失败 / 嵌套命令 / 空串与非字符串。
+  - `loadCommands`:按目录缓存(第二次不再请求)、换目录重新请求、目录为空直接返回。
+  - `openCommands`:非 `/` 开头不开、按查询词过滤、前缀命中排前面、面板项渲染「面板」标签、无匹配的空态而不是不显示、
+    `force` 供 `Ctrl+P`、条目数受 `CMD_LIMIT` 截断、没选中会话不开。
+  - `commandKey`/`acceptCommand`:上下键环绕、`Tab`/`Enter` 选中且 `preventDefault`(不会顺手把消息发出去)、
+    补全成 `/名字 ` 并留出参数位、保留光标之后已有的正文、`Esc` 关掉并标记已消费、面板关着或没有条目时不吃按键。
+  - `send()` 的分流:命中服务端命令走 `POST /command` 而**不是** `/prompt`、`name`/`text` 分开、
+    不忙时不带 `delivery`、忙时带上、能带 `@` 引用附件且**成功后才清空**、失败弹 toast 且不补发成普通消息、
+    未命中的 `/foo` 照旧当普通消息发。
+  - 面板动作:`/compact` 的 `{}` 请求体、`/undo` 取**最后一条用户消息**(按 `time.created` 取,不依赖 Map 顺序)并带 `files:true`、
+    会话在跑时先拦住不请求、`/redo` 的 `DELETE` 与 `409` 转成「没有可重做的撤销」、`/rename` 的 `PATCH`、
+    `/archive` 的 metadata 读-改-写、`/clear` 不发任何请求、`/help` 的小节标题跨满两列不错位、
+    `/sessions`/`/models`/`/agents` 的焦点跳转。
+  - 输入历史:`pushHistory` 连续重复只记一次、`↑` 进最新再往上、到头吞键不动正文、`↓` 退回草稿、
+    不在历史里 `↓` 不接管、没有历史 `↑` 不接管、多行时按首行/末行判定接管与否、切会话归位、普通消息也记历史。
+  - 全局键位:`Esc` 优先关命令面板、其次关 `@` 补全、都不开且在跑才中断、没在跑不动、`<dialog>` 打开时不抢键、
+    已被别人 `preventDefault` 的 `Esc` 跳过;`Ctrl+P` 打开且不动输入内容、带 `Shift`/`Alt` 或对话框打开时不算;
+    `Shift+Tab` 切智能体、跳过空值的「默认」、到头绕回、命令面板开着或对话框打开时不抢键。
+  - 输入框内的接线(测试页手动接上 `setupComposerKeys()`):面板开着时方向键给面板而不落到历史、面板没开时给历史、`Enter` 仍然发送。
+- 真实目检:`/tmp/ocsm-probe/cmds-build.js` 用真实 `index.html`/`styles.css`/`app.js` + 真实命令列表
+  (`init`/`review` + 16 个面板动作)渲染三张截图 —— 全量列表(服务端命令在前不带标签、面板动作带「面板」标签)、
+  `/re` 过滤后的列表(前缀命中的 `review` 排最前并高亮)、`/help` 的键位对话框。
+  最后一张**第一次截出来就是错的**(说明在左、按键在右),正是靠它发现了那个 `<div>` 占位导致的整体错位。
+- 其余八套 UI 测试与五套 e2e 测试复跑全绿(计数见 README),包括 `ui-attach-run.js` 的 132 项 ——
+  这很重要,因为 I 组动了 `mentionKey` 的 `Esc` 分支、把输入框的 `keydown` 接线搬了家、并往 `store` 里加了字段。
+
 - 离线渲染核对(H1 专用):`/tmp/ocsm-probe/font-build.js` 用真实 `styles.css` + `app.js` 渲染
   真实用户消息 + 真实整条助手消息 + `write`/`bash` 工具卡片,并在页尾把每个关键选择器的
   `getComputedStyle().fontSize` **印成可见文字**(截图即可核对)。对照 `git show HEAD:public/styles.css` 的新旧两版:
@@ -639,3 +737,18 @@ opencode-session-manager/
 - H6 的暂存目录是一处**有意的「不持久」**:`$TMPDIR/opencode-session-manager-uploads` 里的文件只是为了让服务端能读到,
   消息里已经存了 base64,所以文件被 6 小时清理或 `/tmp` 被重启清空都不影响历史回看,也不会出现「附件链接失效」的观感问题。
   真需要长期保存原件,应在会话里让智能体把文件 `write` 进工程目录。
+- I 组的 `Esc` **做成一下而不是两下**:这是按 TUI 的权威默认(`session.interrupt = escape`)来的。
+  使用者最初感受到的「按两下才断」,实际是「第一下关掉了浮层」;把优先级写清楚(浮层 → 中断)之后,「按一下该关什么」就是确定的。
+- I 组开头**先实测再实现**这一步,直接消掉了一类会白写的功能:TUI 的 `/new` `/sessions` `/models` `/help` `/exit`
+  在服务端**没有**任何 command 端点(`GET /api/command` 只给 `init`/`review` 与工程里的自定义命令)。
+  如果不先查,很容易做出一个「列表里有、点了报 404」的 `/new`。现在的分工是:**服务端真有的走服务端,其余一律由面板自己实现**,
+  并且同名时以服务端为准。
+- 面板动作里**只有 `/undo` `/redo` 会动到工作区**:`revert/stage` 带 `files: true`,和 TUI 的 undo 一样会还原该轮的文件改动,
+  所以加了二次确认;会话忙时服务端回 `409`,面板**先拦住**并提示「正在运行」而不是去撞墙。
+  `DELETE /revert`(redo)在没有已暂存撤销时同样回 `409`,面板把它译成「没有可重做的撤销」——
+  这是**空操作而不是错误**(TUI 里同样是空操作),所以不该弹红。
+- I 组的键位**只做浏览器拦得住的**:`Ctrl+T`/`Ctrl+N`/`Ctrl+W`/`Ctrl+L` 由浏览器保留,`preventDefault` 无效;
+  硬做出来只会变成「按了没反应」的假键位,所以明确不做(`Ctrl+P` 可以拦,才采用)。
+- I 组的输入历史**只在光标位于首行/末行时接管**:`↑`/`↓` 在多行输入里的第一职责是移动光标,
+  这一点与 TUI 的 `input.move.*` 和 `prompt.history.*` 抢占同一个键、由上下文决定谁生效是同一套逻辑。
+  历史按会话隔离(而不是全局一份),换会话不会把上一条会话的输入捞出来。
