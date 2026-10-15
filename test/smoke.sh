@@ -232,6 +232,12 @@ if has "$APPJS" 'history.pushState' && has "$APPJS" 'popstate' && has "$APPJS" '
 else
   echo "FAIL: app.js 缺前后退同步(pushState / popstate)"; fail=$((fail + 1))
 fi
+# H 组 3:滚动位置存 sessionStorage(本标签页),锚到消息上而不是纯像素
+if has "$APPJS" 'ocs.scroll' && has "$APPJS" 'sessionStorage' && has "$APPJS" 'savedAnchor' && has "$APPJS" 'applyScrollAnchor'; then
+  echo "PASS: app.js 用 sessionStorage 记会话内滚动位置(锚点还原)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺会话内滚动位置记忆"; fail=$((fail + 1))
+fi
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if has "$sse" 'server.connected'; then

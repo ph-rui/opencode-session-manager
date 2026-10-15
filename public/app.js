@@ -23,6 +23,7 @@ const store = {
   delivery: 'queue', // 运行中消息的投递方式
   ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
   showArchived: false, // 列表是否显示已归档会话
+  restoreScroll: null, // 刷新恢复时要还原的滚动锚点(只由 restoreFromHash 设置,renderMessages 消费)
   live: new Map(), // assistantMessageID -> 流式本地缓冲(见「逐 token 流式」)
 };
 
@@ -965,7 +966,87 @@ async function restoreFromHash() {
   if (store.selected) return;
   const id = hashToID(location.hash);
   if (!id) return;
+  const saved = savedAnchor(id); // 有存档就回到读到的位置;没有就按老样子跳到底部
+  store.restoreScroll = { sid: id, anchor: saved };
   await selectSession(id);
+}
+
+/* --------- 会话内滚动位置(H 组 3)---------
+ * 只存「顶部可见的是哪条消息 + 它距容器顶多少像素」,不存纯 scrollTop:
+ * 加载更早的消息(或字号/宽度变了)会让绝对像素错位,锚到消息上才稳。
+ * 存 sessionStorage 而不是 localStorage —— 这是「本标签页刚才读到哪」,
+ * 不该跨标签串味,关掉标签就丢,正好符合直觉。
+ * 只在【刷新恢复】时还原;从列表点进某个会话仍然跳到底部(看最新消息)。 */
+
+const SCROLL_KEY = 'ocs.scroll';
+const SCROLL_MAX = 20;
+
+function readScrollMap() {
+  try {
+    const m = JSON.parse(sessionStorage.getItem(SCROLL_KEY) || '{}');
+    return m && typeof m === 'object' ? m : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+// 当前滚动位置 → 锚点(用 rect 而不是 offsetTop:不依赖 offsetParent)
+function scrollAnchor() {
+  const box = $('#messages');
+  if (!box) return null;
+  const boxTop = box.getBoundingClientRect().top;
+  const owner = new Map();
+  for (const [id, rec] of msgEls) owner.set(rec.el, id);
+  for (const el of box.children) {
+    const id = owner.get(el);
+    if (!id) continue; // 不是消息节点的跳过
+    const d = el.getBoundingClientRect().top - boxTop;
+    if (d + el.offsetHeight > 0) return { id: id, off: Math.round(d), top: Math.round(box.scrollTop) };
+  }
+  return { id: null, off: 0, top: Math.round(box.scrollTop) };
+}
+
+function saveScrollAnchor() {
+  const sid = store.selected;
+  if (!sid) return;
+  const a = scrollAnchor();
+  if (!a) return;
+  const m = readScrollMap();
+  delete m[sid]; // 先删再插:超额时淘汰的是「最久没用过的」
+  m[sid] = a;
+  const keys = Object.keys(m);
+  for (let i = 0; i < keys.length - SCROLL_MAX; i++) delete m[keys[i]];
+  try {
+    sessionStorage.setItem(SCROLL_KEY, JSON.stringify(m));
+  } catch (_) {}
+}
+
+function savedAnchor(sid) {
+  return readScrollMap()[sid] || null;
+}
+
+function applyScrollAnchor(a) {
+  const box = $('#messages');
+  if (!a) return;
+  const rec = a.id ? msgEls.get(a.id) : null;
+  if (rec && rec.el && rec.el.parentElement === box) {
+    const d = rec.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    box.scrollTop = Math.max(0, box.scrollTop + d - a.off);
+    return;
+  }
+  box.scrollTop = a.top || 0; // 锚点消息已不在(被删 / 掉出这一页)→ 退回像素值
+}
+
+function setupScrollMemory() {
+  let last = 0;
+  // 时间戳节流(不用定时器:滚动过程中一直在派发,丢几帧无所谓,离开时还会兜底存一次)
+  $('#messages').addEventListener('scroll', () => {
+    const now = Date.now();
+    if (now - last < 200) return;
+    last = now;
+    saveScrollAnchor();
+  });
+  window.addEventListener('pagehide', saveScrollAnchor); // 关页/刷新前兜一次,避免节流丢掉最后一个位置
 }
 
 /* 浏览器前进/后退 → 跟着切会话(H 组 2)。
@@ -990,12 +1071,17 @@ function setupHistoryNav() {
 }
 
 async function selectSession(id) {
+  // 离开上一个会话前,先把它读到哪记下来(H 组 3)
+  if (store.selected && store.selected !== id) saveScrollAnchor();
+  // 只有「刷新恢复」会先塞 store.restoreScroll;从列表点进来一律跳到底部看最新消息
+  const rs = store.restoreScroll && store.restoreScroll.sid === id ? store.restoreScroll.anchor : null;
+  store.restoreScroll = rs;
   store.selected = id;
   persistSelected(id);
   store.messages.clear();
   store.msgOlderCursor = null;
   store.pending = false;
-  store.forceBottom = true;
+  store.forceBottom = !rs;
   renderSessions();
   const s = store.sessions.get(id);
   $('#chatTitle').textContent = s ? s.title || '(无标题)' : id;
@@ -1564,7 +1650,8 @@ function renderMessages() {
   msgs.sort((a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0));
   const force = store.forceBottom;
   store.forceBottom = false;
-  const nearBottom = force || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底
+  const nearBottom = !pending && (force || box.scrollHeight - box.scrollTop - box.clientHeight < 80);
 
   // 删除已不存在的消息(live 缓冲里的消息不算「不存在」)
   for (const [id, rec] of msgEls) {
@@ -1605,7 +1692,12 @@ function renderMessages() {
     prev = rec.el;
   }
 
-  if (nearBottom) box.scrollTop = box.scrollHeight;
+  if (pending && msgs.length) {
+    store.restoreScroll = null; // 消费掉:只在这次渲染还原一次
+    applyScrollAnchor(pending);
+  } else if (nearBottom) {
+    box.scrollTop = box.scrollHeight;
+  }
   $('#older').hidden = !store.msgOlderCursor;
 
   const last = msgs[msgs.length - 1];
@@ -2872,6 +2964,7 @@ function init() {
   setupResizers();
   setupListToggle();
   setupHistoryNav();
+  setupScrollMemory();
   paintDelivery();
 
   $('#search').addEventListener(

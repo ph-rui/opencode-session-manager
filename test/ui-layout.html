@@ -73,6 +73,16 @@
       ],
     };
 
+    /* 会话内滚动位置要一个够长的会话(短消息撑不出滚动条) */
+    window.SERVER['ses_long'] = (function () {
+      var arr = [];
+      for (var i = 0; i < 60; i++) {
+        arr.push({ id: 'msg_l' + i, type: 'user', time: { created: 1000 + i },
+          text: '第 ' + i + ' 条消息:用来把对话区撑到能滚动。' });
+      }
+      return arr;
+    })();
+
     window.__realFetch = window.fetch.bind(window);
     window.calls = [];
     var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
@@ -325,6 +335,81 @@
       window.dispatchEvent(new PopStateEvent('popstate'));
       T('hash 为空且本来就没选中:popstate 是空操作', store.selected === null, store.selected);
       T('空操作也不入栈', history.length === LEN + 2, history.length);
+
+      /* ============ 10. 会话内滚动位置(H 组 3) ============ */
+      sessionStorage.clear();
+      localStorage.removeItem('ocs.scroll');
+      history.replaceState(null, '', location.pathname + location.search);
+      setupScrollMemory();
+      var box = q('#messages');
+      await selectSession('ses_long');
+      T('长会话渲染出来了', q('#messages').textContent.indexOf('第 59 条消息') >= 0);
+      var maxTop = box.scrollHeight - box.clientHeight;
+      T('长会话确实能滚动(否则这组测试没意义)', maxTop > 100, maxTop);
+      T('不还原时是跳到底部的', box.scrollTop + box.clientHeight >= box.scrollHeight - 2,
+        box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight);
+
+      /* 滚到中间,存锚点 */
+      var want = Math.round(maxTop / 2);
+      box.scrollTop = want;
+      saveScrollAnchor();
+      var savedMap = JSON.parse(sessionStorage.getItem('ocs.scroll') || '{}');
+      var A = savedMap['ses_long'];
+      T('锚点存进了 sessionStorage', !!A, Object.keys(savedMap));
+      T('锚点带上了「顶部可见消息 id」', !!(A && A.id), A);
+      T('锚点是消息级(有 id 与偏移),不是纯像素', !!(A && typeof A.id === 'string' && typeof A.off === 'number'), A);
+      T('滚动位置没写进 localStorage(不该跨标签串味)', localStorage.getItem('ocs.scroll') === null);
+      T('记的是当时的滚动位置', Math.abs(A.top - want) <= 1, A.top + ' vs ' + want);
+
+      /* 模拟刷新:重来一遍,这次带锚点 */
+      location.hash = '#ses_long';
+      store.selected = null;
+      store.messages.clear();
+      msgEls.clear();
+      box.innerHTML = '';
+      await restoreFromHash();
+      T('刷新后回到刚才读到的位置(而不是跳到底部)', Math.abs(box.scrollTop - want) <= 2,
+        box.scrollTop + ' vs ' + want);
+      T('确实不在底部', box.scrollTop + box.clientHeight < box.scrollHeight - 2,
+        box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight);
+      T('还原后锚点被消费掉(只还原一次)', store.restoreScroll === null, store.restoreScroll);
+      T('还原走的是同一套渲染(消息都在)', q('#messages').textContent.indexOf('第 0 条消息') >= 0);
+
+      /* 从列表点进会话:仍然跳到底部看最新消息 */
+      box.scrollTop = 10;
+      await selectSession('ses_long');
+      T('从列表点进来还是跳到底部', box.scrollTop + box.clientHeight >= box.scrollHeight - 2,
+        box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight);
+
+      /* 锚点消息已不在(被删/掉出这一页):退回像素值,不白屏不报错 */
+      box.scrollTop = want;
+      saveScrollAnchor();
+      var dirty = JSON.parse(sessionStorage.getItem('ocs.scroll'));
+      dirty['ses_long'] = { id: 'msg_gone', off: 0, top: want };
+      sessionStorage.setItem('ocs.scroll', JSON.stringify(dirty));
+      location.hash = '#ses_long';
+      store.selected = null;
+      store.messages.clear();
+      msgEls.clear();
+      box.innerHTML = '';
+      await restoreFromHash();
+      T('锚点消息不存在时退回像素值', Math.abs(box.scrollTop - want) <= 2, box.scrollTop + ' vs ' + want);
+
+      /* 没有存档的会话:照旧跳到底部 */
+      sessionStorage.clear();
+      location.hash = '#ses_a';
+      store.selected = null;
+      store.messages.clear();
+      msgEls.clear();
+      box.innerHTML = '';
+      await restoreFromHash();
+      T('没有存档时刷新仍按老样子(短会话不滚)', box.scrollTop === 0, box.scrollTop);
+
+      /* 存档上限:只留最近 20 个会话 */
+      for (var pi = 0; pi < 25; pi++) { store.selected = 'ses_p' + pi; saveScrollAnchor(); }
+      var pkeys = Object.keys(JSON.parse(sessionStorage.getItem('ocs.scroll') || '{}'));
+      T('存档最多留 20 个会话', pkeys.length === 20, pkeys.length);
+      T('淘汰的是最久没用过的', pkeys.indexOf('ses_p0') < 0 && pkeys.indexOf('ses_p24') >= 0, pkeys);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
