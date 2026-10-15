@@ -24,6 +24,10 @@
   --diff-hunk-fg: #0550ae;
   --diff-rule: #e3e3e3;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  /* 会话区字号旋钮:只改这两个数,会话界面(消息/工具卡片/diff/问询/输入区)所有文字等比缩放。
+     区内的字号一律写成相对 em,基准是这里的 --chat-fs。 */
+  --chat-fs: 14px;
+  --chat-lh: 1.6;
 }
 
 * { box-sizing: border-box; }
@@ -201,14 +205,14 @@ table#list { width: 100%; border-collapse: collapse; }
 #list td.actions button:hover { border-color: var(--accent); }
 #list td.actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
-#chatpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#chatpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; font-size: var(--chat-fs); }
 #chatHeader { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .chline { display: flex; align-items: center; gap: 10px; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.state { font-size: 12px; color: var(--muted); }
+.state { font-size: 0.96em; color: var(--muted); }
 .state.running { color: var(--accent); }
-#chatMeta { font-size: 11px; color: var(--muted); margin-top: 3px; word-break: break-all; }
-#older { width: auto; margin-top: 8px; padding: 4px 10px; font-size: 12px; }
+#chatMeta { font-size: 0.88em; color: var(--muted); margin-top: 3px; word-break: break-all; }
+#older { width: auto; margin-top: 8px; padding: 4px 10px; font-size: 0.96em; }
 
 #messages {
   flex: 1;
@@ -216,8 +220,8 @@ table#list { width: 100%; border-collapse: collapse; }
   overflow: auto;
   padding: 14px 16px;
   font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: inherit; /* 继承 #chatpane 的 --chat-fs */
+  line-height: var(--chat-lh);
 }
 
 .msg {
@@ -227,28 +231,28 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 .msg.user { border-left-color: #007acc; }
 .msg.assistant { border-left-color: #2e8b57; }
-.msg.minor { border-left-color: transparent; color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+.msg.minor { border-left-color: transparent; color: var(--muted); font-size: 0.88em; margin-bottom: 8px; }
 
 .turn-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
 .turn-head .marker { font-weight: 700; }
 .msg.user .turn-head .marker { color: #007acc; }
 .msg.assistant .turn-head .marker { color: #2e8b57; }
-.turn-head .who { color: var(--muted); font-size: 11px; }
-.turn-head .model { color: #a9a9a9; font-size: 11px; }
+.turn-head .who { color: var(--muted); font-size: 0.88em; }
+.turn-head .model { color: #a9a9a9; font-size: 0.88em; }
 
 .content { word-break: break-word; }
 .msg.user .content { white-space: pre-wrap; }
-.msg .meta { text-align: right; color: #b9b9b9; font-size: 10px; margin-top: 4px; }
+.msg .meta { text-align: right; color: #b9b9b9; font-size: 0.8em; margin-top: 4px; }
 
 /* Markdown */
 .content p { margin: 0 0 8px; }
 .content > *:last-child { margin-bottom: 0; }
 .content h1, .content h2, .content h3,
 .content h4, .content h5, .content h6 { margin: 14px 0 6px; font-weight: 700; line-height: 1.3; }
-.content h1 { font-size: 15px; }
-.content h2 { font-size: 14px; }
-.content h3 { font-size: 13px; }
-.content h4, .content h5, .content h6 { font-size: 12.5px; color: var(--muted); }
+.content h1 { font-size: 1.2em; }
+.content h2 { font-size: 1.12em; }
+.content h3 { font-size: 1.04em; }
+.content h4, .content h5, .content h6 { font-size: 1em; color: var(--muted); }
 .content ul, .content ol { margin: 0 0 8px; padding-left: 22px; }
 .content li { margin: 2px 0; }
 .content blockquote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--border); color: var(--muted); }
@@ -256,7 +260,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .content a { color: var(--accent); }
 .content code {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 0.92em;
   background: #f0f0f0;
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -271,11 +275,11 @@ table#list { width: 100%; border-collapse: collapse; }
   border-radius: 5px;
   overflow-x: auto;
 }
-.content pre code { background: none; border: none; padding: 0; font-size: 11.5px; }
+.content pre code { background: none; border: none; padding: 0; font-size: 0.92em; }
 
 /* Markdown 表格 */
 .md-table-wrap { margin: 8px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 5px; }
-.md-table { border-collapse: collapse; font-size: 11.5px; }
+.md-table { border-collapse: collapse; font-size: 0.92em; }
 .md-table th, .md-table td {
   border: 1px solid var(--border);
   padding: 3px 9px;
@@ -302,7 +306,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .tool > summary::-webkit-details-marker { display: none; }
 .tool .tmark, .toolrow .tmark { color: #b0893a; }
 .tool .tname, .toolrow .tname { color: var(--fg); }
-.tool .tstate, .toolrow .tstate { font-size: 11px; }
+.tool .tstate, .toolrow .tstate { font-size: 0.88em; }
 .tstate.ok { color: #8bb08b; }
 .tstate.run { color: var(--accent); }
 .tstate.err { color: var(--bad); }
@@ -314,7 +318,7 @@ table#list { width: 100%; border-collapse: collapse; }
   border-radius: 5px;
   overflow-x: auto;
   max-height: 320px;
-  font-size: 11px;
+  font-size: 0.88em;
   color: var(--muted);
 }
 
@@ -328,10 +332,10 @@ table#list { width: 100%; border-collapse: collapse; }
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 0.92em;
 }
-.tool .tadd, .toolrow .tadd { flex: none; color: var(--diff-add-fg); font-size: 11px; }
-.tool .tdel, .toolrow .tdel { flex: none; color: var(--diff-del-fg); font-size: 11px; }
+.tool .tadd, .toolrow .tadd { flex: none; color: var(--diff-add-fg); font-size: 0.88em; }
+.tool .tdel, .toolrow .tdel { flex: none; color: var(--diff-del-fg); font-size: 0.88em; }
 
 /* 正文整体限高内滚:长改动不会把消息流撑爆 */
 .toolbody { margin: 4px 0 2px; max-height: 420px; overflow: auto; }
@@ -347,10 +351,10 @@ table#list { width: 100%; border-collapse: collapse; }
   border: 1px solid var(--diff-rule);
   border-bottom: none;
   border-radius: 5px 5px 0 0;
-  font-size: 11.5px;
+  font-size: 0.92em;
 }
 .toolbody > .dfile:first-child { margin-top: 0; }
-.dbadge { flex: none; padding: 0 5px; border-radius: 3px; font-size: 10.5px; color: #fff; }
+.dbadge { flex: none; padding: 0 5px; border-radius: 3px; font-size: 0.84em; color: #fff; }
 .dbadge.add { background: var(--diff-add-fg); }
 .dbadge.del { background: var(--diff-del-fg); }
 .dbadge.mod { background: #8250df; }
@@ -363,7 +367,7 @@ table#list { width: 100%; border-collapse: collapse; }
   color: var(--fg);
   font-family: var(--mono);
 }
-.dnote { padding: 3px 6px; font-size: 11px; color: var(--diff-del-fg); }
+.dnote { padding: 3px 6px; font-size: 0.88em; color: var(--diff-del-fg); }
 
 /* 统一视图正文:行号列 + 符号列 + 源码列,不折行、横向滚动 */
 .diff {
@@ -372,7 +376,7 @@ table#list { width: 100%; border-collapse: collapse; }
   border-radius: 0 0 5px 5px;
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 0.92em;
   line-height: 1.55;
 }
 .diff:first-child { border-radius: 5px; }
@@ -406,7 +410,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .ddiag .dline {
   padding: 0 4px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 0.88em;
   color: var(--bad);
   white-space: pre-wrap;
 }
@@ -414,17 +418,17 @@ table#list { width: 100%; border-collapse: collapse; }
 /* question 工具:问题 → 答案 */
 .qalist { padding: 2px 0; }
 .qalist .qa { margin: 3px 0; }
-.qalist .qq { font-size: 11px; color: var(--muted); }
-.qalist .aa { font-size: 12px; color: var(--fg); }
+.qalist .qq { font-size: 0.88em; color: var(--muted); }
+.qalist .aa { font-size: 0.96em; color: var(--fg); }
 
 /* 思考 */
 .reasoning { margin: 6px 0; }
-.reasoning > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 11px; }
+.reasoning > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 0.88em; }
 .reasoning > summary::-webkit-details-marker { display: none; }
 /* 箭头随展开状态变化(流式期间会被自动展开) */
 .reasoning > summary::before { content: '▸ '; }
 .reasoning[open] > summary::before { content: '▾ '; }
-.reasoning .content { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+.reasoning .content { color: var(--muted); font-size: 0.92em; margin-top: 4px; }
 
 /* --------------------------- 问询卡片 --------------------------- */
 #asks { border-top: 1px solid var(--border); background: #fffdf5; max-height: 46vh; overflow: auto; }
@@ -437,21 +441,21 @@ table#list { width: 100%; border-collapse: collapse; }
   padding: 10px 12px;
 }
 .ask.ask-perm { border-color: #9cc0e0; border-left-color: #007acc; background: #f7fbff; }
-.ask-head { display: flex; align-items: baseline; gap: 6px; font-weight: 700; font-size: 13px; margin-bottom: 8px; }
-.perm-tool { font-weight: 400; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+.ask-head { display: flex; align-items: baseline; gap: 6px; font-weight: 700; font-size: 1.04em; margin-bottom: 8px; }
+.perm-tool { font-weight: 400; color: var(--muted); font-size: 0.88em; font-family: var(--mono); }
 .ask-body { display: flex; flex-direction: column; gap: 10px; }
 .ask-field { display: flex; flex-direction: column; gap: 3px; }
 .ask-field[hidden] { display: none; }
 .ask-err[hidden] { display: none; }
-.fld-title { font-weight: 600; font-size: 12.5px; }
-.fld-desc { color: var(--muted); font-size: 11.5px; }
+.fld-title { font-weight: 600; font-size: 1em; }
+.fld-desc { color: var(--muted); font-size: 0.92em; }
 .req { color: var(--bad); }
 .opts { display: flex; flex-direction: column; gap: 2px; }
-.opt { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; padding: 3px 4px; border-radius: 4px; font-size: 12.5px; }
+.opt { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; padding: 3px 4px; border-radius: 4px; font-size: 1em; }
 .opt:hover { background: #f2f2f2; }
 .opt input { margin-top: 2px; }
 .opt-body { display: flex; flex-direction: column; }
-.opt-desc { color: var(--muted); font-size: 11px; }
+.opt-desc { color: var(--muted); font-size: 0.88em; }
 .ask-field input[type="text"], .ask-field input[type="number"], .ask-field input[type="email"],
 .ask-field input[type="url"], .ask-field input[type="date"], .ask-field input[type="datetime-local"],
 .ask-field select {
@@ -466,12 +470,12 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 .ask-field select { max-width: 420px; }
 .ask-field input.custom { margin-top: 4px; }
-.ext { color: var(--accent); font-size: 12.5px; }
-.perm-act { font-family: var(--mono); font-size: 12.5px; }
+.ext { color: var(--accent); font-size: 1em; }
+.perm-act { font-family: var(--mono); font-size: 1em; }
 .perm-res { display: flex; flex-wrap: wrap; gap: 4px; }
 .perm-res code {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 0.88em;
   background: #eef3f8;
   border: 1px solid #d5e3f0;
   border-radius: 3px;
@@ -493,8 +497,8 @@ table#list { width: 100%; border-collapse: collapse; }
 .ask-foot .ask-submit { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 .ask-foot .ask-submit:hover { filter: brightness(1.1); }
 .ask-foot .danger:hover { border-color: var(--danger); color: var(--danger); }
-.ask-err { color: var(--bad); font-size: 11.5px; }
-.ask-badge { color: #b8860b; font-size: 11px; white-space: nowrap; }
+.ask-err { color: var(--bad); font-size: 0.92em; }
+.ask-badge { color: #b8860b; font-size: 0.88em; white-space: nowrap; }
 
 /* --------------------------- 待发送队列(inbox) --------------------------- */
 
@@ -506,13 +510,13 @@ table#list { width: 100%; border-collapse: collapse; }
   padding: 6px 12px;
   border-bottom: 1px solid #e6ecf7;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.96em;
 }
 .inbox-item:last-child { border-bottom: none; }
 .ib-mark { color: var(--accent); font-weight: 700; }
-.ib-kind { color: var(--muted); font-size: 11px; }
+.ib-kind { color: var(--muted); font-size: 0.88em; }
 .ib-delivery {
-  font-size: 10.5px;
+  font-size: 0.84em;
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid #cfd8e6;
@@ -525,7 +529,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .ib-acts { display: flex; gap: 4px; }
 .ib-acts button {
   padding: 1px 7px;
-  font-size: 11px;
+  font-size: 0.88em;
   background: var(--panel2);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -551,13 +555,13 @@ table#list { width: 100%; border-collapse: collapse; }
   flex-wrap: wrap;
 }
 #ctoolbar[hidden] { display: none; }
-.ctl { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ctl { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: var(--muted); white-space: nowrap; }
 .ctl[hidden] { display: none; }
 .ctl select {
   max-width: 240px;
   padding: 2px 4px;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 0.92em;
   font-family: var(--mono);
   color: var(--fg);
   background: var(--panel2);
@@ -571,7 +575,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .seg button {
   padding: 2px 10px;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 0.92em;
   background: var(--panel2);
   color: var(--muted);
   border: none;
@@ -584,7 +588,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .chip {
   padding: 2px 10px;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 0.92em;
   background: var(--panel2);
   color: var(--fg);
   border: 1px solid var(--border);
