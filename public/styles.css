@@ -80,6 +80,17 @@ main {
   min-height: 0;
 }
 
+/* 会话列表收起:整列让给对话区。
+   刻意不动 --list-w —— 用户拖出来的宽度要原样留着,展开时直接还原。
+   注意:两个子元素被 display:none 后就退出了网格,此时必须把模板也降成单列,
+   否则 #chatpane 会顶到第一列(宽度 0)上,整个右侧会变白。 */
+main.list-hidden { grid-template-columns: minmax(0, 1fr); }
+main.list-hidden #listpane,
+main.list-hidden #resizer-mid { display: none; }
+
+/* 顶栏的列表开关:收起态用不同的底色提示「现在是收起的」 */
+#btnList[aria-expanded="false"] { border-color: var(--accent); color: var(--accent); }
+
 /* 分栏拖拽条 */
 .resizer {
   position: relative;

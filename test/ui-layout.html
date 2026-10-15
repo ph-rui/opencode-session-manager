@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>layout unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"></select></label>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button>
+      <button id="btnList" type="button" aria-expanded="true">« 列表</button></div>
+    <label class="chk"><input type="checkbox" id="showArchived"></label>
+    <span id="count"></span><span id="archivedCount"></span>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init(本页自己控制接线时机) */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '会话 A', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+      { id: 'ses_b', title: '会话 B', projectID: 'pj1', time: { created: 1, updated: 4 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/b' } },
+    ];
+    var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+
+    window.SERVER = {
+      'ses_a': [
+        { id: 'msg_a1', type: 'user', time: { created: 100 }, text: '会话 A 的第一问' },
+        { id: 'msg_a2', type: 'assistant', time: { created: 200, completed: 300 },
+          model: { id: 'deepseek-v4-flash', providerID: 'company' },
+          content: [{ type: 'text', text: '会话 A 的回答' }] },
+      ],
+      'ses_b': [
+        { id: 'msg_b1', type: 'user', time: { created: 100 }, text: '会话 B 的第一问' },
+      ],
+    };
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+
+    window.confirm = function () { return true; }; // 「删除会话」的重确认
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var main = q('main');
+    var btn = q('#btnList');
+    var listPane = q('#listpane');
+    var resizer = q('#resizer-mid');
+    var chatPane = q('#chatpane');
+    var hiddenOf = function (el) { return getComputedStyle(el).display === 'none'; };
+
+    try {
+      /* ============ 1. 列表折叠:默认展开 ============ */
+      localStorage.clear();
+      setupListToggle();
+      T('初始是展开的', !main.classList.contains('list-hidden'));
+      T('初始按钮写「« 列表」', btn.textContent === '« 列表', btn.textContent);
+      T('初始 aria-expanded=true', btn.getAttribute('aria-expanded') === 'true');
+      T('初始列表可见', !hiddenOf(listPane) && !hiddenOf(resizer));
+      T('初始对话区可见', !hiddenOf(chatPane));
+
+      /* 先拖出一个自定义列宽,用来验证「收起再展开」不会把它吃掉 */
+      main.style.setProperty('--list-w', '420px');
+      T('列宽已设为 420px', getComputedStyle(main).gridTemplateColumns.indexOf('420px') === 0,
+        getComputedStyle(main).gridTemplateColumns);
+
+      /* ============ 2. 点一下收起 ============ */
+      btn.click();
+      T('点击后 main 带 list-hidden', main.classList.contains('list-hidden'));
+      T('点击后按钮写「» 列表」', btn.textContent === '» 列表', btn.textContent);
+      T('点击后 aria-expanded=false', btn.getAttribute('aria-expanded') === 'false');
+      T('点击后标题提示改为「展开」', btn.title.indexOf('展开') === 0, btn.title);
+      T('点击后本地存储记为收起', localStorage.getItem('ocs.listHidden') === '1');
+      T('收起时列表被 display:none', hiddenOf(listPane));
+      T('收起时拖拽条被 display:none', hiddenOf(resizer));
+      /* 回归锁:#listpane/#resizer-mid 一 display:none 就退出了网格,
+         若 grid-template-columns 不跟着降成单列,#chatpane 会顶到第一列(宽 0)→ 整片变白 */
+      T('收起后对话区仍有宽度(不会整片变白)', chatPane.getBoundingClientRect().width > 100,
+        chatPane.getBoundingClientRect().width);
+      T('收起后对话区宽度 ≈ main 宽度',
+        Math.abs(chatPane.getBoundingClientRect().width - main.getBoundingClientRect().width) < 2,
+        [chatPane.getBoundingClientRect().width, main.getBoundingClientRect().width]);
+      T('收起后网格只剩一列', getComputedStyle(main).gridTemplateColumns.split(' ').length === 1,
+        getComputedStyle(main).gridTemplateColumns);
+
+      /* ============ 3. 再点一下展开,列宽原样回来 ============ */
+      btn.click();
+      T('再点一下恢复展开', !main.classList.contains('list-hidden'));
+      T('按钮文案回到「« 列表」', btn.textContent === '« 列表', btn.textContent);
+      T('aria-expanded 回到 true', btn.getAttribute('aria-expanded') === 'true');
+      T('展开后本地存储清空', localStorage.getItem('ocs.listHidden') === null);
+      T('展开后列表回来了', !hiddenOf(listPane) && !hiddenOf(resizer));
+      T('展开后自定义列宽没被吃掉', main.style.getPropertyValue('--list-w') === '420px',
+        main.style.getPropertyValue('--list-w'));
+      T('展开后网格回到三列(420px + 6px + 1fr)',
+        getComputedStyle(main).gridTemplateColumns.indexOf('420px') === 0 &&
+          getComputedStyle(main).gridTemplateColumns.split(' ').length === 3,
+        getComputedStyle(main).gridTemplateColumns);
+      T('展开后对话区宽度小于 main(让出了列表)', chatPane.getBoundingClientRect().width < main.getBoundingClientRect().width);
+
+      /* ============ 4. 折叠状态被记住(模拟刷新后重新接线) ============ */
+      localStorage.setItem('ocs.listHidden', '1');
+      setupListToggle(); // 重复接线:只按存储重画,不应重复挂监听
+      T('重新接线后按存储进入收起态', main.classList.contains('list-hidden'));
+      T('重新接线后按钮为「» 列表」', btn.textContent === '» 列表', btn.textContent);
+      var wAfterRe = main.getBoundingClientRect().width;
+      btn.click();
+      T('重复接线后单击只切换一次(不会一次点两下)', !main.classList.contains('list-hidden'));
+      T('展开后不残留收起状态', localStorage.getItem('ocs.listHidden') === null);
+
+      /* ============ 5. hash 解析(hashToID) ============ */
+      T('hashToID:#ses_a → ses_a', hashToID('#ses_a') === 'ses_a');
+      T('hashToID:没有 # 也认', hashToID('ses_a') === 'ses_a');
+      T('hashToID:空 hash → null', hashToID('#') === null && hashToID('') === null);
+      T('hashToID:null/undefined → null', hashToID(null) === null && hashToID(undefined) === null);
+      T('hashToID:不是会话 id 不认', hashToID('#foo') === null && hashToID('#project_1') === null);
+      T('hashToID:会做 URL 解码', hashToID('#ses%5Fa') === 'ses_a', hashToID('#ses%5Fa'));
+      T('hashToID:非法转义不炸', hashToID('#ses%zz') === 'ses%zz', hashToID('#ses%zz'));
+
+      /* ============ 6. 选中会话写进 hash ============ */
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); });
+      renderSessions();
+      location.hash = '';
+      store.selected = null;
+      await selectSession('ses_a');
+      T('选中后 hash 变为 #ses_a', location.hash === '#ses_a', location.hash);
+      T('选中后会话消息已渲染', q('#messages').textContent.indexOf('会话 A 的第一问') >= 0);
+      await selectSession('ses_b');
+      T('切到另一个会话后 hash 跟着变', location.hash === '#ses_b', location.hash);
+
+      /* ============ 7. 删除当前会话时清掉 hash ============ */
+      await onAction('del', 'ses_b');
+      T('删除后不再是选中态', store.selected === null, store.selected);
+      T('删除后 hash 被清空(否则刷新会去恢复一个已删除的会话)', location.hash === '', location.hash);
+      T('删除后不再显示该会话的消息', q('#messages').textContent.indexOf('会话 B 的第一问') < 0);
+
+      /* ============ 8. 刷新后恢复:restoreFromHash ============ */
+      location.hash = '#ses_a';
+      store.selected = null;
+      store.messages.clear();
+      q('#messages').innerHTML = '';
+      await restoreFromHash();
+      T('从 hash 恢复到会话 A', store.selected === 'ses_a', store.selected);
+      T('恢复后消息渲染出来', q('#messages').textContent.indexOf('会话 A 的第一问') >= 0);
+      T('恢复后标题取到了会话名', q('#chatTitle').textContent === '会话 A', q('#chatTitle').textContent);
+      T('恢复后列表里该行被标记选中', !!q('#list tbody tr[data-id="ses_a"].selected'), q('#list tbody').innerHTML.slice(0, 200));
+
+      /* 不抢用户已经做出的选择 */
+      await selectSession('ses_b');
+      location.hash = '#ses_a';
+      await restoreFromHash();
+      T('已有选择时 restoreFromHash 不抢', store.selected === 'ses_b', store.selected);
+
+      /* 会话已被删除 / 不存在:不炸、不白屏 */
+      location.hash = '#ses_gone';
+      store.selected = null;
+      await restoreFromHash();
+      T('hash 指向不存在的会话时不炸且仍选中该 id', store.selected === 'ses_gone', store.selected);
+      T('不存在的会话渲染为空而不是残留上一条',
+        q('#messages').textContent.indexOf('会话 B 的第一问') < 0, q('#messages').textContent);
+
+      /* hash 为空 / 非法:什么都不做 */
+      location.hash = '';
+      store.selected = null;
+      await restoreFromHash();
+      T('hash 为空时不选任何会话', store.selected === null, store.selected);
+      location.hash = '#foo';
+      await restoreFromHash();
+      T('hash 非法时不选任何会话', store.selected === null, store.selected);
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

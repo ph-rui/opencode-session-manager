@@ -256,6 +256,30 @@ opencode-session-manager/
     `.toolbody`(整体限高内滚)/`.dfile`(文件头)/`.dbadge`/`.diff`(不折行、横向滚动)/`.dl`+`.ln`+`.sign`+`.src`/`.ddiag`/`.qalist`/`.tdesc`(摘要)/`.tadd`/`.tdel` 规则。
   - **本轮明确不做**:并排 / split 视图、语法高亮(`config.diffs.view`/`filetype`/`syntaxStyle`)、
     字符级行内高亮(`diffHighlightAdded/Removed`)、会话级「变更」面板与 revert、后端改动。
+- **G 布局与状态保持(已实现)** — 列表整列可收起 + 刷新后回到刚才的会话。
+
+  - **会话列表整列收起**
+    - 入口放在顶栏 `.lbtools` 里的 `#btnList`(与 `+ 新建`/`导入`/`刷新` 同组,延续 E 组「控件集中到顶部栏」),
+      文案 `« 列表` ⇄ `» 列表`,`aria-expanded` 同步。**入口不能放在分栏条上** —— 收起后分栏条本身要隐藏,会把列表锁在外面。
+    - 实现是 `main.list-hidden` 类 + `#listpane`/`#resizer-mid` `display:none`(**不用宽度 0**,顺带把它们移出 Tab 焦点顺序)。
+    - **关键坑**:两个子元素一旦 `display:none` 就退出了网格,若模板仍写着 `0 0 minmax(0,1fr)`,
+      `#chatpane` 会被自动放进第一列(宽度 0)上,整个右侧一片空白。因此收起时必须**把模板降成单列**:
+      `main.list-hidden { grid-template-columns: minmax(0, 1fr); }`。这条已写进冒烟断言。
+    - **刻意不动 `--list-w`**:用户拖出来的列宽在收起 → 展开后原样还在(双击 `#resizer-mid` 复位宽度仍然有效)。
+    - 状态记在 `localStorage['ocs.listHidden']`(与列宽 `ocs.listW` 并列);`setupListToggle()` 重复调用只按存储重画、
+      不重复挂监听(否则点一下触发两次,看起来没反应)。
+  - **刷新后回到刚才的会话**
+    - 选中的 id 写进 URL hash(`#ses_xxx`,用 `history.replaceState` 而非 `pushState` —— 点会话不该把后退键灌满)。
+      选 hash 而不是 localStorage:它是唯一「刷新 / 复制链接 / 书签 / 换标签打开」都成立的载体。
+    - 写:`selectSession(id)` 里 `persistSelected(id)`;两处把 `store.selected` 置 `null` 的分支(删除会话、`session.deleted` 事件)
+      顺手 `persistSelected(null)`,否则刷新会去恢复一个已删除的会话。
+    - 读:`init()` 里 `loadSessions({ reset: true }).then(restoreFromHash)`。放在列表加载**之后**是因为会话标题/工程目录要能取到
+      (否则会先闪一个 id);`loadSessions` 内部自己吞异常、不会 reject,所以 `.then` 一定跑得到。
+    - `restoreFromHash()` 只在 `store.selected` 仍为空时出手(不抢用户已做出的选择),且**不要求该会话出现在列表里**
+      (可能落在第二页)—— `selectSession` 只要 id 就能拉消息,标题取不到时有回落。
+      hash 指向已删除/不存在的会话 → 走已有兜底,不炸不白屏;hash 为空或不是 `ses` 开头 → 什么都不做。
+  - **本轮明确不做**:顶栏筛选/排序/搜索的持久化(按确认只记会话)、`hashchange` 的前后退同步、
+    折叠动画、会话内滚动位置的恢复(刷新后停在最新消息,与「打开会话」一致)。
 
 ## 8. 测试
 
@@ -283,6 +307,10 @@ opencode-session-manager/
 - [ ] `write` 卡片默认展开并显示写入的正文(带行号);`patch` 改多个文件时逐文件各显示一块。
 - [ ] 改动有语法/类型诊断时,诊断行(`错误 [行:列] 消息`)显示在 diff 下方。
 - [ ] `question` 已应答后,卡片里能看到「问题 → 答案」;`skill` 卡片显示 `→ Skill "名字"`。
+- [ ] 顶栏 `« 列表` 收起左侧会话表,对话区占满整宽;再点恢复,且**拖出来的列宽没变**;刷新后收起状态保持。
+- [ ] 点开一个会话后按 F5:页面重新加载后**仍停在这个会话**(不是在空白的「未选择会话」);
+      复制地址栏(带 `#ses_xxx`)在另一个标签打开,也直接落到同一会话。
+- [ ] 删除当前正在看的会话后,地址栏的 `#ses_xxx` 被清掉(刷新不会去找一个已删除的会话)。
 - [ ] 回复落地后与流式过程看到的内容一致,消息不重复、不闪回(本地缓冲被服务端权威版本替换)。
 - [ ] 停掉 OpenCode 服务时,页面给出清晰错误提示而非白屏。
 - [ ] 触发一次 `question` 工具问询:底部出现卡片,提交后助手继续;列表徽标消失。
@@ -379,6 +407,26 @@ opencode-session-manager/
   diff 行号列对齐、配色正确、`+N -M` 靠右、诊断在 diff 下方、窄屏下 diff 横向滚动而不撑破对话栏、底部输入框稳在视口内。
   这一轮核对实际抓出一个保真度问题(运行中的 `edit` 落进通用分支,把 `oldString: x newString: y` 铺了出来),已修。
 
+### 布局与状态保持(列表折叠 / 刷新恢复)的自动化验证(本次已执行)
+- 冒烟 `test/smoke.sh`:**57 项全部通过**(由 53 项增至 57 项:顶栏结构断言加入 `#btnList`,
+  并新增 `main.list-hidden` 单列规则、app.js 里的 `ocs.listHidden`、app.js 里的 hash 持久化与恢复)。
+- 新增浏览器内断言 `test/ui-layout-run.js`:**50 项全部通过**(真实 `public/app.js`,无头 Firefox):
+  - 折叠:初始展开、按钮文案与 `aria-expanded` 翻转、`ocs.listHidden` 写入/清空、
+    `#listpane` 与 `#resizer-mid` 变 `display:none`、
+    **收起后 `#chatpane` 仍有宽度且约等于 `main` 宽度**(这是「右侧整片变白」那个坑的回归锁)、
+    收起后网格只剩一列、展开后网格回到「420px + 6px + 1fr」且 **`--list-w` 没被吃掉**、
+    `setupListToggle()` 重复接线按存储重画且单击只切换一次。
+  - hash 持久化:`hashToID` 的 7 个边界(带/不带 `#`、空、`null`/`undefined`、非 `ses` 前缀、URL 解码、非法转义不炸)、
+    选中写 hash、切换会话 hash 跟着变、删除后 hash 被清空、
+    `restoreFromHash` 恢复消息与标题、恢复后列表行标记选中、**不抢已有选择**、
+    hash 指向不存在的会话时不炸且不残留上一条消息、hash 为空/非法时不选。
+- 既有其余十套测试全部复跑且全绿:`e2e-asks` 13、`e2e-controls` 22(LLM 31)、`e2e-capabilities` 26、`e2e-stream` 4(LLM 27)、
+  浏览器内断言 `ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71、`ui-stream` 102、`ui-tools` 79。
+- 离线渲染核对:`/tmp/ocsm-probe/list-build.js` → `list-preview.html`(真实 `index.html` + `styles.css` + `app.js`,
+  用真实的整条助手消息当对话内容),`?only=open|closed` 各截 1400px 与 1100px:
+  收起后对话区占满整宽、diff 完整可见、按钮变 `» 列表` 并高亮;1100px 下顶栏折两行、展开态列表对话并存、底部输入框稳在视口内。
+  **这一轮核对当场抓出了「右侧整片变白」**:只写 `display:none` 而不把网格降成单列时,`#chatpane` 会落到宽度 0 的第一列上,已修。
+
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?
 - ~~事件流 v1 采用「事件触发重取」而非精细 delta,是否接受?~~ 已由 C 组升级为**增量驱动**(本地缓冲 + 权威版本对账);
@@ -387,3 +435,7 @@ opencode-session-manager/
 - **`metadata.diagnostics` 的精确形状是「从服务端 TUI 的用法反推」的假设**(`{<文件绝对路径>: [{range:{start:{line,character}}, message}]}`):
   本机实测里 `write`/`edit` 的 `diagnostics` 一直是空对象 `{}`(没触发过真实诊断),所以前端按「精确路径优先、相对/绝对宽松兜底」取值,
   取不到就不显示 —— 假设错了也不会报错,最多是不显示。若将来看到真实诊断,应补一条离线断言把它钉死。
+- 刷新恢复的**时机**是个刻意的取舍:放在首次 `loadSessions()` 完成**之后**,为的是标题/工程目录不先闪一个 id。
+  代价是列表与消息两次请求串行,刷新后的空白期比理论上略长(本机是几十毫秒量级)。
+  若日后嫌慢,可改成「立刻 `selectSession` + 列表到达后再补标题」,代价是标题会短暂显示成 id。
+- G 组确认只持久化**选中的会话**,顶栏的搜索/工程目录/排序/显示已归档刷新后仍按原样重置(已与使用者确认)。

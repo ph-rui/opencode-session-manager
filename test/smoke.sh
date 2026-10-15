@@ -114,7 +114,7 @@ done
 
 # 顶部栏布局:筛选/工具控件搬到顶栏,左栏整栏与左分栏条已移除
 TOP_HTML=$(printf '%s' "$HOME_HTML" | awk '/<header id="topbar">/{f=1} f{print} /<\/header>/{if(f) exit}')
-for sel in 'id="search"' 'id="dirFilter"' 'id="order"' 'id="btnNew"' 'id="refresh"' 'id="showArchived"' 'id="count"' 'id="status"'; do
+for sel in 'id="search"' 'id="dirFilter"' 'id="order"' 'id="btnNew"' 'id="refresh"' 'id="showArchived"' 'id="count"' 'id="status"' 'id="btnList"'; do
   if printf '%s' "$TOP_HTML" | grep -q "$sel"; then
     echo "PASS: 顶栏包含 $sel"; pass=$((pass + 1))
   else
@@ -170,6 +170,25 @@ if printf '%s' "$CSS" | grep -q '\.dfile' && printf '%s' "$CSS" | grep -q '\.dif
   echo "PASS: styles.css 有文件头与 diff 容器样式(.dfile/.diff)"; pass=$((pass + 1))
 else
   echo "FAIL: styles.css 缺 .dfile/.diff 样式"; fail=$((fail + 1))
+fi
+# 会话列表整列收起:grid 必须跟着降成单列,否则隐藏子元素后 #chatpane 会落到宽度 0 的第一列
+if printf '%s' "$CSS" | grep -q 'main\.list-hidden { grid-template-columns: minmax(0, 1fr); }'; then
+  echo "PASS: styles.css 有列表收起规则(main.list-hidden 单列)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 main.list-hidden 单列规则(收起后会整片变白)"; fail=$((fail + 1))
+fi
+
+# 前端逻辑:折叠状态要能被记住,选中会话要写进 URL hash
+APPJS=$(curl -s "${AUTH[@]}" "$PROXY/app.js")
+if printf '%s' "$APPJS" | grep -q 'ocs.listHidden'; then
+  echo "PASS: app.js 记住列表折叠状态(ocs.listHidden)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 未记住列表折叠状态"; fail=$((fail + 1))
+fi
+if printf '%s' "$APPJS" | grep -q 'history.replaceState' && printf '%s' "$APPJS" | grep -q 'restoreFromHash'; then
+  echo "PASS: app.js 把选中会话写进 URL hash 并在加载时恢复"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺 hash 持久化 / 恢复逻辑"; fail=$((fail + 1))
 fi
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)

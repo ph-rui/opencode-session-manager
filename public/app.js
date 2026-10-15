@@ -902,8 +902,44 @@ function renderDirOptions() {
 
 /* ----------------------------- 选择与消息 ----------------------------- */
 
+/* --------- 选中会话的持久化(刷新后回到刚才那个会话) ---------
+ * 选中的 id 落在 URL hash(#ses_xxx):刷新、复制链接、书签、在另一个标签打开
+ * 都能落到同一会话 —— 与「深链跳回 TUI」是同一个主题。
+ * 用 replaceState 而不是 pushState:点会话不该把浏览器后退键灌满。 */
+
+function hashToID(h) {
+  const raw = String(h == null ? '' : h).replace(/^#/, '');
+  if (!raw) return null;
+  let id = raw;
+  try {
+    id = decodeURIComponent(raw); // 非法 % 转义就按原样用
+  } catch (_) {}
+  return id.indexOf('ses') === 0 ? id : null;
+}
+
+function persistSelected(id) {
+  const url = id ? '#' + encodeURIComponent(id) : location.pathname + location.search;
+  try {
+    history.replaceState(null, '', url);
+  } catch (_) {
+    // 极端情况下(例如 file://)replaceState 不可用,退回直接改 hash
+    if (id) location.hash = encodeURIComponent(id);
+    else location.hash = '';
+  }
+}
+
+// 刷新后恢复:只在「还没选过任何会话」时出手,不抢用户已经做出的选择。
+// 刻意不要求该会话出现在列表里 —— 它可能落在第二页,selectSession 只要 id 就能拉消息。
+async function restoreFromHash() {
+  if (store.selected) return;
+  const id = hashToID(location.hash);
+  if (!id) return;
+  await selectSession(id);
+}
+
 async function selectSession(id) {
   store.selected = id;
+  persistSelected(id);
   store.messages.clear();
   store.msgOlderCursor = null;
   store.pending = false;
@@ -2140,6 +2176,7 @@ async function onAction(act, id) {
     store.sessions.delete(id);
     if (store.selected === id) {
       store.selected = null;
+      persistSelected(null);
       store.messages.clear();
       msgEls.clear();
       dropAsksFor(id);
@@ -2628,6 +2665,7 @@ function handleControlEvent(e) {
       for (const [mid, L] of store.live) if (L.sid === id) store.live.delete(mid);
       if (store.selected === id) {
         store.selected = null;
+        persistSelected(null);
         renderInbox();
         updateComposerControls();
       }
@@ -2744,6 +2782,34 @@ function setupResizers() {
   });
 }
 
+/* 会话列表整列收起 / 展开。
+ * 入口只放在顶栏(#btnList):分栏条收起后本身会被 display:none,不能当入口。
+ * 收起状态记在 localStorage,与列宽 ocs.listW 并列。 */
+function setupListToggle() {
+  const main = document.querySelector('main');
+  const btn = document.getElementById('btnList');
+  if (!main || !btn) return;
+
+  const paint = (hidden) => {
+    main.classList.toggle('list-hidden', hidden);
+    btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+    btn.textContent = hidden ? '» 列表' : '« 列表';
+    btn.title = hidden ? '展开左侧的会话列表' : '收起左侧的会话列表';
+  };
+
+  const stored = () => localStorage.getItem('ocs.listHidden') === '1';
+  paint(stored());
+  // 重复接线只重画(按当前存储),不重复挂监听 —— 否则点一下会触发两次、看起来没反应
+  if (btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', () => {
+    const next = !stored();
+    if (next) localStorage.setItem('ocs.listHidden', '1');
+    else localStorage.removeItem('ocs.listHidden');
+    paint(next);
+  });
+}
+
 /* ----------------------------- 绑定 ----------------------------- */
 
 function debounce(fn, ms) {
@@ -2757,11 +2823,13 @@ function debounce(fn, ms) {
 function init() {
   health();
   setInterval(health, 15000);
-  loadSessions({ reset: true });
+  // 恢复顺序:先让列表落地(会话标题/目录要能取到),再回到 hash 里那个会话
+  loadSessions({ reset: true }).then(restoreFromHash);
   loadActive();
   setInterval(loadActive, 8000);
   setupEvents();
   setupResizers();
+  setupListToggle();
   paintDelivery();
 
   $('#search').addEventListener(

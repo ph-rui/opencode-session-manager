@@ -60,7 +60,9 @@ chmod 600 ~/.config/opencode-session-manager/env
 
 ## 功能
 
-- **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
+- **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 列表折叠 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
+- **会话列表整列可收起**:顶栏 `« 列表` 一键收起,收起后对话区占满整宽;状态记在本地,刷新后保持
+- **刷新后回到刚才的会话**:选中的会话写进 URL hash(`#ses_xxx`),刷新 / 复制链接 / 书签 / 换标签打开都会落到同一会话
 - 跨工程列出会话,按更新时间排序,游标翻页
 - 按标题搜索(服务端 `search`)
 - 按工程目录过滤(服务端 `directory`)
@@ -83,6 +85,21 @@ chmod 600 ~/.config/opencode-session-manager/env
   - **归档**:列表与聊天头部可归档 / 取消归档,默认从列表隐藏,顶栏「显示已归档」可查看(记录在 `session.metadata`,见下文说明)
   - **导出 / 导入**:导出会话为 JSON(可选脱敏),或从 JSON 导入为新会话并指定目标工程目录
   - **深链跳回 TUI**:给出 `opencode --session <id> <目录>`,可直接粘到终端继续同一会话
+
+## 列表折叠与「刷新后还在这个会话」
+
+- **收起列表**:顶栏 `« 列表` 一键把左侧会话表整列收起(再点恢复 `» 列表`),收起后对话区占满整宽。
+  - 收起用的是 `main.list-hidden` 类;状态记在 `localStorage['ocs.listHidden']`,刷新后保持。
+  - **刻意不动列宽变量 `--list-w`**,所以你拖出来的宽度在收起→展开后原样还在(双击 `#resizer-mid` 复位宽度仍然有效)。
+  - 入口只放在顶栏:分栏条收起后本身会被 `display:none`,不能当入口(会把列表锁在外面)。
+  - 实现上有个坑:`#listpane`/`#resizer-mid` 一旦 `display:none` 就退出了网格,此时必须把 `grid-template-columns` 也降成单列,
+    否则 `#chatpane` 会顶到第一列(宽度 0)上,整个右侧一片空白。
+- **刷新后回到刚才的会话**:选中的 id 写进 URL hash(`#ses_xxx`),刷新 / 复制链接 / 书签 / 另一个标签打开都会落到同一会话。
+  - 用 `history.replaceState` 而不是 `pushState`:点会话不该把浏览器后退键灌满。
+  - 恢复时机是**首次会话列表加载完成之后**(这样会话标题/工程目录能取到,不会先闪一个 id);
+    恢复**不要求该会话出现在列表里**(可能落在第二页),`selectSession` 只要 id 就能拉消息。
+  - 会话已被删除 / hash 指向不存在的 id → 走已有的兜底,不炸也不白屏;删除会话时顺手清掉 hash。
+  - 刻意不做:顶栏筛选/排序/搜索的持久化(刷新后仍重置)、`hashchange` 前后退同步、会话内滚动位置的恢复(刷新后停在最新消息)。
 
 ## 问询应答(表单 / 权限)
 
@@ -207,6 +224,8 @@ chmod 600 ~/.config/opencode-session-manager/env
 工具卡片上明确不做的:并排 / split 视图、语法高亮(`config.diffs.view` / `filetype` / `syntaxStyle`)、
 字符级行内高亮(`diffHighlightAdded` / `Removed`)、会话级「变更」面板与 revert。
 
+布局/状态上明确不做的:顶栏筛选/排序/搜索的持久化(刷新后仍重置)、`hashchange` 的前后退同步、会话内滚动位置恢复。
+
 ## 测试
 
 前置:OpenCode 服务已运行,且本代理已启动。凭据从 `~/.config/opencode-session-manager/env` 读取(可用 `OCS_AUTH` 覆盖)。
@@ -224,9 +243,10 @@ node test/ui-controls-run.js  # 会话控制前端逻辑(无头 Firefox;缺 fire
 node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-layout-run.js    # 列表折叠 + 刷新后恢复选中会话(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
-- `smoke.sh`:53 项。含顶部栏改造的 15 项结构断言(控件都在 `#topbar` 切片内,首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条,`styles.css` 主区为 `var(--list-w, 560px) 6px minmax(0, 1fr)` 且不再写死高度)与工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`)。
+- `smoke.sh`:57 项。含顶部栏改造的 16 项结构断言(控件都在 `#topbar` 切片内,含 `#btnList`;首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条,`styles.css` 主区为 `var(--list-w, 560px) 6px minmax(0, 1fr)` 且不再写死高度)、工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 3 项(`main.list-hidden` 单列规则、app.js 里的 `ocs.listHidden` 与 hash 持久化)。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
 - `e2e-capabilities.sh`:26 项。只用临时会话与 `/tmp` 临时目录,结束时全部删除;验证新建的字段落库、`PATCH metadata` 的整体替换语义、导出脱敏与否、导入的换 ID 与 `location` 重挂、以及 `409`/`400` 负例。
@@ -236,6 +256,7 @@ node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(�
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
 - `ui-stream-run.js`:102 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
 - `ui-tools-run.js`:79 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平),以及 `toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」。
+- `ui-layout-run.js`:50 项浏览器内断言,覆盖列表折叠(类与 `display:none`、按钮文案与 `aria-expanded` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后对话区仍有宽度**、**收起再展开后自定义列宽 `--list-w` 不被吃掉**)与 hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)。
 
 ## 开机自启(systemd 用户服务)
 
@@ -299,3 +320,8 @@ journalctl --user -u opencode-session-manager.service -f
   `handleEvent` 里对「已渲染指纹」的比对来补重绘,否则 diff 要等到下一次状态变化才出现。
 - `metadata.diagnostics` 的形状是按服务端 TUI 的用法反推的(`{<文件绝对路径>: [{range:{start:{line,character}}, message}]}`),
   本机实测一直是空对象 `{}`;面板做了精确/相对宽松两种路径匹配,取不到就不显示。
+- **列表整列收起必须同时降网格列数**:`main.list-hidden` 若只写 `grid-template-columns: 0 0 minmax(0,1fr)` 并把两个子元素 `display:none`,
+  它们就退出了网格,`#chatpane` 会自动落到第一列(宽度 0)上 —— 表现是整个右侧一片空白。
+  正确写法是把模板降成单列 `grid-template-columns: minmax(0, 1fr)`,让剩下的 `#chatpane` 独占。冒烟里专门断言了这条规则。
+- 选中会话用 URL hash 承载(`#ses_xxx` + `history.replaceState`),因为它是唯一「刷新、复制链接、书签、换标签打开」都成立的载体;
+  `localStorage` 存不了可分享的链接。恢复放在首次 `loadSessions()` 之后而不是之前:会话标题/工程目录要能取到,且 `loadSessions` 内部自己吞异常(不会 reject),`.then` 一定会跑到。
