@@ -213,23 +213,53 @@ async function loadMessages(opts) {
 
 /* 简易 Markdown 渲染(输入先经 esc 转义,再处理行内标记) */
 function renderInline(s) {
-  let out = '';
-  const parts = String(s).split(/(`[^`]*`)/g);
-  for (const part of parts) {
-    if (part.length >= 2 && part.startsWith('`') && part.endsWith('`')) {
-      out += '<code>' + part.slice(1, -1) + '</code>';
-    } else {
-      let t = part;
-      t = t.replace(
-        /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-        '<a href="$2" target="_blank" rel="noopener">$1</a>'
-      );
-      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-      out += t;
-    }
-  }
-  return out;
+  // 先把行内代码换成占位符,这样 **粗体** 跨过 `code` 时仍能配对
+  const codes = [];
+  let t = String(s).replace(/`([^`]*)`/g, (_, c) => {
+    codes.push(c);
+    return '\u0000' + (codes.length - 1) + '\u0000';
+  });
+  t = t.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener">$1</a>'
+  );
+  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  t = t.replace(/\u0000(\d+)\u0000/g, (_, n) => '<code>' + codes[Number(n)] + '</code>');
+  return t;
+}
+
+/* Markdown 表格 */
+function isTableSep(l) {
+  return l.includes('|') && l.includes('-') && /^[\s|:-]+$/.test(l);
+}
+function isTableRow(l) {
+  return l.includes('|') && l.trim() !== '';
+}
+function splitRow(l) {
+  let s = String(l).trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|');
+}
+function renderTable(head, aligns, rows) {
+  const cell = (c, j, tag) => {
+    const a = aligns[j] ? ' class="ta-' + aligns[j] + '"' : '';
+    return (
+      '<' + tag + a + '>' +
+      renderInline(esc(String(c == null ? '' : c).trim())) +
+      '</' + tag + '>'
+    );
+  };
+  return (
+    '<div class="md-table-wrap"><table class="md-table"><thead><tr>' +
+    head.map((c, j) => cell(c, j, 'th')).join('') +
+    '</tr></thead><tbody>' +
+    rows
+      .map((r) => '<tr>' + head.map((_, j) => cell(r[j], j, 'td')).join('') + '</tr>')
+      .join('') +
+    '</tbody></table></div>'
+  );
 }
 
 function md(text) {
@@ -273,6 +303,25 @@ function md(text) {
       html +=
         '<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
         esc(buf.join('\n')) + '</code></pre>';
+      continue;
+    }
+    if (isTableRow(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      flushAll();
+      const head = splitRow(line);
+      const aligns = splitRow(lines[i + 1]).map((a) => {
+        const c = a.trim();
+        if (/^:.*:$/.test(c)) return 'center';
+        if (/:$/.test(c)) return 'right';
+        if (/^:/.test(c)) return 'left';
+        return '';
+      });
+      i += 2;
+      const rows = [];
+      while (i < lines.length && isTableRow(lines[i]) && !isTableSep(lines[i])) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      html += renderTable(head, aligns, rows);
       continue;
     }
     const h = line.match(/^(#{1,6})\s+(.*)$/);
@@ -338,12 +387,20 @@ function md(text) {
 function statusInfo(p) {
   const st = (p.state && p.state.status) || (p.executed ? 'completed' : 'running');
   const map = {
-    completed: { icon: '✓', cls: 'ok', label: '已完成' },
+    completed: { icon: '✓', cls: 'ok', label: '' },
     error: { icon: '✗', cls: 'err', label: '出错' },
-    running: { icon: '●', cls: '', label: '运行中' },
-    streaming: { icon: '●', cls: '', label: '运行中' },
+    running: { icon: '●', cls: 'run', label: '运行中' },
+    streaming: { icon: '●', cls: 'run', label: '运行中' },
   };
-  return map[st] || { icon: '●', cls: '', label: String(st) };
+  return map[st] || { icon: '●', cls: 'run', label: String(st) };
+}
+
+function toolHead(p, s) {
+  return (
+    '<span class="tmark">⏺</span>' +
+    '<span class="tname">' + esc(p.name || 'tool') + '</span>' +
+    '<span class="tstate ' + s.cls + '">' + s.icon + (s.label ? ' ' + esc(s.label) : '') + '</span>'
+  );
 }
 
 function toolHtml(p) {
@@ -357,16 +414,12 @@ function toolHtml(p) {
     const txt = st.content.map((c) => (c && c.text) || '').join('\n').trim();
     if (txt) body += '<pre>' + esc(txt) + '</pre>';
   }
-  return (
-    '<details class="tool"><summary>' +
-    '<span class="tmark">⏺</span>' +
-    '<span class="tname">' + esc(p.name || 'tool') + '</span>' +
-    '<span class="tstate ' + s.cls + '">' + s.icon + ' ' + esc(s.label) + '</span>' +
-    '</summary>' + body + '</details>'
-  );
+  if (!body) return '<div class="toolrow">' + toolHead(p, s) + '</div>';
+  return '<details class="tool"><summary>' + toolHead(p, s) + '</summary>' + body + '</details>';
 }
 
-function renderMessage(m) {
+function renderMessage(m, opts) {
+  opts = opts || {};
   const el = document.createElement('div');
   el.className = 'msg ' + m.type;
 
@@ -380,9 +433,11 @@ function renderMessage(m) {
   if (m.type === 'assistant') {
     let html =
       '<div class="turn-head"><span class="marker">⏺</span>' +
-      '<span class="who">助手' +
-      (m.model && m.model.id ? ' · ' + esc(m.model.id) : '') +
-      '</span></div>';
+      '<span class="who">助手</span>' +
+      (opts.showModel && m.model && m.model.id
+        ? '<span class="model">' + esc(m.model.id) + '</span>'
+        : '') +
+      '</div>';
     for (const p of m.content || []) {
       if (p.type === 'text') {
         html += '<div class="content">' + md(p.text || '') + '</div>';
@@ -431,14 +486,18 @@ function renderMessages() {
 
   // 增量渲染:仅重建变化的消息,其余复用 DOM(保留已展开的 details)
   let prev = null;
+  let prevModel = null;
   for (const m of msgs) {
-    const sig = JSON.stringify(m);
+    const showModel =
+      m.type === 'assistant' && !!(m.model && m.model.id) && m.model.id !== prevModel;
+    if (m.type === 'assistant' && m.model && m.model.id) prevModel = m.model.id;
+    const sig = JSON.stringify(m) + '|' + (showModel ? '1' : '0');
     let rec = msgEls.get(m.id);
     if (!rec) {
-      rec = { sig, el: renderMessage(m) };
+      rec = { sig, el: renderMessage(m, { showModel }) };
       msgEls.set(m.id, rec);
     } else if (rec.sig !== sig) {
-      const el = renderMessage(m);
+      const el = renderMessage(m, { showModel });
       rec.el.replaceWith(el);
       rec.el = el;
       rec.sig = sig;
