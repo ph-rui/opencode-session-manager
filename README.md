@@ -133,11 +133,12 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 ## 功能
 
 - **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
-- **会话列表整列可收起**:分栏条顶部的小手柄一键收起,收起后对话区占满整宽;状态记在本地,刷新后保持
+- **会话列表整列可收起**:分栏条顶部的小手柄一键收起,收起后对话区占满整宽;状态记在本地,刷新后保持。**收起之后鼠标靠到左边缘会临时把列表拉出来看一眼**(带一道轻阴影),移开自动收回 —— 记忆不动,只有点手柄才算真的展开
 - **底部输入区可收起**:底板上沿右侧的小手柄一键收起/展开,收起后只剩一条细边(运行中留「■ 中断」,有草稿/附件时在细边上提示);收起时手柄绝不消失,随时点得回来。状态桌面与手机各记一份
 - **刷新后回到刚才的会话**:选中的会话写进 URL hash(`#ses_xxx`),刷新 / 复制链接 / 书签 / 换标签打开都会落到同一会话
 - **浏览器前进 / 后退能在会话之间走**:点会话进历史栈(后退回上一个,前进回下一个);退到打开面板那一格则回到「未选择会话」的空态
 - **刷新后回到会话里读到的位置**:滚动位置按「顶部可见的消息 + 偏移」记在 `sessionStorage`,刷新回到原处,而不是一律跳到最新
+- **往上翻过头了一键回最新**:不在底部时消息区右下角露出「**跳到最新 ↓**」(对应 TUI 的 `Jump to latest`),点它或按 `End` 回底;在底部时它自己收起来,不占地方。它和「新内容自动跟随」共用同一个「在不在底部」判定(80px),所以不会出现「明明跟着跳了按钮还杵着」
 - **顶栏的搜索 / 工程目录 / 排序 / 显示已归档刷新后还在**;与 hash 分工明确:hash 管「选中哪个会话」,localStorage 管「列表怎么筛」
 - **会话区字号可调**:会话界面(消息 / 工具卡片 / diff / 问询卡 / 输入区)整体由一个变量 `--chat-fs` 统管,区内字号全是相对 `em`,改一个数就整块等比缩放
 - 跨工程列出会话,按更新时间排序,游标翻页
@@ -147,7 +148,7 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 - 点击会话打开对话:加载历史消息、发送消息、`/api/event` SSE 实时刷新
 - **用户消息上的提及标记**:`agents[]` 显示成 `@名字`,`skills[]` 显示成 `#名字`(缺 `name` 用 `id` 兜底)
 - **文件附件**:在输入框里 `@` 补全工程内文件直接引用;或用 📎 / 拖放 / 粘贴把文件带上去(见下文「文件附件」)
-- **`/` 命令面板与 TUI 键位**:敲 `/` 列真实命令(服务端 `GET /api/command`,随工程走)再接面板动作类命令,`Ctrl+P` 随时打开;`Esc` 关面板/补全或**中断当前回合**,`Shift+Tab` 切智能体,`↑`/`↓` 取输入历史(见下文「命令面板与 TUI 键位」)
+- **`/` 命令面板与 TUI 键位**:敲 `/` 列真实命令(服务端 `GET /api/command`,随工程走)再接面板动作类命令,`Ctrl+P` 随时打开;`Esc` 关面板/补全或**中断当前回合**,`Shift+Tab` 切智能体,`↑`/`↓` 取输入历史,`End` 跳回最新(见下文「命令面板与 TUI 键位」)
 - **`/sessions` `/models` `/agents` 弹选择框让你选**:不是把焦点丢给顶栏下拉(浏览器不会因此展开原生 `<select>`),而是弹出列表 —— `↑`/`↓` 环绕、`Enter` 选中、`Esc` 关闭、可过滤、可点选;选有推理档位的模型会接着追问一次档位(见下文「选择框」)
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
@@ -389,9 +390,11 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 | `Ctrl+P` | 打开命令面板 | `command.palette.show` |
 | `Shift+Tab` | 切到下一个智能体 | `agent.cycle` |
 | `↑` / `↓` | 光标在首行按 `↑`、末行按 `↓` 时取输入历史(每会话独立) | `prompt.history.*` |
+| `End` | 跳回最新消息(焦点在输入框里时让给输入框,那儿 `End` 是「光标到行尾」) | `session.last`(TUI 还接受 `ctrl+alt+g`) |
 | `Enter` / `Shift+Enter` | 发送 / 换行 | `prompt.submit` / `prompt.newline` |
 
 - `Esc` 挂在 `document` 上而不是输入框上 —— 焦点在别处也管用;但只在该会话确实在跑时才中断,并且 `<dialog>` 打开时让对话框自己处理(否则「关对话框」会顺手把回合中断掉)。
+- `End` 同样挂在 `document` 上,但**焦点在输入框/文本域里时不抢**(那儿 `End` 是光标到行尾);有对话框开着也不抢。
 - 浏览器保留的键位不做:`Ctrl+T`(新标签)、`Ctrl+N`、`Ctrl+W`、`Ctrl+L`(地址栏)在网页里 `preventDefault` 无效,硬做只会变成「按了没反应」。`Ctrl+P` 可以拦,所以采用。
 
 ## 尚未实现(v2+ 剩余项)
@@ -431,7 +434,8 @@ node test/ui-controls-run.js  # 会话控制前端逻辑(无头 Firefox;缺 fire
 node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
-node test/ui-layout-run.js    # 列表折叠 + 刷新后的恢复(会话 / 滚动位置 / 顶栏条件)(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-layout-run.js    # 列表折叠(含鼠标靠左边缘临时拉出) + 刷新后的恢复(会话 / 滚动位置 / 顶栏条件)(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-jump-run.js      # 一键回底「跳到最新 ↓」的显隐与 sticky 位置(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-attach-run.js    # 文件附件与 @ 补全的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-commands-run.js  # / 命令面板、Esc 中断、输入历史、Shift+Tab 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessions 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
@@ -441,7 +445,7 @@ node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(3
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:154 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:175 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -475,6 +479,19 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
      **图标与标签都是空的**、`toolHead` 见两者皆空就整个 `<span>` 都不输出(不留空壳)、
      对话头部那句 `● 运行中` 还在、`✓`/`✗ 出错` 这两个可读标记没被顺手删掉。
      真正的行为验证在 `ui-tools-run.js`。
+   - O 组的 13 项(一键回底):`#jumpLatest` 在 `#messages` **里面**(只有滚动容器内部的
+     `sticky` 才钉得住)、默认 `hidden`、文案 `跳到最新 ↓`、`position: sticky` + `bottom: 8px`、
+     **显式写了 `#jumpLatest[hidden] { display: none }`**(id 选择器的 `display: block` 会压过
+     `.chip[hidden]`,不写就藏不住)、`BOTTOM_SLACK` + `atBottom()` 这一处口径、
+     `renderMessages`/`paintLiveDelta` 都改用它且渲染后重算按钮、
+     `updateJumpLatest()` 会把被 `innerHTML` 清掉的按钮搬回末尾、
+     `End` 键(且挡了输入框)、快捷键清单里有 `End`、`setupJumpLatest()` 接进 `init()` 且只一次。
+     真正的行为验证在 `ui-jump-run.js`(它连 sticky 的实际位置都量)。
+   - P 组的 8 项(鼠标靠左边缘临时拉出列表):`main.list-peek` 那几条**写在 `main.list-hidden` 之后**
+     (同优先级靠顺序赢)、临时展开仍是三列且用 `--list-w`、`mousemove` + `mouseleave` 接线、
+     收回按「分栏槽右沿」判定而**不用 `relatedTarget`**(临时展开会把槽从光标底下挪走)、
+     窄屏挡一道 + 重复接线保护、点手柄把临时态摘掉、`setupListPeek()` 接进 `init()` 且只一次。
+     真正的行为验证在 `ui-layout-run.js` 的 3c 组。
      来源白名单那三条语义(默认值 / 空=不限制 / 配错=全拒)由 `netallow-run.js` 正面覆盖,这里不重复。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
@@ -488,11 +505,18 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   另有 21 项给**运行状态条**:元素与 8 格骨架、`progressCells()` **14 帧逐帧**与 TUI 实测序列一致(写错一格就红)、第 15 帧绕回第 0 帧、负数帧也当循环内、按 90ms 挂表、推一帧后格子跟着变、系统开了「减少动画」也照样逐帧推(**不看** `prefers-reduced-motion` —— 终端里没这个概念,当初为它让路的结果是「电脑上状态条不动、手机上正常」)、复位后又能推,以及空闲/重试/未选中三种收展。
   这套测试页把 `setInterval` 换成**记录下来但不真跑**(`__tick()` 手动驱动),所以帧序是确定的,不靠等。
 - `ui-tools-run.js`:102 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平)、`toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」,以及 `userRefsHtml`(agent `@` / skill `#` 标记、缺 `name` 用 `id` 兜底、都缺则跳过、名字转义、在 `renderMessage` 里的顺序与「没有提及时不产生空行」)。其中 8 项锁**运行中的工具行不画状态标记**(对话头部那套已经说过了,手机竖屏上那个「运行中」还会折成「● 运」「行中」两行):`toolHtml` 出来的 HTML 里既没有「运行中」也没有 `tstate`/`●`(整个 `<span>` 都不输出,不留空壳)、`running`/`streaming` 的 `icon` 与 `label` 都是空串、`cls` 仍是 `run`(别处按状态分类要用)、而完成与出错的 `✓`/`✗ 出错` 照旧在工具行上画。
-- `ui-layout-run.js`:114 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
+- `ui-layout-run.js`:141 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
+  **鼠标靠左边缘临时拉出列表**(3c 组 27 项:贴到左边缘就 `list-peek` 且列表可见、记忆 `list-hidden`/`localStorage` 一个字都没动、分栏槽跟着列表挪到右边、对话区仍有宽度、用的是用户拖出来的 420px 列宽、列表上有一道阴影、在列表里挪动不算离开、挪进对话区收回、移开主区收回、临时展开期间点手柄转成显式展开并保持、显式展开时乱动也不冒临时态、窄屏不玩这一套),
   hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)、
   **前进 / 后退**(点会话入栈、重复点同一个不多压一格、收到 `popstate` 切到 URL 里的会话且不重复入栈、后退到无 hash 时取消选中并清空对话区、空操作不入栈)、
   **会话内滚动位置**(跳到底部 / 存锚点 / 刷新后回到原处且确实不在底部 / 只还原一次 / 点会话进来仍跳底部 / 锚点消息不存在时退回像素值 / 无存档照旧 / 上限 20 与淘汰顺序 / 存的是 `sessionStorage`)、
   **顶栏条件持久化**(空存档的默认值、四项恢复、记住的目录不在结果里也能选回、四类控件改动即时落盘、清空搜库存空串、存的是 `localStorage`)。
+- `ui-jump-run.js`:44 项浏览器内断言,覆盖一键回底「跳到最新 ↓」:形状(`#jumpLatest` 是 `#messages` 的**子元素**、`.chip`、默认 `hidden`、文案)、接线(`wired` 标记、重复接线不再挂监听、只按当前状态重画)、
+  **显隐判定**(刚选中落底部时收起、往上翻就露出来、滚回底部又收起、短会话收起、没选中收起;**走浏览器真派发的那条 `scroll` 事件**,不是手动调函数;另外手工把 `hidden` 改错再补派发一次 `scroll` 就该被纠正回来,证明监听确实挂在 `#messages` 上)、
+  **真布局**(露出来时它真的钉在滚动口下沿且贴右:底边在 `#messages` 底边之上 24px 内、右沿离内边距不到 40px、带阴影)、
+  **口径**(79px 算在底部、80px 不算、`BOTTOM_SLACK === 80`)、**新内容到达**(往上翻着时新内容进来按钮仍露着**且不把人拽到底部**;就在底部时仍然自动跟随且按钮不冒出来)、
+  **点击与键盘**(点它回底并自己收起、不换会话不发请求;`End` 回底、焦点在输入框里不抢也不 `preventDefault`、对话框开着不抢)、以及**老页面兼容**(按钮不在 DOM 里时三个函数都不报错、补回来照常工作)。
+  它连「切会话会把 `#messages` 整个 `innerHTML` 清空、按钮被一起抹掉」这条都验了:清空后按钮仍 `isConnected` 且 `parentElement` 还是 `#messages`。
 
 - `e2e-attach.sh`:32 项。只用临时会话与临时文件,结束时全部删除;验证①代理建好暂存目录并把 `uploadDir` 通过 `/__health` 告知前端、②`POST /api/experimental/fs/write?path=<绝对路径>` 原始字节写盘且内容逐字节一致、③`GET /api/fs/find` 给出相对工程目录的路径与基准目录、④提示词里的附件只认 `file:` URI(服务端自己补 `data`/`mime`,`name`/`mention` 原样落库)、⑤裸绝对路径/相对路径/`https` 三种非法 uri 都被 `400` 拒且原因可辨、⑥面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了附件功能。
 - `ui-attach-run.js`:132 项浏览器内断言,覆盖路径与大小的纯函数(`fileURI`/`baseName`/`joinDir`/`humanSize`/`uploadName`/`uploadPathFor`/`b64Size`)、`userFilesHtml`(uri 来源显示路径、inline 不显示、图片内联缩略图、按 base64 反算大小、缺 `name`/`mime` 兜底、转义、在 `renderMessage` 里的位置与「没有附件就不产生空行」)、`resolveMentions`(只认补全确认过的路径、锚点 `start/end/text` 切出来正好是那一段、多引用、中文里紧跟标点、邮箱里的 `@` 不算)、`@` 补全(光标前 token 的提取边界、请求参数含 `location[directory]` 的 deepObject 写法、目录名与文件名分列、上下键环绕、Enter 消费按键并插入+记忆绝对路径、Esc 关闭、点选、无匹配的空态)、附件排队(上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、超限拒绝、上传失败回滚、拖放/粘贴/文件框三条入口)、以及 `send()` 的请求体(上传文件与 `@` 引用合并进 `files[]`、`mention` 锚点、成功才清空待发送列表、失败保留可重发、切会话清空并关掉补全、没选中会话时按钮禁用、暂存目录未知时先问 `/__health`)。
