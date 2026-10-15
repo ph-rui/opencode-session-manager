@@ -7,6 +7,14 @@ PORT="${OCS_PORT:-49450}"
 PROXY="http://127.0.0.1:${PORT}"
 CFG="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 
+# 面板若启用了访问控制,从环境文件读取凭据
+ENVFILE="${OCS_ENV_FILE:-$HOME/.config/opencode-session-manager/env}"
+if [ -z "${OCS_AUTH:-}" ] && [ -f "$ENVFILE" ]; then
+  OCS_AUTH=$(grep -E '^OCS_AUTH=' "$ENVFILE" | head -1 | cut -d= -f2-)
+fi
+AUTH=()
+[ -n "${OCS_AUTH:-}" ] && AUTH=(-u "$OCS_AUTH")
+
 pass=0
 fail=0
 ck() { # got want label
@@ -16,32 +24,36 @@ ck() { # got want label
 PW=$(python3 -c "import json;print(json.load(open('$CFG/service.json'))['password'])" 2>/dev/null)
 BASE=$(opencode service status 2>/dev/null | grep -o 'http://127.0.0.1:[0-9]*' | head -1)
 
-echo "代理: $PROXY"
+echo "代理: $PROXY  (面板鉴权: ${OCS_AUTH:+开}${OCS_AUTH:-关})"
 echo "服务: ${BASE:-<未发现>}"
 echo
 
-code=$(curl -s -o /dev/null -w '%{http_code}' "$PROXY/__health")
+code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/__health")
 ck "$code" 200 "GET /__health 返回 200"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' "$PROXY/")
+code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/")
 ck "$code" 200 "静态托管 GET / 返回 200"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' "$PROXY/api/session?limit=1")
+code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/session?limit=1")
 ck "$code" 200 "经代理 GET /api/session 返回 200(鉴权注入成功)"
+
+if [ -n "${OCS_AUTH:-}" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$PROXY/api/session?limit=1")
+  ck "$code" 401 "面板已设密码:无凭据经代理返回 401"
+fi
 
 if [ -n "$BASE" ]; then
   code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/session?limit=1")
   ck "$code" 401 "直连服务无鉴权返回 401(鉴权只在代理侧)"
 fi
 
-body=$(curl -s "$PROXY/api/session?limit=1")
-if [ -n "$PW" ] && printf '%s' "$body" | grep -qF "$PW"; then
-  echo "FAIL: 响应体泄露了 password"; fail=$((fail + 1))
-else
-  echo "PASS: 响应体不含 password"; pass=$((pass + 1))
-fi
+body=$(curl -s "${AUTH[@]}" "$PROXY/api/session?limit=1")
+leak=0
+if [ -n "$PW" ] && printf '%s' "$body" | grep -qF "$PW"; then leak=1; fi
+if [ -n "${OCS_AUTH:-}" ] && printf '%s' "$body" | grep -qF "${OCS_AUTH#*:}"; then leak=1; fi
+if [ "$leak" = 1 ]; then echo "FAIL: 响应体泄露了密码"; fail=$((fail + 1)); else echo "PASS: 响应体不含密码"; pass=$((pass + 1)); fi
 
-sse=$(timeout 3 curl -s -N "$PROXY/api/event" | head -c 4000)
+sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if printf '%s' "$sse" | grep -q 'server.connected'; then
   echo "PASS: 经代理 SSE 收到 server.connected"; pass=$((pass + 1))
 else

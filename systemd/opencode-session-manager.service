@@ -5,6 +5,8 @@ Documentation=file://%h/tools/opencode-session-manager/README.md
 [Service]
 Type=simple
 WorkingDirectory=%h/tools/opencode-session-manager
+# 可选:从文件读取 OCS_HOST / OCS_AUTH 等(见 README)。前缀 "-" 表示文件不存在也不报错
+EnvironmentFile=-%h/.config/opencode-session-manager/env
 # PATH 需包含 node 与 opencode shim,供 server.js 执行 `opencode service status` 做服务发现
 Environment=PATH=%h/.nvm/versions/node/v24.18.0/bin:%h/.opencode/shim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=OCS_PORT=49450

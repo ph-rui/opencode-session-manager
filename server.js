@@ -19,10 +19,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFile } = require('child_process');
+const crypto = require('crypto');
 const { Readable } = require('stream');
 
-const HOST = '127.0.0.1';
+const HOST = process.env.OCS_HOST || '127.0.0.1';
 const PORT = Number.parseInt(process.env.OCS_PORT || '49450', 10);
+const PANEL_AUTH = process.env.OCS_AUTH || ''; // 形如 "user:pass";设置后需 HTTP Basic 登录
 const CONFIG_DIR =
   process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), '.config', 'opencode');
 const SERVICE_FILE = path.join(CONFIG_DIR, 'service.json');
@@ -73,6 +75,22 @@ async function ensureDiscovered(force) {
 
 function authHeader() {
   return 'Basic ' + Buffer.from('opencode:' + (state.password || '')).toString('base64');
+}
+
+// 面板访问控制(可选):设置 OCS_AUTH="user:pass" 后,所有请求需 HTTP Basic 登录。
+function panelAuthorized(req) {
+  if (!PANEL_AUTH) return true;
+  const h = req.headers['authorization'] || '';
+  if (!h.startsWith('Basic ')) return false;
+  let decoded = '';
+  try {
+    decoded = Buffer.from(h.slice(6), 'base64').toString('utf8');
+  } catch (_) {
+    return false;
+  }
+  const a = Buffer.from(decoded);
+  const b = Buffer.from(PANEL_AUTH);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /* ----------------------------- 工具函数 ----------------------------- */
@@ -244,6 +262,14 @@ async function health(res) {
 /* ------------------------------- 路由 ------------------------------- */
 
 const server = http.createServer((req, res) => {
+  if (!panelAuthorized(req)) {
+    res.writeHead(401, {
+      'www-authenticate': 'Basic realm="OpenCode Session Manager", charset="UTF-8"',
+      'content-type': 'text/plain; charset=utf-8',
+    });
+    res.end('需要登录 / authentication required');
+    return;
+  }
   const url = req.url.split('?')[0];
   if (url === '/__health') {
     health(res).catch((e) => sendJson(res, 500, { error: String(e) }));
@@ -277,6 +303,7 @@ function listen(port) {
     console.log(`    http://${HOST}:${addr.port}`);
     console.log(`  服务发现: ${state.base || '(未发现)'}`);
     console.log(`  鉴权密码: ${state.password ? '已加载' : '缺失(检查 ' + SERVICE_FILE + ')'}`);
+    console.log(`  面板访问: ${PANEL_AUTH ? '需要登录(Basic)' : '无密码'}`);
     console.log('');
   });
 }

@@ -29,7 +29,34 @@ node server.js
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `OCS_PORT` | `49450` | 本地代理端口(被占用时自动改用随机端口) |
+| `OCS_HOST` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 可开放局域网访问 |
+| `OCS_AUTH` | (空) | 面板访问密码,格式 `用户名:密码`。设置后需 HTTP Basic 登录 |
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | 用于读取 `service.json` 中的密码 |
+
+## 局域网访问与面板密码
+
+默认只监听 `127.0.0.1`(仅本机)。要让局域网其它机器访问:
+
+```bash
+OCS_HOST=0.0.0.0 OCS_AUTH='用户名:密码' node server.js
+```
+
+或用环境文件(推荐,配合 systemd):
+
+```bash
+mkdir -p ~/.config/opencode-session-manager
+cat > ~/.config/opencode-session-manager/env <<'EOF'
+OCS_HOST=0.0.0.0
+OCS_AUTH=用户名:密码
+EOF
+chmod 600 ~/.config/opencode-session-manager/env
+```
+
+之后在局域网用 `http://<本机IP>:49450` 访问,浏览器会弹出登录框。
+
+> ⚠️ **安全提示**:本面板在服务端替你注入了 OpenCode 的鉴权,任何能打开它的客户端
+> 都能读取/删除你的会话、发送消息。因此开放局域网时**务必设置 `OCS_AUTH`**。
+> OpenCode 服务本身仍只监听本机,不会因本面板而暴露。
 
 ## 功能
 
