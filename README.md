@@ -76,6 +76,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 - **用户消息上的提及标记**:`agents[]` 显示成 `@名字`,`skills[]` 显示成 `#名字`(缺 `name` 用 `id` 兜底)
 - **文件附件**:在输入框里 `@` 补全工程内文件直接引用;或用 📎 / 拖放 / 粘贴把文件带上去(见下文「文件附件」)
 - **`/` 命令面板与 TUI 键位**:敲 `/` 列真实命令(服务端 `GET /api/command`,随工程走)再接面板动作类命令,`Ctrl+P` 随时打开;`Esc` 关面板/补全或**中断当前回合**,`Shift+Tab` 切智能体,`↑`/`↓` 取输入历史(见下文「命令面板与 TUI 键位」)
+- **`/sessions` `/models` `/agents` 弹选择框让你选**:不是把焦点丢给顶栏下拉(浏览器不会因此展开原生 `<select>`),而是弹出列表 —— `↑`/`↓` 环绕、`Enter` 选中、`Esc` 关闭、可过滤、可点选;选有推理档位的模型会接着追问一次档位(见下文「选择框」)
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
 - **会话控制**(输入框上方的工具栏):
@@ -291,11 +292,21 @@ chmod 600 ~/.config/opencode-session-manager/env
 | `/export` | 导出为 JSON | 顶栏的导出对话框 |
 | `/archive` | 归档 / 取消归档 | `PATCH` 会话 metadata(面板级) |
 | `/tui` `/copy` | 在 TUI 打开 / 复制那条命令 | 聊天头部的同名按钮 |
-| `/sessions` `/models` `/agents` | 焦点跳到搜索框 / 模型 / 智能体 | 顶栏控件 |
+| `/sessions` `/models` `/agents` | 弹出**选择框**让你选 | 面板内对话框(见下) |
 | `/clear` | 清空输入框 | TUI 的 `prompt.clear` |
 | `/help` | 快捷键表 | 面板内对话框 |
 
 `/undo` `/redo` 是唯二会动到工作区的动作:`revert/stage` 带 `files: true`,和 TUI 的 undo 一样**会还原那一轮的文件改动**,所以要二次确认;会话正在运行时服务端会回 `409 SessionBusyError`,面板先拦住并提示「会话正在运行,先中断或等它结束再撤销」,不去撞这个墙(没有已暂存撤销时 `DELETE /revert` 也回 `409`,面板按「没有可重做的撤销」处理,不算报错)。
+
+### 选择框(`/sessions` `/models` `/agents`)
+
+这三条在 TUI 里都是「弹出列表让你选」。**它们不能只是把焦点丢给顶栏那个下拉** —— 浏览器不会因为 `focus()` 就展开原生 `<select>`,那样按下去看起来是「什么都没发生」。所以它们一律弹一个选择框:
+
+- **一个通用选择框管三条命令**:标题 + 可选的过滤框 + 列表 + 关闭。`↑`/`↓` 环绕移动、`Enter` 选中、`Esc` 关掉(交给 `<dialog>` 自己的原生行为)、鼠标可点;有过滤框时直接打字就过滤(`label` 与副标题都参与,大小写不敏感),换查询词会把高亮归位到第一条。
+- **`/sessions`**:列的就是**左栏那批**(同一套搜索/目录/显示已归档筛选、同一套排序,共用 `visibleSessions()`),标题作主文案、工程目录名 + 相对更新时间作副文案,选中即切过去。
+- **`/models`**:按 `providerID` 分组,主文案是模型名、副文案是 `modelID`;当前模型默认高亮。**选了有 `variants[]` 的模型会紧接着追问一次档位**(列表是「默认」+ 各档位),与 TUI 一致 —— 所以不用再去碰工具栏那个变体下拉。
+- **`/agents`**:只列能切的(`loadAgents` 已经滤掉 `hidden` 与 `subagent`),不提供「默认」这个空选项(服务端不允许把智能体置空,列出来只会点了报错)。
+- 关掉选择框后**焦点回到输入框**,可以接着打字。选择框与工具栏下拉共用同一条落地路径(`applyModel()` / `switchAgent()`),所以两边显示的状态不会各说各话。
 
 ### TUI 键位
 
@@ -345,15 +356,19 @@ node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(�
 node test/ui-layout-run.js    # 列表折叠 + 刷新后的恢复(会话 / 滚动位置 / 顶栏条件)(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-attach-run.js    # 文件附件与 @ 补全的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-commands-run.js  # / 命令面板、Esc 中断、输入历史、Shift+Tab 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessions 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
-- `smoke.sh`:92 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:100 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
    再加 I 组的 18 项(命令面板的五个函数与按工程取命令、命令走 `/command` 通道、同名以服务端优先、16 个面板动作齐全、全局键位接线在 `document` 上、会话在跑才中断且对话框打开时不抢键、输入历史与 `Shift+Tab`、`Ctrl+P`、`#cmds`/`#dlgHelp`/`#helpKeys` 三个节点、样式,以及 I 组的三个测试文件都在),
    以及**第三条与第四条顺序锁**:`setupTuiKeys()` 体内 `closeCommands()` → `closeMentions()` → `interrupt()` 的顺序(这就是 Esc 的优先级,写反了就会「一按 Esc 直接中断」)、`setupComposerKeys()` 体内 `commandKey` → `mentionKey` → `historyKey` → `send` 的顺序(输入框里的按键让给谁)。
    注意 I 组在 `smoke.sh` 里只用 `has()` 与自带的 `ck()` 做**静态**断言,真正的行为验证在 `ui-commands-run.js` 与 `e2e-commands.sh`。
+   选择框那块(+8:对话框四个节点、`.picklist`/`.pick-item`/`.pick-group` 样式、14 个函数齐全、
+   **`focusEl` 这个旧做法已经不在了**、三条命令都接到选择框(用 python 在 `PANEL_COMMANDS` 切片里逐条对)、
+   `init()` 里接上了 `setupPick()`、两个新测试文件都在)。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
@@ -373,7 +388,9 @@ node test/ui-commands-run.js  # / 命令面板、Esc 中断、输入历史、Shi
 - `e2e-attach.sh`:32 项。只用临时会话与临时文件,结束时全部删除;验证①代理建好暂存目录并把 `uploadDir` 通过 `/__health` 告知前端、②`POST /api/experimental/fs/write?path=<绝对路径>` 原始字节写盘且内容逐字节一致、③`GET /api/fs/find` 给出相对工程目录的路径与基准目录、④提示词里的附件只认 `file:` URI(服务端自己补 `data`/`mime`,`name`/`mention` 原样落库)、⑤裸绝对路径/相对路径/`https` 三种非法 uri 都被 `400` 拒且原因可辨、⑥面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了附件功能。
 - `ui-attach-run.js`:132 项浏览器内断言,覆盖路径与大小的纯函数(`fileURI`/`baseName`/`joinDir`/`humanSize`/`uploadName`/`uploadPathFor`/`b64Size`)、`userFilesHtml`(uri 来源显示路径、inline 不显示、图片内联缩略图、按 base64 反算大小、缺 `name`/`mime` 兜底、转义、在 `renderMessage` 里的位置与「没有附件就不产生空行」)、`resolveMentions`(只认补全确认过的路径、锚点 `start/end/text` 切出来正好是那一段、多引用、中文里紧跟标点、邮箱里的 `@` 不算)、`@` 补全(光标前 token 的提取边界、请求参数含 `location[directory]` 的 deepObject 写法、目录名与文件名分列、上下键环绕、Enter 消费按键并插入+记忆绝对路径、Esc 关闭、点选、无匹配的空态)、附件排队(上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、超限拒绝、上传失败回滚、拖放/粘贴/文件框三条入口)、以及 `send()` 的请求体(上传文件与 `@` 引用合并进 `files[]`、`mention` 锚点、成功才清空待发送列表、失败保留可重发、切会话清空并关掉补全、没选中会话时按钮禁用、暂存目录未知时先问 `/__health`)。
 - `e2e-commands.sh`:40 项。只用临时会话与 `/tmp` 临时工程目录,结束时全部删除;验证①`GET /api/command` 带回查询用的 `location.directory`、列表是数组且每项有 `name`、内置 `init`/`review` 与工程无关,②全新工程目录的命令表会被惰性建立起来(首次查询可能为空,所以要轮询),③工程内 `.opencode/commands/hello.md` 出现在该工程的列表里、换个目录就看不到(命令确实随 `location` 走),④未知命令回 `404 CommandNotFoundError` 且**不落任何消息**,⑤缺 `text` 回 `400 InvalidRequestError`(所以前端一律带 `text:''`)且同样不落消息,⑥真命令 `POST /command` 回 `204` 并把模板展开成**一条普通用户提示词**(`说 $ARGUMENTS 好` + `世界` → `说 世界 好`,只多出这一条消息 —— 这条正是面板走的路),⑦`POST /compact` 回 `200` 且带 `type: compaction`,⑧`POST /revert/stage` 与 `DELETE /revert` 存在,会话忙时回 `409 SessionBusyError`(面板据此提示「正在运行」而不是报错),⑨面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了命令面板、全局键位与快捷键对话框。
-- `ui-commands-run.js`:143 项浏览器内断言,覆盖①`cmdQuery`(行首判定、词中间的 `/` 不弹、换行后的行首照弹、嵌套命令名 `team/review`、只看光标之前、没有 `/` 或只剩空白时为 `null`),②`mergedCommands`(服务端命令排前、面板项带标记、同名时服务端优先、没有服务端命令时面板动作照旧),③`parseCommand`(带参数 / 无参数 / 多个空格后的参数整体保留 / 大小写不敏感但取表里的写法 / 非行首不当命令 / 未命中不静默失败 / 嵌套命令),④`loadCommands`(按目录缓存、换目录重新请求、目录为空直接返回),⑤`openCommands`(非 `/` 开头不开、按查询词过滤、前缀命中排前面、面板项渲染「面板」标签、无匹配的空态而不是不显示、`force` 供 `Ctrl+P`、条目数受 `CMD_LIMIT` 截断、没选中会话不开),⑥`commandKey`/`acceptCommand`(上下键环绕、`Tab`/`Enter` 选中且 `preventDefault`、补全成 `/名字 ` 并留出参数位、保留光标之后已有的正文、`Esc` 关掉并标记已消费、面板关着或没有条目时不吃按键),⑦`send()` 的命令分流(命中服务端命令走 `POST /command` 而不是 `/prompt`、`name`/`text` 分开、不忙时不带 `delivery`、忙时带上、能带 `@` 引用附件且成功后才清空、失败弹 toast 不当普通消息补发、未命中的 `/foo` 照旧当普通消息),⑧面板动作(`/compact` 的 `{}`、`/undo` 取最后一条用户消息并带 `files:true`、会话在跑时先拦住不请求、`/redo` 的 `DELETE` 与 `409` 的「没有可重做的撤销」、`/rename` 的 `PATCH`、`/archive` 的 metadata 读-改-写、`/clear` 不发请求、`/help` 的小节标题跨满两列不错位、`/sessions`/`/models`/`/agents` 的焦点跳转),⑨输入历史(`pushHistory` 连续重复只记一次、`↑` 进最新再往上、到头吞键不动、`↓` 退回草稿、不在历史里 `↓` 不接管、没有历史 `↑` 不接管、多行时按首行/末行判定接管与否、切会话归位、普通消息也记历史),⑩全局键位(`Esc` 优先关命令面板、其次关 `@` 补全、都不开且在跑才中断、没在跑不动、`<dialog>` 打开时不抢键、已被别人 `preventDefault` 的 Esc 跳过;`Ctrl+P` 打开且不动输入内容、带 `Shift`/`Alt` 或对话框打开时不算;`Shift+Tab` 切智能体、跳过空值的「默认」、到头绕回、命令面板开着或对话框打开时不抢键),以及⑪输入框内的按键优先级(面板开着时方向键给面板而不落到历史、面板没开时给历史、`Enter` 仍然发送)。
+- `ui-commands-run.js`:148 项浏览器内断言,覆盖①`cmdQuery`(行首判定、词中间的 `/` 不弹、换行后的行首照弹、嵌套命令名 `team/review`、只看光标之前、没有 `/` 或只剩空白时为 `null`),②`mergedCommands`(服务端命令排前、面板项带标记、同名时服务端优先、没有服务端命令时面板动作照旧),③`parseCommand`(带参数 / 无参数 / 多个空格后的参数整体保留 / 大小写不敏感但取表里的写法 / 非行首不当命令 / 未命中不静默失败 / 嵌套命令),④`loadCommands`(按目录缓存、换目录重新请求、目录为空直接返回),⑤`openCommands`(非 `/` 开头不开、按查询词过滤、前缀命中排前面、面板项渲染「面板」标签、无匹配的空态而不是不显示、`force` 供 `Ctrl+P`、条目数受 `CMD_LIMIT` 截断、没选中会话不开),⑥`commandKey`/`acceptCommand`(上下键环绕、`Tab`/`Enter` 选中且 `preventDefault`、补全成 `/名字 ` 并留出参数位、保留光标之后已有的正文、`Esc` 关掉并标记已消费、面板关着或没有条目时不吃按键),⑦`send()` 的命令分流(命中服务端命令走 `POST /command` 而不是 `/prompt`、`name`/`text` 分开、不忙时不带 `delivery`、忙时带上、能带 `@` 引用附件且成功后才清空、失败弹 toast 不当普通消息补发、未命中的 `/foo` 照旧当普通消息),⑧面板动作(`/compact` 的 `{}`、`/undo` 取最后一条用户消息并带 `files:true`、会话在跑时先拦住不请求、`/redo` 的 `DELETE` 与 `409` 的「没有可重做的撤销」、`/rename` 的 `PATCH`、`/archive` 的 metadata 读-改-写、`/clear` 不发请求、`/help` 的小节标题跨满两列不错位、`/sessions`/`/models`/`/agents` 从「只聚焦」改成弹出选择框),⑨输入历史(`pushHistory` 连续重复只记一次、`↑` 进最新再往上、到头吞键不动、`↓` 退回草稿、不在历史里 `↓` 不接管、没有历史 `↑` 不接管、多行时按首行/末行判定接管与否、切会话归位、普通消息也记历史),⑩全局键位(`Esc` 优先关命令面板、其次关 `@` 补全、都不开且在跑才中断、没在跑不动、`<dialog>` 打开时不抢键、已被别人 `preventDefault` 的 Esc 跳过;`Ctrl+P` 打开且不动输入内容、带 `Shift`/`Alt` 或对话框打开时不算;`Shift+Tab` 切智能体、跳过空值的「默认」、到头绕回、命令面板开着或对话框打开时不抢键),以及⑪输入框内的按键优先级(面板开着时方向键给面板而不落到历史、面板没开时给历史、`Enter` 仍然发送)。
+- `ui-picks-run.js`:87 项浏览器内断言,覆盖①通用选择框 `openPick`/`renderPick`(标题、`current` 默认高亮、`current` 不在列表里时停在第一条、`filter=false` 藏过滤框 / `filter=true` 露出来并清空、分组标题每组只出现一次、`sub` 写进 `.pi-sub`、无匹配给空态且不崩高亮),②过滤 `pickVisible`(没查询词=全部、按 label、按 sub、大小写不敏感、纯空白等于没过滤、无匹配返回空),③键位 `pickKey`(↑/↓ 环绕、方向键与 Enter 都 `preventDefault`、不认识的键不管、框关着时不管、空列表不吞键、点「关闭」按钮的 Enter 不抢),④选中 `pickChoose`(回调拿到 key、关框后才回调、`disabled` 项点不动),⑤接线 `setupPick`(过滤框输入即过滤、换查询词把高亮归位、过滤框里 ↓ 交给选择框、点条目选中、关掉后焦点回输入框),⑥`/sessions`(标题、列的就是左栏那批且同序、标题作 label、副文案含目录名、当前会话高亮、打开「显示已归档」后也在、按顶部排序走、选中即切过去),⑦`/models`(按 provider 分组、key/label/sub 的来源、`enabled=false` 的与工具栏一致地不出现、当前模型高亮、当前模型不在列表里时补一条「当前」、有变体就追问且当前档位高亮、选档位带 `variant`、选「默认」不带 `variant`、没有变体就直接切、换模型后追问的是新模型的变体、空 key 只提示不发请求、列表里没有的 key 也能按 `providerID/modelID` 拆开),⑧`/agents`(`hidden` 与 `subagent` 被滤掉、label/sub 来源、当前智能体高亮、不提供「默认」空选项、选中即切、当前智能体不在列表里时补一条),⑨没选中会话时三条都不开,以及⑩三条面板命令仍在、说明已不再写「跳到…」、`focusEl` 这个旧做法已经不存在。
+  真实目检(`/tmp/ocsm-probe/picks-build.js` 用真实 `index.html`/`styles.css`/`app.js` + 真实形状的模型数据)看三张图:`/models` 的按 provider 分组与当前项高亮、选完模型后追问变体、`/sessions` 与左栏同源的列表。
 
 ## 开机自启(systemd 用户服务)
 
