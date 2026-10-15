@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>asks unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div><div id="status" class="status"></div></header>
+  <main>
+    <aside id="filters"><input id="search"><select id="dirFilter"></select><select id="order"></select>
+      <button id="refresh"></button><span id="count"></span></aside>
+    <div class="resizer" id="resizer-left"></div>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader"><span id="chatTitle"></span><span id="chatState"></span><div id="chatMeta"></div>
+        <button id="older" hidden></button></div>
+      <div id="messages"></div><div id="asks" hidden></div>
+      <div id="composer"><textarea id="input"></textarea><button id="send"></button></div>
+    </section>
+  </main>
+  <pre id="results"></pre>
+
+  <script>
+    /* app.js 的网络依赖打桩;保留原始 fetch 供结果回传 */
+    window.__realFetch = window.fetch.bind(window);
+    window.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = () => 0;
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (function () {
+   var post = function (body) { try { window.__realFetch('/result', { method: 'POST', body: body }); } catch (_) {} };
+   try {
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+
+    /* 覆盖全部字段类型、默认值、条件字段与校验分支 */
+    var FORM = {
+      id: 'frm_t', sessionID: 'ses_t', title: '测试表单',
+      fields: [
+        { key: 'board', type: 'multiselect', title: '目标板型', required: true, maxItems: 1, custom: true, options: [
+          { value: 'a', label: 'A', description: '甲' }, { value: 'b', label: 'B' } ] },
+        { key: 'steps', type: 'multiselect', title: '附加步骤', maxItems: 3, custom: true, options: [
+          { value: 'uboot', label: 'U-Boot' }, { value: 'kernel', label: '内核' } ] },
+        { key: 'hwinfo', type: 'string', title: '硬件版本', placeholder: 'rev-' },
+        { key: 'timeout', type: 'integer', title: '超时', default: 300, minimum: 10, maximum: 600 },
+        { key: 'mode', type: 'string', title: '模式', options: [
+          { value: 'fast', label: '快' }, { value: 'safe', label: '稳' } ], custom: false },
+        { key: 'note', type: 'string', title: '备注', options: [ { value: 'x', label: 'X' } ], custom: true },
+        { key: 'remember', type: 'boolean', title: '记住', default: true },
+        { key: 'extra', type: 'string', title: '额外(条件)', required: true, when: [ { key: 'board', op: 'eq', value: 'b' } ] },
+        { key: 'auth', type: 'external', title: '登录', url: 'https://example.com/a' },
+        { key: 'js', type: 'external', title: '危险链接', url: 'javascript:alert(1)' },
+      ],
+    };
+
+    var card = formCard({ id: 'frm_t', kind: 'form', sessionID: 'ses_t', data: FORM, busy: false, error: null });
+    document.body.appendChild(card);
+
+    var fieldW = function (key) {
+      return Array.prototype.slice.call(card.querySelectorAll('.ask-field'))
+        .filter(function (w) { return card.__fields[Number(w.dataset.idx)].key === key; })[0];
+    };
+    var boardW = fieldW('board'), stepsW = fieldW('steps'), extraW = fieldW('extra'),
+      authW = fieldW('auth'), timeoutW = fieldW('timeout'), modeW = fieldW('mode'), noteW = fieldW('note');
+
+    /* 结构 */
+    T('渲染字段数=10', card.querySelectorAll('.ask-field').length === 10, card.querySelectorAll('.ask-field').length);
+    T('单选渲染为 radio', boardW.querySelectorAll('input[type=radio]').length === 2);
+    T('多选渲染为 checkbox', stepsW.querySelectorAll('input[type=checkbox]').length === 2);
+    T('string+options(custom=false) 渲染为 select', !!modeW.querySelector('select'));
+    T('string+options(custom=true) 渲染为 input+datalist', !!noteW.querySelector('input[list]') && !!noteW.querySelector('datalist'));
+    T('external 渲染授权链接', !!authW.querySelector('a.ext'));
+    T('非 http(s) 链接不渲染为可点击 a', !fieldW('js').querySelector('a'));
+    T('boolean 渲染为勾选框', !!fieldW('remember').querySelector('input[type=checkbox]'));
+
+    /* 默认值 */
+    T('integer 默认值预填 300', timeoutW.querySelector('input').value === '300', timeoutW.querySelector('input').value);
+    T('boolean 默认值 true → 勾选', fieldW('remember').querySelector('input').checked);
+
+    /* when 条件 */
+    T('when 未满足 → extra 隐藏', extraW.hidden === true, extraW.hidden);
+
+    /* 必填与 external */
+    var err = validateAnswer(card);
+    T('缺少必填 board → 报错', !!err && err.indexOf('目标板型') === 0, err);
+    boardW.querySelector('input[value="a"]').checked = true;
+    refreshFields(card);
+    T('选中 a 后 extra 仍隐藏(B 才触发)', extraW.hidden === true, extraW.hidden);
+    err = validateAnswer(card);
+    T('board 已答 → 只剩 external 未确认', !!err && err.indexOf('我已完成授权') >= 0, err);
+    authW.querySelector('input').checked = true;
+    T('仅确认一个 external → 仍报错', validateAnswer(card) !== null);
+    fieldW('js').querySelector('input').checked = true;
+    T('两个 external 均确认后校验通过', validateAnswer(card) === null, validateAnswer(card));
+
+    /* 答案组装 */
+    var ans = collectFormAnswer(card);
+    T('board 为数组且值 a', Array.isArray(ans.board) && ans.board[0] === 'a', ans.board);
+    T('timeout 为数字 300', ans.timeout === 300, ans.timeout);
+    T('remember 为 true', ans.remember === true, ans.remember);
+    T('auth 为 true', ans.auth === true, ans.auth);
+    T('空字段 hwinfo/steps/mode 被省略', !('hwinfo' in ans) && !('steps' in ans) && !('mode' in ans), ans);
+    T('未激活 extra 被省略', !('extra' in ans), ans);
+
+    /* 单选 + 自填互斥 */
+    var custom = boardW.querySelector('input.custom');
+    T('单选字段带自填输入框', !!custom);
+    custom.value = '自定义板';
+    custom.dispatchEvent(new Event('input', { bubbles: true }));
+    T('自填后 radio 被清空', boardW.querySelectorAll('input[type=radio]:checked').length === 0);
+    ans = collectFormAnswer(card);
+    T('自填值成为答案', Array.isArray(ans.board) && ans.board.length === 1 && ans.board[0] === '自定义板', ans.board);
+    T('自填后仍通过校验', validateAnswer(card) === null, validateAnswer(card));
+
+    /* when 激活 */
+    custom.value = '';
+    custom.dispatchEvent(new Event('input', { bubbles: true }));
+    boardW.querySelector('input[value="b"]').checked = true;
+    refreshFields(card);
+    T('选中 b → extra 显示', extraW.hidden === false, extraW.hidden);
+    err = validateAnswer(card);
+    T('extra 激活后必填校验生效', !!err && err.indexOf('额外') === 0, err);
+    extraW.querySelector('input').value = 'rev-B2';
+    T('extra 填写后通过', validateAnswer(card) === null, validateAnswer(card));
+    ans = collectFormAnswer(card);
+    T('激活的 extra 进入答案', ans.extra === 'rev-B2', ans.extra);
+
+    /* 字段级校验 */
+    T('integer 小于 minimum 报错', validateField(FORM.fields[3], 5) === '不得小于 10', validateField(FORM.fields[3], 5));
+    T('integer 小数报错', validateField(FORM.fields[3], 12.5) === '应为整数', validateField(FORM.fields[3], 12.5));
+    T('integer 超 maximum 报错', validateField(FORM.fields[3], 999) === '不得大于 600');
+    T('multiselect 超过 maxItems 报错', validateField(FORM.fields[1], ['uboot', 'kernel', 'z', 'w']) === '最多选 3 项');
+    T('email 格式校验', validateField({ type: 'string', format: 'email' }, 'bad') === '请输入邮箱地址');
+    T('uri 格式校验', validateField({ type: 'string', format: 'uri' }, 'nope') === '请输入 URL');
+    T('uri 合法通过', validateField({ type: 'string', format: 'uri' }, 'https://x.y/z') === null);
+    T('string 带 options 且不 custom → 限定选项', validateField(FORM.fields[4], 'zzz') === '请选择可选值');
+    T('string minLength', validateField({ type: 'string', minLength: 3 }, 'ab') === '至少 3 个字符');
+
+    document.getElementById('results').textContent = out.join('\n');
+    document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+    post(out.join('\n'));
+   } catch (e) {
+    post('PAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) + ' stack=' + (e && e.stack));
+   }
+  })();
+  </script>
+</body>
+</html>

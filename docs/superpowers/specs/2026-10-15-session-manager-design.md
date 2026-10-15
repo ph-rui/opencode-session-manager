@@ -19,7 +19,7 @@
 3. 点击会话后**在页面内进行基础实时对话**:加载历史消息、发送消息、流式看到助手回复与工具执行进度。
 
 ### 非目标(v1 明确不做,留作 v2)
-- 网页内应答权限请求(permission)与交互式表单(form);
+- ~~网页内应答权限请求(permission)与交互式表单(form)~~ → 已作为 v2 的 A 组实现(见 §7);
 - 中断 / steer / 切换 model·agent;
 - 文件附件、网页内新建会话、归档、导入导出;
 - 深链跳回 TUI。
@@ -133,7 +133,14 @@ opencode-session-manager/
 - **M4** 错误处理 + 冒烟测试 + README。
 
 ## 7. 升级路径(v2+)
-- 普通对话升级:权限请求应答、交互式表单应答、中断 / steer、切换 model·agent。
+
+- **A 交互应答(已实现)** — 权限请求 + 交互式表单应答。
+  - 事件:`form.created`(`data.form`,含 `sessionID/id/title/metadata/fields`)、`form.replied`/`form.cancelled`(`data.id`);`permission.asked`(`data` 即 `Permission.Request`:`id/sessionID/action/resources/save?/metadata?/source?/message?`)、`permission.replied`(`data.requestID`)。
+  - 表单:`GET /api/session/:sid/form`(列表,返回 `Form.Info`,**不含 state**)、`GET .../form/:fid`(返回 `Form.Detail`,含 `state`)、`POST .../form/:fid/reply` `{answer}`、`DELETE .../form/:fid?message=`。
+  - 权限:`GET /api/session/:sid/permission`、`GET .../permission/:rid`、`POST .../permission/:rid/reply` `{decision:"once"|"always"|"reject"}`。
+  - 字段类型:`string`(format: email/uri/date/date-time,可带 options/custom)、`number`、`integer`、`boolean`、`multiselect`(options/minItems/maxItems/custom)、`external`(url)。通用:required/default/when。
+  - 语义要点(与服务端 `fI/uc/ac` 对齐):`when` 未满足的字段提交会被拒;`external` 必须为 `true`;答案值类型为 `string|number|boolean|string[]`。
+- 普通对话升级:中断 / steer、切换 model·agent。
 - 渲染升级:直接消费事件里的 part 增量,做逐 token 流式与增量合并。
 - 能力扩展:网页内新建会话、归档、导入导出、深链跳回 TUI。
 
@@ -155,6 +162,13 @@ opencode-session-manager/
 - [ ] 打开会话能看到历史消息(user/assistant/tool 渲染正确)。
 - [ ] 输入并发送消息后,能流式看到助手回复刷新。
 - [ ] 停掉 OpenCode 服务时,页面给出清晰错误提示而非白屏。
+- [ ] 触发一次 `question` 工具问询:底部出现卡片,提交后助手继续;列表徽标消失。
+- [ ] 触发一次需批准的权限请求(需在配置里把某动作设为 `ask`):三个按钮可用,应答后工具继续。
+
+### 问询应答的自动化验证(本次已执行)
+- 浏览器内断言 36 项(`/tmp/ocsm-probe/asks-unit*.html`,真实 `app.js`):字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装与本地校验(含 `external`、数值范围、`minItems/maxItems`、`minLength`、`email/uri`)。
+- 端到端 11 项(经面板代理,`/tmp/ocsm-probe/e2e-forms.sh`):真实创建表单 → 列表可见(`Form.Info` 无 `state`)→ 提交未激活字段被拒 `400` → `external` 未确认被拒 `400` → 正常应答 `204` 且服务端保存答案与提交一致 → `detail` 为 `answered` → 取消 `204` 且为 `cancelled`。
+- 权限应答路由经代理可达(已处理/不存在 → `404`);`permission.asked` 的真实出现取决于本机权限策略,当前全部 `allow`,故留作手动验收。
 
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?

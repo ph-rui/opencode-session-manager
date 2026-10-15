@@ -53,6 +53,22 @@ if [ -n "$PW" ] && printf '%s' "$body" | grep -qF "$PW"; then leak=1; fi
 if [ -n "${OCS_AUTH:-}" ] && printf '%s' "$body" | grep -qF "${OCS_AUTH#*:}"; then leak=1; fi
 if [ "$leak" = 1 ]; then echo "FAIL: 响应体泄露了密码"; fail=$((fail + 1)); else echo "PASS: 响应体不含密码"; pass=$((pass + 1)); fi
 
+# 问询(form / permission)端点与前端容器
+SID=$(curl -s "${AUTH[@]}" "$PROXY/api/session?limit=1" \
+  | python3 -c "import json,sys;d=json.load(sys.stdin);print((d.get('data') or [{}])[0].get('id',''))" 2>/dev/null)
+if [ -n "$SID" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/session/$SID/form")
+  ck "$code" 200 "经代理 GET /api/session/:id/form 返回 200"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/session/$SID/permission")
+  ck "$code" 200 "经代理 GET /api/session/:id/permission 返回 200"
+fi
+
+if curl -s "${AUTH[@]}" "$PROXY/" | grep -q 'id="asks"'; then
+  echo "PASS: 首页包含问询容器 #asks"; pass=$((pass + 1))
+else
+  echo "FAIL: 首页缺少 #asks"; fail=$((fail + 1))
+fi
+
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if printf '%s' "$sse" | grep -q 'server.connected'; then
   echo "PASS: 经代理 SSE 收到 server.connected"; pass=$((pass + 1))

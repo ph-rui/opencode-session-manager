@@ -14,6 +14,7 @@ const store = {
   msgOlderCursor: null,
   pending: false,
   running: false,
+  asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
 };
 
 const $ = (s) => document.querySelector(s);
@@ -67,7 +68,9 @@ async function api(path, opts) {
   } catch (_) {}
   if (!r.ok) {
     const msg = (j && (j.message || j.error)) || 'HTTP ' + r.status;
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = r.status;
+    throw err;
   }
   return j;
 }
@@ -135,8 +138,11 @@ function renderSessions() {
     tr.dataset.id = s.id;
     if (s.id === store.selected) tr.classList.add('selected');
     const dir = (s.location && s.location.directory) || '';
+    const nAsk = askCountFor(s.id);
     tr.innerHTML =
-      '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') + '</td>' +
+      '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
+      (nAsk ? ' <span class="ask-badge" title="有待处理问询">⚑ ' + nAsk + '</span>' : '') +
+      '</td>' +
       '<td class="dir" title="' + esc(dir) + '">' + esc(dirBase(dir) || '—') + '</td>' +
       '<td class="upd">' + esc(rel(s.time && s.time.updated)) + '</td>' +
       '<td class="tok">' + esc(fmtTokens(s.tokens)) + '</td>' +
@@ -188,8 +194,9 @@ async function selectSession(id) {
     .join('  ·  ');
   msgEls.clear();
   $('#messages').innerHTML = '';
+  renderAsks();
   updateChatStatus();
-  await loadMessages({ older: false });
+  await Promise.all([loadMessages({ older: false }), loadAsks(id)]);
 }
 
 async function loadMessages(opts) {
@@ -533,6 +540,561 @@ function updateChatStatus() {
   }
 }
 
+/* ----------------------------- 问询(表单 / 权限) ----------------------------- */
+
+function askKey(kind, id) {
+  return kind + ':' + id;
+}
+
+function askCountFor(sid) {
+  let n = 0;
+  for (const a of store.asks.values()) if (a.sessionID === sid) n++;
+  return n;
+}
+
+function setAsk(kind, data) {
+  if (!data || !data.id) return;
+  const key = askKey(kind, data.id);
+  const prev = store.asks.get(key);
+  store.asks.set(key, {
+    kind,
+    id: data.id,
+    sessionID: data.sessionID,
+    data,
+    busy: false,
+    error: null,
+  });
+  if (!prev || store.selected === data.sessionID) renderAsks();
+  renderSessions();
+}
+
+function dropAsk(kind, id) {
+  if (!id) return;
+  if (store.asks.delete(askKey(kind, id))) {
+    renderAsks();
+    renderSessions();
+  }
+}
+
+function dropAsksFor(sid) {
+  for (const [key, a] of Array.from(store.asks)) {
+    if (a.sessionID === sid) store.asks.delete(key);
+  }
+}
+
+/* SSE 事件 → 维护待处理问询 */
+function handleAskEvent(e) {
+  const d = e.data || {};
+  if (e.type === 'form.created' && d.form) {
+    setAsk('form', d.form);
+  } else if (e.type === 'form.replied' || e.type === 'form.cancelled') {
+    dropAsk('form', d.id);
+  } else if (e.type === 'permission.asked') {
+    setAsk('permission', d);
+  } else if (e.type === 'permission.replied' || e.type === 'permission.rejected') {
+    dropAsk('permission', d.requestID || d.id);
+  }
+}
+
+/* 打开会话时兜底拉取(避免错过事件) */
+async function loadAsks(sid) {
+  if (!sid) return;
+  let forms = [];
+  let perms = [];
+  try {
+    const r = await api('/api/session/' + encodeURIComponent(sid) + '/form');
+    forms = (r && r.data) || [];
+  } catch (err) {
+    console.warn('loadAsks form', err);
+  }
+  try {
+    const r = await api('/api/session/' + encodeURIComponent(sid) + '/permission');
+    perms = (r && r.data) || [];
+  } catch (err) {
+    console.warn('loadAsks permission', err);
+  }
+  dropAsksFor(sid);
+  for (const x of forms) {
+    if (x.state && x.state.status !== 'pending') continue;
+    store.asks.set(askKey('form', x.id), {
+      kind: 'form',
+      id: x.id,
+      sessionID: x.sessionID || sid,
+      data: x,
+      busy: false,
+      error: null,
+    });
+  }
+  for (const x of perms) {
+    store.asks.set(askKey('permission', x.id), {
+      kind: 'permission',
+      id: x.id,
+      sessionID: x.sessionID || sid,
+      data: x,
+      busy: false,
+      error: null,
+    });
+  }
+  renderAsks();
+  renderSessions();
+}
+
+/* ----------------------------- 问询渲染 ----------------------------- */
+
+function renderAsks() {
+  const box = $('#asks');
+  if (!box) return;
+  const sid = store.selected;
+  const items = sid
+    ? Array.from(store.asks.values()).filter((a) => a.sessionID === sid)
+    : [];
+  box.hidden = items.length === 0;
+  box.innerHTML = '';
+  for (const a of items) {
+    box.appendChild(a.kind === 'form' ? formCard(a) : permCard(a));
+  }
+}
+
+function fldLabel(f) {
+  return f.title || (f.type === 'external' ? f.url : f.key);
+}
+
+/* 仅允许 http(s) 作为可点击链接,其余按纯文本显示 */
+function safeUrl(u) {
+  return /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+}
+
+/* 与服务端 fI()/uc()/ac() 等价的条件求值:when 全部满足才算"激活" */
+function fldActive(f, values) {
+  if (!f.when || !f.when.length) return true;
+  return f.when.every((c) => {
+    const v = values[c.key];
+    if (v === undefined) return false;
+    const eq = Array.isArray(v) ? v.some((x) => x === c.value) : v === c.value;
+    return c.op === 'eq' ? eq : !eq;
+  });
+}
+
+function fldOptsHtml(f) {
+  const def = Array.isArray(f.default) ? f.default : [];
+  const single = f.maxItems === 1;
+  return (f.options || [])
+    .map((o, i) => {
+      const id = 'o_' + f.key + '_' + i;
+      return (
+        '<label class="opt" for="' + esc(id) + '">' +
+        '<input type="' + (single ? 'radio' : 'checkbox') + '" id="' + esc(id) +
+        '" name="g_' + esc(f.key) + '" value="' + esc(o.value) + '"' +
+        (def.indexOf(o.value) >= 0 ? ' checked' : '') + '>' +
+        '<span class="opt-body"><span class="opt-label">' + esc(o.label || o.value) + '</span>' +
+        (o.description ? '<span class="opt-desc">' + esc(o.description) + '</span>' : '') +
+        '</span></label>'
+      );
+    })
+    .join('');
+}
+
+function fldCtlHtml(f) {
+  if (f.type === 'multiselect') {
+    let out = '<div class="opts">' + fldOptsHtml(f) + '</div>';
+    if (f.custom) {
+      const d = typeof f.default === 'string' ? f.default : '';
+      out +=
+        '<input class="custom" type="text" placeholder="其它(自填)…"' +
+        (d ? ' value="' + esc(d) + '"' : '') + '>';
+    }
+    return out;
+  }
+  if (f.type === 'external') {
+    const url = safeUrl(f.url);
+    return (
+      (url
+        ? '<a class="ext" href="' + esc(url) + '" target="_blank" rel="noopener">打开授权页面 ↗</a>'
+        : '<span class="ext">' + esc(f.url || '') + '</span>') +
+      '<label class="opt"><input type="checkbox"><span class="opt-body">' +
+      '<span class="opt-label">我已完成授权</span></span></label>'
+    );
+  }
+  if (f.type === 'boolean') {
+    return (
+      '<label class="opt"><input type="checkbox"' + (f.default === true ? ' checked' : '') + '>' +
+      '<span class="opt-body"><span class="opt-label">' + esc(fldLabel(f)) + '</span></span></label>'
+    );
+  }
+  const ph = f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '';
+  if (f.type === 'number' || f.type === 'integer') {
+    return (
+      '<input type="number"' +
+      (f.default !== undefined ? ' value="' + esc(f.default) + '"' : '') +
+      (f.minimum !== undefined ? ' min="' + esc(f.minimum) + '"' : '') +
+      (f.maximum !== undefined ? ' max="' + esc(f.maximum) + '"' : '') +
+      (f.type === 'integer' ? ' step="1"' : ' step="any"') +
+      ph + '>'
+    );
+  }
+  /* string:可能带 options(custom=false 必须选;custom=true 可选可填) */
+  const val = typeof f.default === 'string' ? f.default : '';
+  const valueAttr = val ? ' value="' + esc(val) + '"' : '';
+  if (f.options && f.options.length) {
+    if (f.custom === true) {
+      return (
+        '<input type="text" list="dl_' + esc(f.key) + '"' + valueAttr + ph + '>' +
+        '<datalist id="dl_' + esc(f.key) + '">' +
+        f.options
+          .map((o) => '<option value="' + esc(o.value) + '">' + esc(o.label || o.value) + '</option>')
+          .join('') +
+        '</datalist>'
+      );
+    }
+    return (
+      '<select>' +
+      '<option value="">— 请选择 —</option>' +
+      f.options
+        .map(
+          (o) =>
+            '<option value="' + esc(o.value) + '"' +
+            (val && val === o.value ? ' selected' : '') + '>' +
+            esc(o.label || o.value) + '</option>'
+        )
+        .join('') +
+      '</select>'
+    );
+  }
+  const t =
+    f.format === 'email'
+      ? 'email'
+      : f.format === 'uri'
+      ? 'url'
+      : f.format === 'date'
+      ? 'date'
+      : f.format === 'date-time'
+      ? 'datetime-local'
+      : 'text';
+  return '<input type="' + t + '"' + valueAttr + ph + '>';
+}
+
+function fieldHtml(f, idx) {
+  const req = f.required ? ' <span class="req">*</span>' : '';
+  const desc = f.description ? '<div class="fld-desc">' + esc(f.description) + '</div>' : '';
+  const open = '<div class="ask-field" data-idx="' + idx + '">';
+  if (f.type === 'boolean') return open + fldCtlHtml(f) + desc + '</div>';
+  return (
+    open +
+    '<div class="fld-title">' + esc(fldLabel(f)) + req + '</div>' +
+    desc +
+    fldCtlHtml(f) +
+    '</div>'
+  );
+}
+
+/* 条件字段联动:重新计算每个字段的 when 可见性 */
+function refreshFields(el) {
+  const fields = el.__fields || [];
+  const raw = readFieldValues(el);
+  el.querySelectorAll('.ask-field').forEach((w) => {
+    const fld = fields[Number(w.dataset.idx)];
+    if (fld) w.hidden = !fldActive(fld, raw);
+  });
+}
+
+function formCard(a) {
+  const f = a.data || {};
+  const fields = f.fields || [];
+  const el = document.createElement('div');
+  el.className = 'ask ask-form';
+  el.__fields = fields;
+  let html =
+    '<div class="ask-head"><span class="ask-icon">❓</span>' +
+    esc(f.title || '需要你的选择') + '</div>';
+  html += '<div class="ask-body">';
+  fields.forEach((fld, i) => (html += fieldHtml(fld, i)));
+  html += '</div>';
+  html +=
+    '<div class="ask-foot">' +
+    '<button class="ask-submit">提交</button>' +
+    '<button class="ask-cancel">取消</button>' +
+    '<span class="ask-err"' + (a.error ? '' : ' hidden') + '>' + esc(a.error || '') + '</span>' +
+    '</div>';
+  el.innerHTML = html;
+
+  el.addEventListener('input', () => refreshFields(el));
+  el.addEventListener('change', () => refreshFields(el));
+
+  /* 单选 + 自填:二者互斥(question 工具的单选即 maxItems=1 + custom) */
+  el.querySelectorAll('.ask-field').forEach((w) => {
+    const fld = fields[Number(w.dataset.idx)];
+    const custom = w.querySelector('input.custom');
+    if (!fld || fld.type !== 'multiselect' || !custom || fld.maxItems !== 1) return;
+    w.querySelectorAll('input[type=radio]').forEach((r) =>
+      r.addEventListener('change', () => {
+        if (r.checked) custom.value = '';
+      })
+    );
+    custom.addEventListener('input', () => {
+      if (custom.value.trim())
+        w.querySelectorAll('input[type=radio]').forEach((r) => (r.checked = false));
+    });
+  });
+
+  el.querySelector('.ask-submit').addEventListener('click', () => submitForm(a, el));
+  el.querySelector('.ask-cancel').addEventListener('click', () => cancelForm(a, el));
+  refreshFields(el);
+  if (a.busy) setCardBusy(el, true);
+  return el;
+}
+
+function permCard(a) {
+  const r = a.data || {};
+  const el = document.createElement('div');
+  el.className = 'ask ask-perm';
+  const src = r.source && r.source.type === 'tool' ? r.source : null;
+  const res = Array.isArray(r.resources) ? r.resources : [];
+  let html =
+    '<div class="ask-head"><span class="ask-icon">🔐</span>工具请求授权' +
+    (src && src.id ? ' <span class="perm-tool">' + esc(src.id) + '</span>' : '') +
+    '</div>';
+  html += '<div class="ask-body">';
+  if (r.action) html += '<div class="perm-act">' + esc(r.action) + '</div>';
+  if (res.length) {
+    html +=
+      '<div class="perm-res">' +
+      res.map((x) => '<code>' + esc(x) + '</code>').join(' ') +
+      '</div>';
+  }
+  if (r.message) html += '<div class="fld-desc">' + esc(r.message) + '</div>';
+  html += '</div>';
+  html +=
+    '<div class="ask-foot">' +
+    '<button class="ask-allow">允许一次</button>' +
+    '<button class="ask-always">总是允许</button>' +
+    '<button class="ask-deny danger">拒绝</button>' +
+    '<span class="ask-err"' + (a.error ? '' : ' hidden') + '>' + esc(a.error || '') + '</span>' +
+    '</div>';
+  el.innerHTML = html;
+  el.querySelector('.ask-allow').addEventListener('click', () => replyPerm(a, 'once', el));
+  el.querySelector('.ask-always').addEventListener('click', () => replyPerm(a, 'always', el));
+  el.querySelector('.ask-deny').addEventListener('click', () => replyPerm(a, 'reject', el));
+  if (a.busy) setCardBusy(el, true);
+  return el;
+}
+
+/* ----------------------------- 问询提交 ----------------------------- */
+
+function readFieldValues(el) {
+  const fields = el.__fields || [];
+  const vals = {};
+  el.querySelectorAll('.ask-field').forEach((w) => {
+    const fld = fields[Number(w.dataset.idx)];
+    if (!fld) return;
+    const v = readFieldValue(w, fld);
+    if (v !== undefined) vals[fld.key] = v;
+  });
+  return vals;
+}
+
+function readFieldValue(w, f) {
+  if (f.type === 'boolean') {
+    const cb = w.querySelector('input[type=checkbox]');
+    return !!(cb && cb.checked);
+  }
+  if (f.type === 'external') {
+    const cb = w.querySelector('input[type=checkbox]');
+    return cb && cb.checked ? true : undefined;
+  }
+  if (f.type === 'multiselect') {
+    const arr = Array.from(
+      w.querySelectorAll('input[type=radio]:checked, input[type=checkbox]:checked')
+    ).map((i) => i.value);
+    const custom = w.querySelector('input.custom');
+    if (custom && custom.value.trim()) {
+      const t = custom.value.trim();
+      if (f.maxItems === 1) return [t];
+      if (arr.indexOf(t) < 0) arr.push(t);
+    }
+    return arr.length ? arr : undefined;
+  }
+  const inp = w.querySelector('input, select, textarea');
+  if (!inp) return undefined;
+  const raw = String(inp.value).trim();
+  if (raw === '') return undefined;
+  return f.type === 'number' || f.type === 'integer' ? Number(raw) : raw;
+}
+
+/* 组装答案:排除未激活字段(否则服务端 fI() 会拒绝) */
+function collectFormAnswer(el) {
+  const fields = el.__fields || [];
+  const raw = readFieldValues(el);
+  const answer = {};
+  for (const fld of fields) {
+    if (fld.type === 'external') {
+      if (raw[fld.key] === true) answer[fld.key] = true;
+      continue;
+    }
+    if (!fldActive(fld, raw)) continue;
+    const v = raw[fld.key];
+    if (v !== undefined) answer[fld.key] = v;
+  }
+  return answer;
+}
+
+/* 与 TUI 的 Bu() 对齐的本地字段校验 */
+function validateField(f, v) {
+  if (f.required && (v === '' || (Array.isArray(v) && v.length === 0)))
+    return f.type === 'multiselect' ? '请至少选择一项' : '此项必填';
+  if (f.type === 'string') {
+    if (typeof v !== 'string') return '应为文本';
+    if (f.minLength !== undefined && v.length < f.minLength) return '至少 ' + f.minLength + ' 个字符';
+    if (f.maxLength !== undefined && v.length > f.maxLength) return '最多 ' + f.maxLength + ' 个字符';
+    if (f.pattern !== undefined) {
+      try {
+        if (!new RegExp(f.pattern).test(v)) return '需匹配 ' + f.pattern;
+      } catch (_) {
+        return '模式无效';
+      }
+    }
+    if (f.format === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return '请输入邮箱地址';
+    if (f.format === 'uri') {
+      try {
+        new URL(v);
+      } catch (_) {
+        return '请输入 URL';
+      }
+    }
+    if (f.format === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return '日期格式 YYYY-MM-DD';
+    if (f.format === 'date-time' && Number.isNaN(new Date(v).getTime())) return '请输入日期时间';
+    if (f.options && !f.custom && !f.options.some((o) => o.value === v)) return '请选择可选值';
+    return null;
+  }
+  if (f.type === 'number' || f.type === 'integer') {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '应为数字';
+    if (f.type === 'integer' && !Number.isInteger(v)) return '应为整数';
+    if (f.minimum !== undefined && v < f.minimum) return '不得小于 ' + f.minimum;
+    if (f.maximum !== undefined && v > f.maximum) return '不得大于 ' + f.maximum;
+    return null;
+  }
+  if (f.type === 'multiselect') {
+    if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) return '应为选项数组';
+    if (f.minItems !== undefined && v.length < f.minItems) return '至少选 ' + f.minItems + ' 项';
+    if (f.maxItems !== undefined && v.length > f.maxItems) return '最多选 ' + f.maxItems + ' 项';
+    if (f.options && !f.custom) {
+      const bad = v.find((x) => !f.options.some((o) => o.value === x));
+      if (bad) return '不可选项:' + bad;
+    }
+    return null;
+  }
+  return null;
+}
+
+function validateAnswer(el) {
+  const fields = el.__fields || [];
+  const raw = readFieldValues(el);
+  for (const fld of fields) {
+    if (fld.type === 'external') {
+      if (raw[fld.key] !== true) return '请先打开授权页面并勾选"我已完成授权"';
+      continue;
+    }
+    if (!fldActive(fld, raw)) continue;
+    const v = raw[fld.key];
+    if (v === undefined) {
+      if (fld.required)
+        return fldLabel(fld) + ':' + (fld.type === 'multiselect' ? '请至少选择一项' : '此项必填');
+      continue;
+    }
+    const err = validateField(fld, v);
+    if (err) return fldLabel(fld) + ':' + err;
+  }
+  return null;
+}
+
+function setCardBusy(el, on) {
+  el.querySelectorAll('button').forEach((b) => (b.disabled = on));
+}
+
+function setCardError(el, msg) {
+  const s = el.querySelector('.ask-err');
+  if (!s) return;
+  s.textContent = msg || '';
+  s.hidden = !msg;
+}
+
+async function submitForm(a, el) {
+  if (a.busy) return;
+  const err = validateAnswer(el);
+  if (err) {
+    a.error = err;
+    setCardError(el, err);
+    return;
+  }
+  a.busy = true;
+  a.error = null;
+  setCardError(el, '');
+  setCardBusy(el, true);
+  try {
+    await api(
+      '/api/session/' + encodeURIComponent(a.sessionID) + '/form/' +
+        encodeURIComponent(a.id) + '/reply',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answer: collectFormAnswer(el) }),
+      }
+    );
+    dropAsk('form', a.id);
+  } catch (e) {
+    if (e.status === 404 || e.status === 409) return dropAsk('form', a.id); // 已被别处应答/取消
+    a.busy = false;
+    a.error = e.message;
+    setCardBusy(el, false);
+    setCardError(el, '提交失败:' + e.message);
+  }
+}
+
+async function cancelForm(a, el) {
+  if (a.busy) return;
+  a.busy = true;
+  a.error = null;
+  setCardError(el, '');
+  setCardBusy(el, true);
+  try {
+    await api(
+      '/api/session/' + encodeURIComponent(a.sessionID) + '/form/' +
+        encodeURIComponent(a.id) + '?message=' + encodeURIComponent('用户在面板取消'),
+      { method: 'DELETE' }
+    );
+    dropAsk('form', a.id);
+  } catch (e) {
+    if (e.status === 404 || e.status === 409) return dropAsk('form', a.id);
+    a.busy = false;
+    setCardBusy(el, false);
+    setCardError(el, '取消失败:' + e.message);
+  }
+}
+
+async function replyPerm(a, decision, el) {
+  if (a.busy) return;
+  a.busy = true;
+  a.error = null;
+  setCardError(el, '');
+  setCardBusy(el, true);
+  try {
+    await api(
+      '/api/session/' + encodeURIComponent(a.sessionID) + '/permission/' +
+        encodeURIComponent(a.id) + '/reply',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      }
+    );
+    dropAsk('permission', a.id);
+  } catch (e) {
+    if (e.status === 404 || e.status === 409) return dropAsk('permission', a.id);
+    a.busy = false;
+    setCardBusy(el, false);
+    setCardError(el, '应答失败:' + e.message);
+  }
+}
+
 /* ----------------------------- 操作 ----------------------------- */
 
 async function guard(fn) {
@@ -571,7 +1133,9 @@ async function onAction(act, id) {
       store.selected = null;
       store.messages.clear();
       msgEls.clear();
+      dropAsksFor(id);
       $('#messages').innerHTML = '';
+      renderAsks();
       $('#chatTitle').textContent = '未选择会话';
       $('#chatMeta').textContent = '';
       updateChatStatus();
@@ -637,7 +1201,12 @@ let listTimer = null;
 
 function setupEvents() {
   const es = new EventSource('/api/event');
-  es.onmessage = () => {
+  es.onmessage = (ev) => {
+    let e = null;
+    try {
+      e = JSON.parse(ev.data);
+    } catch (_) {}
+    if (e && e.type) handleAskEvent(e);
     clearTimeout(msgTimer);
     msgTimer = setTimeout(() => {
       if (store.selected) loadMessages({ older: false });
