@@ -175,6 +175,7 @@ async function selectSession(id) {
   store.messages.clear();
   store.msgOlderCursor = null;
   store.pending = false;
+  store.forceBottom = true;
   renderSessions();
   const s = store.sessions.get(id);
   $('#chatTitle').textContent = s ? s.title || '(无标题)' : id;
@@ -416,7 +417,9 @@ function renderMessages() {
   const msgs = Array.from(store.messages.values()).sort(
     (a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0)
   );
-  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const force = store.forceBottom;
+  store.forceBottom = false;
+  const nearBottom = force || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
 
   // 删除已不存在的消息
   for (const [id, rec] of msgEls) {
