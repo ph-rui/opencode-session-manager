@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenCode 跨工程会话管理器 (Session Manager web panel)
+Documentation=file://%h/tools/opencode-session-manager/README.md
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tools/opencode-session-manager
+# PATH 需包含 node 与 opencode shim,供 server.js 执行 `opencode service status` 做服务发现
+Environment=PATH=%h/.nvm/versions/node/v24.18.0/bin:%h/.opencode/shim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=OCS_PORT=49450
+ExecStart=%h/.nvm/versions/node/v24.18.0/bin/node %h/tools/opencode-session-manager/server.js
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -53,6 +53,36 @@ bash test/smoke.sh
 
 验证:健康检查、静态托管、鉴权注入、直连 401 对比、SSE 透传、密码不外泄。
 
+## 开机自启(systemd 用户服务)
+
+仓库内 `systemd/opencode-session-manager.service` 是可移植模板(`%h` 会展开为家目录)。
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/opencode-session-manager.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now opencode-session-manager.service
+systemctl --user status opencode-session-manager.service
+```
+
+未登录也开机自启(需要 `sudo`):
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+管理:
+
+```bash
+systemctl --user restart opencode-session-manager.service
+systemctl --user stop opencode-session-manager.service
+journalctl --user -u opencode-session-manager.service -f
+```
+
+> 模板中的 node 路径指向 nvm 当前版本(`~/.nvm/versions/node/v24.18.0/bin/node`)。
+> 升级 Node 后需同步修改该路径。服务未启动时不影响使用——`server.js` 会惰性发现
+> OpenCode 服务(`/__health` 会显示未连接并自动重试)。
+
 ## 实现备注(实测确认)
 
 - 鉴权:`Authorization: Basic base64("opencode:" + password)`,用户名任意。
