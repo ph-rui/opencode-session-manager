@@ -1,0 +1,161 @@
+# OpenCode 跨工程会话管理器 — 设计文档
+
+- 日期:2026-10-15
+- 状态:待评审
+- 形态:本地 Web 面板(单页应用)
+- 目标运行时:Node.js(v24 已在本机,仅用标准库)
+
+## 1. 背景与目标
+
+### 问题
+在使用 OpenCode 的过程中,不同工程目录下会积累大量会话。会话归属于某个工程目录
+(`location.directory`),但用户经常**忘记某个会话是在哪个工程下创建的**,也没有一个
+统一的入口去查看和管理这些跨工程的会话。
+
+### 目标(本次交付)
+做一个**本地 Web 面板**,能够:
+1. **跨所有工程**列出、搜索、按工程目录过滤、排序会话;
+2. 做基本管理:重命名、删除、移动到其它工程目录、分叉;
+3. 点击会话后**在页面内进行基础实时对话**:加载历史消息、发送消息、流式看到助手回复与工具执行进度。
+
+### 非目标(v1 明确不做,留作 v2)
+- 网页内应答权限请求(permission)与交互式表单(form);
+- 中断 / steer / 切换 model·agent;
+- 文件附件、网页内新建会话、归档、导入导出;
+- 深链跳回 TUI。
+
+## 2. 关键事实(已实测,是设计的地基)
+
+| 事实 | 证据 |
+|---|---|
+| OpenCode V2 是客户端-服务器架构,共享后台服务持有**所有工程**的会话 | `GET /api/session` 一次返回了 `example-repo`、`example-manifest`、`example-listener` 等不同 `location.directory` 的会话 |
+| 会话存于 SQLite(`~/.local/share/opencode/opencode.db`,已 1GB) | 官方文档**明令禁止**外部读写该库 → 必须走 HTTP API |
+| API base URL 由 `opencode service status` 给出 | 实测输出 `http://127.0.0.1:49374` |
+| 鉴权 = **HTTP Basic**(密码作 secret,用户名任意) | `curl -u opencode:<pw>` → 200;无鉴权 → 401;`Authorization: Bearer` → 401 |
+| 服务端 CORS 会 echo `Origin`,但**不允许浏览器跨域携带 `Authorization` 头** | 预检 `access-control-allow-headers` 为空 → 纯前端直连 API 不可行 |
+| 密码在 `~/.config/opencode/service.json` 的 `password` 字段;socket 端口**不在**其中 | 读文件 + `service status` 解析端口 |
+
+### 用到的 API 端点
+- `GET /api/session` — 列表。参数:`limit`、`order`(`asc|desc`)、`search`、`parentID`、`directory`、`project`、`subpath`、`cursor`。返回 `{data:[Session.Info], cursor:{previous,next}}`。
+- `GET /api/session/{id}` — 单条。
+- `PATCH /api/session/{id}` — 改名/元数据。body `{title?, metadata?, permissions?}`。
+- `DELETE /api/session/{id}` — 删除。
+- `POST /api/session/{id}/move` — 移动。body `{directory: AbsolutePath, delivery?}`。
+- `POST /api/session/{id}/fork` — 分叉。body `{before?: MessageID}`。
+- `GET /api/session/{id}/message` — 消息历史。参数 `limit`、`order`、`cursor`、`type`。
+- `POST /api/session/{id}/prompt` — 发消息。body `{text, files?, agents?, skills?, ...}`。
+- `GET /api/event` — **SSE 实时事件流**(`text/event-stream`)。
+
+### 数据结构(实测)
+- `Session.Info`:`id`、`title`、`projectID`、`location.directory`、`subpath`、`time{created,updated,idle,viewed,archived}`、`cost`、`tokens`、`outcome`、`agent`、`model`。
+- 消息条目 `{id, time, type, ...}`;`type ∈ idle|assistant|user|synthetic|system|skill|shell|compaction|agent-switched|model-switched|location-switched`。
+  - `user` 消息文本在 `text` 字段。
+  - `assistant` 消息的 `content[]` 由 part 组成,part `type ∈ text|reasoning|tool`;tool part 有 `name`、`state`(Streaming/Running/Completed/Error)。
+- 事件流每行形如 `data: {"id":"evt_...","type":"...","data":{...}}`,并夹带 `: heartbeat` 心跳行。
+
+## 3. 架构
+
+### 组件
+1. **`server.js`(本地代理,Node 标准库,零依赖)**
+   - **发现**:启动时执行 `opencode service status` 解析 base URL;从
+     `$OPENCODE_CONFIG_DIR/service.json`(默认 `~/.config/opencode/service.json`)读 `password`。
+   - **静态托管**:托管 `public/` 下的前端资源。
+   - **反向代理 `/api/*`**:转发到 OpenCode 服务,注入
+     `Authorization: Basic base64("opencode:" + password)`;透传 method / query / body / 状态码 / 响应头。
+   - **SSE 透传**:对 `text/event-stream` 响应,用 `fetch` 的流式 body 直接 pipe 回浏览器,
+     禁用缓冲,保证心跳与事件即时到达。
+   - **`GET /__health`**:返回发现到的 base URL 与连通性,供前端展示当前连接的服务。
+2. **前端(`public/index.html` + `app.js` + `styles.css`)** — 单页应用,三栏布局,无框架、无构建。
+
+### 为什么需要本地代理(而不是纯前端)
+浏览器无法跨域携带 `Authorization` 头(预检不允许),且把密码放进浏览器既不安全也不可靠。
+本地代理让浏览器只与**同源**的 `127.0.0.1:PORT` 通信,由代理侧加 Basic 鉴权,
+**密码永不进入浏览器**。
+
+### 数据流
+```
+浏览器(同源 127.0.0.1:49450)
+      │  fetch /api/*  +  SSE
+      ▼
+server.js  ──注入 Basic──►  OpenCode 服务(127.0.0.1:49374)
+      ▲                         │
+      └──────── 流式透传 ◄──────┘
+```
+
+- 会话列表:`GET /api/session?order=desc&limit=50`,游标翻页。
+- 打开历史:`GET /api/session/{id}/message?order=asc&limit=...`,游标向前翻。
+- 发消息:`POST /api/session/{id}/prompt {text}`,随后由事件流驱动刷新。
+- **实时策略(v1)**:订阅 `GET /api/event`;收到事件后,**防抖(~150ms)重新拉取当前会话的消息与该会话元数据**并重渲染。
+  该策略与具体事件 schema **解耦**,稳健可靠;不以逐 token 精细合并为目标(升级路径见 §7)。
+
+### UI 结构
+- **左栏(过滤)**:搜索框(→ `search`)、工程目录过滤(→ `directory`,下拉项来自会话 `location.directory` 去重)、排序(updated/created)、刷新按钮。
+- **中栏(会话表)**:列 = 标题 / 工程目录(截断显示 + `title` 悬浮全路径) / 更新时间(相对) / tokens / cost / 行内操作(改名、删除、移动、分叉、打开)。点击行=打开。
+- **右栏(对话)**:消息列表(user 右侧气泡;assistant 渲染 `text`;`reasoning` 可折叠;`tool` 显示名称+状态)、底部输入框+发送、顶部显示标题/工程/状态(运行中·空闲)并自动滚动到底部。
+
+### 安全
+- 默认仅监听 `127.0.0.1`。
+- 密码只存在于 Node 进程内;不写入 cookie / localStorage / 响应体。
+- 代理**只**转发 `/api/*` 与静态资源,不接受任意 URL 目标(防 SSRF)。
+
+### 错误处理
+| 场景 | 处理 |
+|---|---|
+| OpenCode 服务未运行 / `service status` 失败 | 顶部红条提示 + 「重试」按钮 |
+| 401(服务重启换了密码) | 代理重读 `service.json` 后重试一次;仍失败则提示 |
+| SSE 断开 | 前端指数退避自动重连,顶部显示「重连中」 |
+| 删除 / 移动 | 前端二次确认;失败时展示后端错误消息 |
+
+## 4. 项目位置与运行
+
+- **位置**:`~/tools/opencode-session-manager/`(独立工程,**不放入 `example-repo` 内核仓库**)。
+- **运行**:`node server.js` → 打印 `http://127.0.0.1:49450`,浏览器打开即可。
+- **配置(env)**:`OPENCODE_CONFIG_DIR`(默认 `~/.config/opencode`)、`OCS_PORT`(默认 `49450`,占用则用随机端口并打印)。
+
+## 5. 目录结构
+```
+opencode-session-manager/
+├── server.js                 # 代理 + 静态托管 + 服务发现
+├── public/
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
+├── test/
+│   └── smoke.sh              # 需要运行中的 OpenCode 服务
+├── docs/superpowers/specs/2026-10-15-session-manager-design.md
+└── README.md
+```
+
+## 6. 里程碑
+- **M1** 代理骨架 + `__health` + 会话列表(浏览 / 搜索 / 过滤 / 排序)。
+- **M2** 管理动作:改名 / 删除 / 移动 / 分叉。
+- **M3** 对话:历史加载 + 发消息 + 事件流实时刷新。
+- **M4** 错误处理 + 冒烟测试 + README。
+
+## 7. 升级路径(v2+)
+- 普通对话升级:权限请求应答、交互式表单应答、中断 / steer、切换 model·agent。
+- 渲染升级:直接消费事件里的 part 增量,做逐 token 流式与增量合并。
+- 能力扩展:网页内新建会话、归档、导入导出、深链跳回 TUI。
+
+## 8. 测试
+
+### 后端冒烟(`test/smoke.sh`,需运行中的 OpenCode 服务)
+- `GET /__health` → 200 且含 base URL。
+- `GET /api/session?limit=1` → 经代理返回 200 JSON(证明 Basic 注入成功)。
+- 直连 OpenCode 无鉴权 → 401;经代理 → 200(证明鉴权只在代理侧)。
+- 经代理订阅 `/api/event`,约 2s 内收到 `server.connected`。
+- 断言任何发给浏览器的响应体 / 头中**不含** password。
+
+### 前端手动验收清单
+- [ ] 列表能同时看到多个工程目录下的会话,并按更新时间倒序。
+- [ ] 搜索关键字能过滤;选择工程目录能只显示该工程会话。
+- [ ] 改名后标题即时更新。
+- [ ] 移动到新目录后,该会话的工程目录更新。
+- [ ] 删除后会话从列表消失。
+- [ ] 打开会话能看到历史消息(user/assistant/tool 渲染正确)。
+- [ ] 输入并发送消息后,能流式看到助手回复刷新。
+- [ ] 停掉 OpenCode 服务时,页面给出清晰错误提示而非白屏。
+
+## 9. 假设与待确认
+- 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?
+- 事件流 v1 采用「事件触发重取」而非精细 delta,是否接受?

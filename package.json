@@ -1,0 +1,10 @@
+{
+  "name": "opencode-session-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "跨工程查看与管理 OpenCode 会话的本地 Web 面板",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "bash test/smoke.sh"
+  }
+}
