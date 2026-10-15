@@ -93,6 +93,25 @@ for sel in 'id="ctoolbar"' 'id="agentSel"' 'id="modelSel"' 'id="interrupt"' 'id=
   fi
 done
 
+# 能力扩展(D 组)端点(只读)与前端控件
+if [ -n "$SID" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/experimental/session/$SID/export?sanitize=true")
+  ck "$code" 200 "经代理 GET /api/experimental/session/:id/export 返回 200"
+fi
+code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/experimental/session/ses_nope/export")
+ck "$code" 404 "导出不存在的会话返回 404"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/experimental/session/nope/export")
+ck "$code" 400 "导出非法会话 ID(不以 ses 开头)返回 400"
+
+for sel in 'id="btnNew"' 'id="btnImport"' 'id="showArchived"' 'id="chatOps"' 'id="opExport"' 'id="opTui"' 'id="opArchive"' 'id="dlgNew"' 'id="dlgImport"' 'id="dlgExport"' 'id="dlgTui"' 'id="dirList"'; do
+  if printf '%s' "$HOME_HTML" | grep -q "$sel"; then
+    echo "PASS: 首页包含 $sel"; pass=$((pass + 1))
+  else
+    echo "FAIL: 首页缺少 $sel"; fail=$((fail + 1))
+  fi
+done
+
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if printf '%s' "$sse" | grep -q 'server.connected'; then
   echo "PASS: 经代理 SSE 收到 server.connected"; pass=$((pass + 1))

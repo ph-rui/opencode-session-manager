@@ -149,8 +149,25 @@ opencode-session-manager/
   - 切换:`GET /api/agent?location[directory]=`(Agent.Info:`id/name/mode ∈ subagent|primary|all/hidden/model`)、`GET /api/model?location[directory]=`(Model.Info:`providerID/modelID/name/enabled/variants[]`)、`GET /api/model/default`。
     `POST /api/session/:sid/agent` `{agent}` → `204`;`POST /api/session/:sid/model` `{model:{id,providerID,variant?}}` → `204`。
     服务端不校验 agent/model 是否存在(未知值也 `204`),但 `model` 缺 `providerID` → `400`。会话当前值在 `Session.Info.agent` / `.model`(可为 `null` = 跟随默认)。
+- **D 能力扩展(已实现)** — 网页内新建会话、归档、导入导出、深链跳回 TUI。
+  - 新建会话:`POST /api/session` body `{id?,parentID?,title?,agent?,model?,location?,metadata?,permissions?}` → **200** `{data: Session.Info}`
+    (注意与 `PATCH`/`DELETE`/`reply` 的 `204` 空体不同)。`location` 为 `{directory}`;带 `title`/`agent`/`model` 均能直接落库(`model` 需 `{id,providerID,variant?}`)。
+    非法 `location` → `400`;**空体 `{}` 也会成功**(落在服务端当前目录),故前端强制要求绝对路径目录。
+  - 归档:**OpenCode v2.0.28 没有会话归档接口**。`Session.Info.time.archived` 与库表列 `time_archived` 都存在,但只有 **project** 有写入路径(`project.list` 会过滤 `time.archived`);
+    `PATCH /api/session/:id` 只接受 `{title?,metadata?,permissions?}`,`GET /api/session` 也没有 `archived` 过滤参数。
+    因此「归档」落在 `session.metadata.ocs.archived`(metadata 为自由形状对象,列表接口会一并返回;未设置时该键整体省略,不是 `null`),由面板负责过滤,
+    OpenCode 自身不感知。**`PATCH metadata` 是整体替换而非深合并**,前端必须读-改-写整个对象(否则会抹掉其它命名空间)。
+  - 导出:`GET /api/experimental/session/:id/export?sanitize=true|false` → `200 {data:{info: Session.Info, messages: Session.Message.Info[]}}`;
+    `sanitize=true` 把标题 / 目录 / metadata 替换为 `[redacted:...]`。会话不存在 → `404`;ID 不符合 `^ses` → `400`。前端下载 `{data:{...}}` 形状的 JSON 文件。
+  - 导入:`POST /api/experimental/session/import` body `{info, messages, location?}` → `200 {data: Session.Info}`。四个实测要点:
+    (a) 载荷是**顶层** `{info, messages}` —— 把导出响应 `{data:{...}}` 原样提交会 `400 Missing key at ["info"]`,前端必须解包;
+    (b) `info.projectID` 必填(缺 → `400`),服务端会按目标 `location` 重算它;
+    (c) `info.id` 已存在 → **`409`**,故前端必须换新 ID(仅约束 `^ses`)并在冲突时重试;
+    (d) 顶层 `location` 可把导入的会话改挂到另一个工程目录。
+  - 深链跳回 TUI:OpenCode 没有自定义 URL scheme,落地形式是 CLI 命令 `opencode --session <id> <directory>`
+    (help:「Session ID to continue, or to create if it does not exist」)。面板给出可直接粘贴的命令并尝试复制;
+    局域网 http 访问不是 secure context,`navigator.clipboard` 通常不可用,故回落到选中文本 + `document.execCommand('copy')`。
 - 渲染升级:直接消费事件里的 part 增量,做逐 token 流式与增量合并。
-- 能力扩展:网页内新建会话、归档、导入导出、深链跳回 TUI。
 
 ## 8. 测试
 
@@ -176,6 +193,10 @@ opencode-session-manager/
 - [ ] 运行中发送消息选「排队」:消息进入待发送队列(不立刻出现在消息流),回合结束后自动执行;选「插话」则立即并入当前回合。
 - [ ] 待发送项可「改为排队/改为插话」与「取消」,操作后队列即时刷新。
 - [ ] 切换智能体/模型后,重新打开该会话仍显示新值(已持久化)。
+- [ ] 左栏「+ 新建」填绝对路径目录后能建出会话并自动打开;留空目录或填相对路径会就地报错。
+- [ ] 列表「归档」后该会话从列表消失,左栏提示「另 N 个已归档」;勾选「显示已归档」可见 `📦 已归档` 行并能「取消归档」。
+- [ ] 聊天头部「导出」下载 JSON;「在 TUI 打开」给出的命令粘到终端能进入同一会话。
+- [ ] 左栏「导入」选择导出得到的 JSON,指定目标目录后导入成功并自动打开(消息完整)。
 
 ### 问询应答的自动化验证(本次已执行)
 - 浏览器内断言 36 项(`/tmp/ocsm-probe/asks-unit*.html`,真实 `app.js`):字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装与本地校验(含 `external`、数值范围、`minItems/maxItems`、`minLength`、`email/uri`)。
@@ -186,6 +207,18 @@ opencode-session-manager/
 - 端到端 `test/e2e-controls.sh`(22 项;`OCS_E2E_LLM=1` 时 31 项,全部通过):agent 切到 `plan`/`build` 并核对持久化;`model` 缺 `providerID` 被拒 `400`、正常切换 `204` 且持久化;空闲中断 `interrupted=false`;未知会话的 `interrupt`/`inbox` 均 `404`;`synthetic` 项被前端规则过滤;`inbox` 改投递方式与取消的负例(`409`/`204`);真实运行中 `queue` 投递→队列可见→改 `steer`→取消→`interrupt` 返回 `true` 且回到空闲。
 - 浏览器内断言 `test/ui-controls-run.js`(77 项,真实 `public/app.js`,无头 Firefox):agent/model 选择器的过滤与分组、变体显隐、切换请求体形状、中断/投递控件显隐、运行状态文案与列表标记、待发送队列渲染与 PATCH/DELETE 请求、发送时的 `delivery` 选择、事件→运行状态映射。
 - 离线渲染核对:`/tmp/ocsm-probe/controls-preview.html`(真实 `app.js` + `styles.css` + 假数据)在运行中与空闲两种状态下的截图,确认工具栏、待发送队列与提示条不遮挡输入框。
+
+### 能力扩展的自动化验证(本次已执行)
+- 端到端 `test/e2e-capabilities.sh`(26 项,全部通过):新建会话的 `title`/`agent`/`model`/`location` 均按传入值保存且返回 `time.created`;列表接口带 `metadata`;归档标记写入/读回/清空;
+  实证 `PATCH metadata` 为整体替换;导出 `sanitize=false` 保留标题、`sanitize=true` 已脱敏、未知会话 `404`;
+  导入的「未解包 → 400」「换新 ID 成功且 `location` 生效」「同 ID → 409」「缺 `projectID` → 400」。
+- 浏览器内断言 `test/ui-capabilities-run.js`(71 项,真实 `public/app.js`,无头 Firefox):归档判定(4 种 metadata 形状)、列表过滤与徽标/按钮态、
+  归档时 `PATCH` 读-改-写保留其它命名空间、取消归档清空 `ocs`、确认框取消则不发请求、聊天头部按钮态;
+  新建的选择器填充与请求体形状(含 `variant`)、空目录/相对路径的本地校验;
+  导入的解包、换 ID、`location`、409 重试、非法 JSON / 缺字段 / 未选文件;导出的 URL 与 `sanitize` 开关、下载文件名与内容形状;
+  `tuiCommand` 的引号转义;`modelRefOf` / `safeName` / `newSessionID` 边界。
+- 离线渲染核对:`/tmp/ocsm-probe/caps-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=list|new|import|export|tui|arch`)逐个截图,
+  确认左栏工具行、归档标记、聊天头部操作区与四个对话框的布局;长目录路径在「在 TUI 打开」里折行完整可见。
 
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?

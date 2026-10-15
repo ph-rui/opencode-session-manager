@@ -22,6 +22,7 @@ const store = {
   modelIndex: new Map(), // 'providerID/modelID' -> Model.Info
   delivery: 'queue', // 运行中消息的投递方式
   ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
+  showArchived: false, // 列表是否显示已归档会话
 };
 
 const $ = (s) => document.querySelector(s);
@@ -221,51 +222,20 @@ async function renderControls(s) {
 
   // 智能体
   const curAgent = s.agent || '';
-  let aHtml = '<option value="">默认</option>';
-  const ids = agents.map((a) => a.id);
-  if (curAgent && ids.indexOf(curAgent) === -1) {
-    aHtml += '<option value="' + esc(curAgent) + '">' + esc(curAgent) + '(当前)</option>';
-  }
-  aHtml += agents
-    .map((a) => '<option value="' + esc(a.id) + '">' + esc(a.name || a.id) + '</option>')
-    .join('');
-  agentSel.innerHTML = aHtml;
+  agentSel.innerHTML = agentOptionsHtml(agents, curAgent);
   agentSel.value = curAgent;
 
   // 模型(按 provider 分组)
-  const groups = new Map();
-  models.forEach((m) => {
-    if (!groups.has(m.providerID)) groups.set(m.providerID, []);
-    groups.get(m.providerID).push(m);
-  });
-  let mHtml = '<option value="">默认</option>';
-  for (const [pid, ms] of groups) {
-    mHtml +=
-      '<optgroup label="' + esc(pid) + '">' +
-      ms
-        .map(
-          (m) =>
-            '<option value="' + esc(pid + '/' + m.modelID) + '">' +
-            esc(m.name || m.modelID) + '</option>'
-        )
-        .join('') +
-      '</optgroup>';
-  }
-  modelSel.innerHTML = mHtml;
+  let mHtml = modelOptionsHtml(models);
   const curModel = modelKey(s.model);
   if (curModel && !store.modelIndex.has(curModel)) {
     mHtml += '<option value="' + esc(curModel) + '">' + esc(curModel) + '(当前)</option>';
-    modelSel.innerHTML = mHtml;
   }
+  modelSel.innerHTML = mHtml;
   modelSel.value = curModel;
 
   // 变体
-  const info = store.modelIndex.get(curModel);
-  const variants = (info && info.variants) || [];
-  varWrap.hidden = !variants.length;
-  varSel.innerHTML =
-    '<option value="">默认</option>' +
-    variants.map((v) => '<option value="' + esc(v.id) + '">' + esc(v.id) + '</option>').join('');
+  paintVariant(varWrap, varSel, curModel);
   varSel.value = (s.model && s.model.variant) || '';
 
   bar.hidden = false;
@@ -477,6 +447,365 @@ async function cancelInbox(it, el) {
   await loadInbox(it.sessionID);
 }
 
+/* ----------------------------- 通用:选择器片段 ----------------------------- */
+
+// agent 列表 → <option> 片段;当前值不在列表里时补一个「(当前)」项,避免下拉被清空。
+function agentOptionsHtml(agents, cur) {
+  let html = '<option value="">默认</option>';
+  if (cur && !agents.some((a) => a.id === cur)) {
+    html += '<option value="' + esc(cur) + '">' + esc(cur) + '(当前)</option>';
+  }
+  return html + agents.map((a) => '<option value="' + esc(a.id) + '">' + esc(a.name || a.id) + '</option>').join('');
+}
+
+// 模型列表 → 按 providerID 分组的 <optgroup> 片段。
+function modelOptionsHtml(models) {
+  const groups = new Map();
+  models.forEach((m) => {
+    if (!groups.has(m.providerID)) groups.set(m.providerID, []);
+    groups.get(m.providerID).push(m);
+  });
+  let html = '<option value="">默认</option>';
+  for (const [pid, ms] of groups) {
+    html +=
+      '<optgroup label="' + esc(pid) + '">' +
+      ms
+        .map(
+          (m) =>
+            '<option value="' + esc(pid + '/' + m.modelID) + '">' + esc(m.name || m.modelID) + '</option>'
+        )
+        .join('') +
+      '</optgroup>';
+  }
+  return html;
+}
+
+// 把 'providerID/modelID' 还原成 Model.Ref(服务端要求 {id, providerID, variant?})。
+function modelRefOf(key, variant) {
+  if (!key) return null;
+  const info = store.modelIndex.get(key);
+  const slash = key.indexOf('/');
+  const ref = info
+    ? { providerID: info.providerID, id: info.modelID }
+    : { providerID: key.slice(0, slash), id: key.slice(slash + 1) };
+  if (variant) ref.variant = variant;
+  return ref;
+}
+
+function paintVariant(wrap, sel, key) {
+  const info = store.modelIndex.get(key);
+  const variants = (info && info.variants) || [];
+  wrap.hidden = !variants.length;
+  sel.innerHTML =
+    '<option value="">默认</option>' +
+    variants.map((v) => '<option value="' + esc(v.id) + '">' + esc(v.id) + '</option>').join('');
+}
+
+function setBusy(btn, on, label) {
+  if (!btn) return;
+  if (on) {
+    if (!btn.dataset.idle) btn.dataset.idle = btn.textContent;
+    btn.disabled = true;
+    if (label) btn.textContent = label;
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.idle) btn.textContent = btn.dataset.idle;
+  }
+}
+
+/* ----------------------------- 归档(面板级) ----------------------------- */
+
+// OpenCode v2.0.28 没有会话归档接口(Session.Info 虽有 time.archived,但只有 project 能写),
+// 因此归档记录在 session.metadata 下,由本面板负责过滤。PATCH metadata 是整体替换,必须读-改-写。
+const ARCHIVE_NS = 'ocs';
+
+function isArchived(s) {
+  const m = (s && s.metadata) || {};
+  return !!(m[ARCHIVE_NS] && m[ARCHIVE_NS].archived);
+}
+
+async function setArchived(id, on) {
+  const s = store.sessions.get(id);
+  if (!s) return;
+  const meta = Object.assign({}, s.metadata || {});
+  const ns = Object.assign({}, meta[ARCHIVE_NS] || {});
+  if (on) ns.archived = Date.now();
+  else delete ns.archived;
+  if (Object.keys(ns).length) meta[ARCHIVE_NS] = ns;
+  else delete meta[ARCHIVE_NS];
+  await api('/api/session/' + enc(id), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ metadata: meta }),
+  });
+  s.metadata = meta;
+}
+
+async function toggleArchive(id) {
+  const s = id && store.sessions.get(id);
+  if (!s) return;
+  const on = !isArchived(s);
+  if (on && !confirm('归档后该会话默认从列表隐藏(仅本面板记录,OpenCode 本身不感知)。继续?')) return;
+  try {
+    await setArchived(id, on);
+  } catch (e) {
+    flash('归档失败:' + e.message, 'bad');
+    return;
+  }
+  renderSessions();
+  renderChatOps();
+  flash(on ? '已归档(勾选左栏「显示已归档」可查看)' : '已取消归档', 'ok');
+}
+
+function renderChatOps() {
+  const bar = $('#chatOps');
+  if (!bar) return;
+  const s = store.selected ? store.sessions.get(store.selected) : null;
+  if (!s) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const on = isArchived(s);
+  const ab = $('#opArchive');
+  ab.textContent = on ? '取消归档' : '归档';
+  ab.classList.toggle('arch-on', on);
+}
+
+/* ----------------------------- 对话框 ----------------------------- */
+
+function openDlg(el) {
+  if (!el) return;
+  if (typeof el.showModal === 'function') el.showModal();
+  else el.setAttribute('open', '');
+}
+
+function closeDlg(el) {
+  if (!el) return;
+  if (typeof el.close === 'function') el.close();
+  else el.removeAttribute('open');
+}
+
+/* ----------------------------- 新建会话 ----------------------------- */
+
+async function fillNewSelectors() {
+  const dir = ($('#newDir').value || '').trim();
+  const [agents, models] = await Promise.all([loadAgents(dir), loadModels(dir)]);
+  if (($('#newDir').value || '').trim() !== dir) return; // 期间目录又变了
+  const mSel = $('#newModel');
+  $('#newAgent').innerHTML = agentOptionsHtml(agents, '');
+  mSel.innerHTML = modelOptionsHtml(models);
+  paintVariant($('#newVariantWrap'), $('#newVariant'), mSel.value);
+}
+
+function openNew() {
+  $('#newErr').hidden = true;
+  $('#newTitle').value = '';
+  if (!$('#newDir').value) $('#newDir').value = store.directory || '';
+  openDlg($('#dlgNew'));
+  fillNewSelectors();
+}
+
+async function submitNew() {
+  const err = $('#newErr');
+  err.hidden = true;
+  const dir = ($('#newDir').value || '').trim();
+  if (!dir) return showDlgErr(err, '请填写工程目录');
+  if (dir[0] !== '/') return showDlgErr(err, '工程目录需要是绝对路径');
+
+  const body = { location: { directory: dir } };
+  const title = ($('#newTitle').value || '').trim();
+  if (title) body.title = title;
+  const agent = $('#newAgent').value;
+  if (agent) body.agent = agent;
+  const ref = modelRefOf($('#newModel').value, $('#newVariant').value);
+  if (ref) body.model = ref;
+
+  const btn = $('#newOk');
+  setBusy(btn, true, '创建中…');
+  try {
+    const j = await api('/api/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const s = j && j.data;
+    if (!s || !s.id) throw new Error('服务端未返回会话信息');
+    store.sessions.set(s.id, s);
+    store.seenDirs.add(dir);
+    closeDlg($('#dlgNew'));
+    renderSessions();
+    await selectSession(s.id);
+    flash('已创建会话:' + (s.title || s.id), 'ok');
+  } catch (e) {
+    showDlgErr(err, '创建失败:' + e.message);
+  }
+  setBusy(btn, false);
+}
+
+function showDlgErr(el, msg) {
+  el.textContent = msg;
+  el.hidden = false;
+}
+
+/* ----------------------------- 导入 / 导出 ----------------------------- */
+
+// 与服务端 Session.ID 的约束一致(只要求以 ses 开头),避免与既有会话撞 ID。
+function newSessionID() {
+  let s = '';
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 24; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return 'ses_' + s;
+}
+
+function openImport() {
+  $('#importErr').hidden = true;
+  if (!$('#importDir').value) $('#importDir').value = store.directory || '';
+  openDlg($('#dlgImport'));
+}
+
+async function submitImport() {
+  const err = $('#importErr');
+  err.hidden = true;
+  const input = $('#importFile');
+  const f = input.files && input.files[0];
+  if (!f) return showDlgErr(err, '请选择要导入的 JSON 文件');
+
+  let payload = null;
+  try {
+    payload = JSON.parse(await f.text());
+  } catch (e) {
+    return showDlgErr(err, '文件不是合法 JSON:' + e.message);
+  }
+  // 兼容本面板导出的 {data:{info,messages}} 与服务端原始载荷 {info,messages}
+  const data = payload && payload.data ? payload.data : payload;
+  if (!data || !data.info || !Array.isArray(data.messages)) {
+    return showDlgErr(err, '文件缺少 info / messages 字段(需要本面板「导出」得到的 JSON)');
+  }
+
+  const dir = ($('#importDir').value || '').trim();
+  if (dir && dir[0] !== '/') return showDlgErr(err, '目标工程目录需要是绝对路径');
+
+  const btn = $('#importOk');
+  setBusy(btn, true, '导入中…');
+  let lastErr = null;
+  // 服务端在 ID 已存在时返回 409,换一个 ID 重试即可。
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const body = { info: Object.assign({}, data.info, { id: newSessionID() }), messages: data.messages };
+    if (dir) body.location = { directory: dir };
+    try {
+      const j = await api('/api/experimental/session/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const s = j && j.data;
+      if (!s || !s.id) throw new Error('服务端未返回会话信息');
+      if (dir) store.seenDirs.add(dir);
+      closeDlg($('#dlgImport'));
+      input.value = '';
+      await loadSessions({ reset: true });
+      // 列表可能是分页/排序的,导入得到的会话不一定落在首页,显式补进缓存再选中
+      store.sessions.set(s.id, s);
+      renderSessions();
+      await selectSession(s.id);
+      flash('已导入会话:' + (s.title || s.id), 'ok');
+      setBusy(btn, false);
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (e.status !== 409) break;
+    }
+  }
+  setBusy(btn, false);
+  showDlgErr(err, '导入失败:' + (lastErr ? lastErr.message : '未知错误'));
+}
+
+function openExport() {
+  $('#exportErr').hidden = true;
+  openDlg($('#dlgExport'));
+}
+
+function safeName(s) {
+  return String(s || '')
+    .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+function downloadJson(name, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+async function submitExport() {
+  const sid = store.selected;
+  if (!sid) return;
+  const err = $('#exportErr');
+  err.hidden = true;
+  const sanitize = $('#exportSanitize').checked;
+  const btn = $('#exportOk');
+  setBusy(btn, true, '导出中…');
+  try {
+    const q = sanitize ? 'true' : 'false';
+    const j = await api('/api/experimental/session/' + enc(sid) + '/export?sanitize=' + q);
+    const s = store.sessions.get(sid);
+    const stem = sanitize ? '' : safeName(s && s.title) + '-';
+    const name = (stem || '') + sid + '.json';
+    // 与 `opencode session export` 一致:外层 data 包裹 {info, messages}
+    downloadJson(name, { data: j && j.data });
+    closeDlg($('#dlgExport'));
+    flash('已导出 ' + name, 'ok');
+  } catch (e) {
+    showDlgErr(err, '导出失败:' + e.message);
+  }
+  setBusy(btn, false);
+}
+
+/* ----------------------------- 深链:在 TUI 中打开 ----------------------------- */
+
+function tuiCommand(s, sid) {
+  const dir = (s && s.location && s.location.directory) || '';
+  const q = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
+  return 'opencode --session ' + (sid || '<sessionID>') + (dir ? ' ' + q(dir) : '');
+}
+
+function openTui() {
+  const sid = store.selected;
+  if (!sid) return;
+  const cmd = tuiCommand(store.sessions.get(sid), sid);
+  $('#tuiCmd').value = cmd;
+  openDlg($('#dlgTui'));
+  const inp = $('#tuiCmd');
+  if (inp.select) inp.select();
+}
+
+async function copyTui() {
+  const inp = $('#tuiCmd');
+  const val = inp.value;
+  let ok = false;
+  try {
+    // 局域网 http 访问不是 secure context,navigator.clipboard 通常不可用,回落到 execCommand。
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(val);
+      ok = true;
+    } else {
+      if (inp.select) inp.select();
+      ok = document.execCommand('copy');
+    }
+  } catch (_) {
+    ok = false;
+  }
+  flash(ok ? '命令已复制' : '已选中命令,请按 Ctrl+C 复制', ok ? 'ok' : 'warn');
+}
+
 /* ----------------------------- 会话列表 ----------------------------- */
 
 async function loadSessions(opts) {
@@ -507,7 +836,9 @@ async function loadSessions(opts) {
 }
 
 function renderSessions() {
-  const rows = Array.from(store.sessions.values()).sort((a, b) => {
+  const all = Array.from(store.sessions.values());
+  const archived = all.filter(isArchived);
+  const rows = (store.showArchived ? all : all.filter((s) => !isArchived(s))).sort((a, b) => {
     const ta = (a.time && a.time.updated) || 0;
     const tb = (b.time && b.time.updated) || 0;
     return store.order === 'asc' ? ta - tb : tb - ta;
@@ -515,16 +846,21 @@ function renderSessions() {
   const tb = $('#list tbody');
   tb.innerHTML = '';
   $('#count').textContent = rows.length;
+  const ac = $('#archivedCount');
+  if (ac) ac.textContent = archived.length ? '(另 ' + archived.length + ' 个已归档)' : '';
   for (const s of rows) {
     const tr = document.createElement('tr');
     tr.dataset.id = s.id;
     if (s.id === store.selected) tr.classList.add('selected');
+    const arch = isArchived(s);
+    if (arch) tr.classList.add('archived');
     const dir = (s.location && s.location.directory) || '';
     const nAsk = askCountFor(s.id);
     const st = runStatus(s.id);
     tr.innerHTML =
       '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
       (st ? ' <span class="run-badge" title="正在执行">' + (st === 'retry' ? '◌ 重试中' : '● 运行中') + '</span>' : '') +
+      (arch ? ' <span class="arch-badge" title="已在面板中归档">📦 已归档</span>' : '') +
       (nAsk ? ' <span class="ask-badge" title="有待处理问询">⚑ ' + nAsk + '</span>' : '') +
       '</td>' +
       '<td class="dir" title="' + esc(dir) + '">' + esc(dirBase(dir) || '—') + '</td>' +
@@ -536,26 +872,31 @@ function renderSessions() {
       '<button data-act="rename">改名</button>' +
       '<button data-act="move">移动</button>' +
       '<button data-act="fork">分叉</button>' +
+      '<button data-act="archive"' + (arch ? ' class="arch-on"' : '') + '>' + (arch ? '取消归档' : '归档') + '</button>' +
       '<button data-act="del" class="danger">删除</button>' +
       '</td>';
     tb.appendChild(tr);
   }
   renderDirOptions();
+  renderChatOps();
   $('#loadMore').hidden = !store.sessionCursor;
 }
 
 function renderDirOptions() {
+  const dirs = Array.from(store.seenDirs).sort();
   const sel = $('#dirFilter');
   sel.innerHTML = '<option value="">全部</option>';
-  Array.from(store.seenDirs)
-    .sort()
-    .forEach((d) => {
-      const o = document.createElement('option');
-      o.value = d;
-      o.textContent = d;
-      sel.appendChild(o);
-    });
+  dirs.forEach((d) => {
+    const o = document.createElement('option');
+    o.value = d;
+    o.textContent = d;
+    sel.appendChild(o);
+  });
   sel.value = store.directory;
+
+  // 新建/导入对话框里的目录提示
+  const dl = $('#dirList');
+  if (dl) dl.innerHTML = dirs.map((d) => '<option value="' + esc(d) + '"></option>').join('');
 }
 
 /* ----------------------------- 选择与消息 ----------------------------- */
@@ -580,6 +921,7 @@ async function selectSession(id) {
   $('#messages').innerHTML = '';
   renderAsks();
   renderInbox();
+  renderChatOps();
   updateChatStatus();
   await Promise.all([
     loadMessages({ older: false }),
@@ -1556,6 +1898,11 @@ async function onAction(act, id) {
     return;
   }
 
+  if (act === 'archive') {
+    await toggleArchive(id);
+    return;
+  }
+
   if (act === 'fork') {
     await guard(() =>
       api('/api/session/' + id + '/fork', {
@@ -1855,6 +2202,29 @@ function init() {
     const b = e.target.closest('button[data-delivery]');
     if (b) setDelivery(b.dataset.delivery);
   });
+
+  // ---- v2 D 组:新建 / 导入导出 / 归档 / 深链 ----
+  $('#btnNew').addEventListener('click', openNew);
+  $('#btnImport').addEventListener('click', openImport);
+  $('#showArchived').addEventListener('change', () => {
+    store.showArchived = $('#showArchived').checked;
+    renderSessions();
+  });
+  $('#opExport').addEventListener('click', openExport);
+  $('#opTui').addEventListener('click', openTui);
+  $('#opArchive').addEventListener('click', () => toggleArchive(store.selected));
+  $('#newOk').addEventListener('click', submitNew);
+  $('#newDir').addEventListener('change', fillNewSelectors);
+  $('#newModel').addEventListener('change', () =>
+    paintVariant($('#newVariantWrap'), $('#newVariant'), $('#newModel').value)
+  );
+  $('#importOk').addEventListener('click', submitImport);
+  $('#exportOk').addEventListener('click', submitExport);
+  $('#tuiCopy').addEventListener('click', copyTui);
+  document.querySelectorAll('dialog.dlg [data-close]').forEach((b) =>
+    b.addEventListener('click', () => closeDlg(b.closest('dialog')))
+  );
+
   $('#list tbody').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-act]');
     const tr = e.target.closest('tr[data-id]');

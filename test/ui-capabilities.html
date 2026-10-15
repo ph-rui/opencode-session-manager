@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>capabilities unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div><div id="status" class="status"></div></header>
+  <main>
+    <aside id="filters">
+      <input id="search"><select id="dirFilter"></select><select id="order"></select>
+      <div class="lbtools">
+        <button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="showArchived"> 显示已归档</label>
+      <span id="count"></span><span id="archivedCount"></span>
+    </aside>
+    <div class="resizer" id="resizer-left"></div>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport">导出</button>
+          <button type="button" id="opTui">在 TUI 打开</button>
+          <button type="button" id="opArchive">归档</button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value="">默认</option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value="">默认</option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden>
+            <button type="button" data-delivery="queue">排队</button>
+            <button type="button" data-delivery="steer">插话</button>
+          </div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <datalist id="dirList"></datalist>
+
+  <dialog id="dlgNew" class="dlg"><div class="dlgform"><h3>新建会话</h3>
+    <input id="newDir" list="dirList"><input id="newTitle">
+    <select id="newAgent"><option value="">默认</option></select>
+    <select id="newModel"><option value="">默认</option></select>
+    <span id="newVariantWrap" hidden><select id="newVariant"></select></span>
+    <p id="newErr" hidden></p>
+    <button type="button" id="newOk">创建</button></div></dialog>
+
+  <dialog id="dlgImport" class="dlg"><div class="dlgform"><h3>导入会话</h3>
+    <input type="file" id="importFile"><input id="importDir" list="dirList">
+    <p id="importErr" hidden></p>
+    <button type="button" id="importOk">导入</button></div></dialog>
+
+  <dialog id="dlgExport" class="dlg"><div class="dlgform"><h3>导出会话</h3>
+    <input type="checkbox" id="exportSanitize" checked>
+    <p id="exportErr" hidden></p>
+    <button type="button" id="exportOk">导出</button></div></dialog>
+
+  <dialog id="dlgTui" class="dlg"><div class="dlgform"><h3>在 TUI 中继续</h3>
+    <input id="tuiCmd"><button type="button" id="tuiCopy">复制</button></div></dialog>
+
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init:本测试直接调用被测函数,避免后台拉取干扰断言 */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var AGENTS = [
+      { id: 'build', name: 'Build', mode: 'primary', hidden: false },
+      { id: 'plan', name: 'Plan', mode: 'primary', hidden: false },
+      { id: 'general', name: 'General', mode: 'subagent', hidden: false },
+    ];
+    var MODELS = [
+      { providerID: 'p1', modelID: 'm1', name: 'M1', enabled: true, variants: [ { id: 'low' }, { id: 'high' } ] },
+      { providerID: 'p2', modelID: 'm2', name: 'M2', enabled: true, variants: [] },
+    ];
+    var SESSIONS = [
+      { id: 'ses_a', title: '活动会话', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/a' } },
+      { id: 'ses_b', title: '已归档会话', projectID: 'pj1', time: { created: 1, updated: 4 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/a' },
+        metadata: { ocs: { archived: 111 } } },
+      { id: 'ses_c', title: '带其它 metadata', projectID: 'pj1', time: { created: 1, updated: 3 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/b' },
+        metadata: { other: { x: 1 }, ocs: { note: 'keep' } } },
+    ];
+
+    /* 打桩:记录请求;可控制 import 首次返回 409 以验证重试 */
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    window.importConflictOnce = false;
+    window.__importSeen = 0;
+    window.__blobs = [];
+    window.__downloads = [];
+    window.confirmMsg = null;
+    window.confirm = function (msg) { window.confirmMsg = msg; return true; };
+    URL.createObjectURL = function (b) { window.__blobs.push(b); return 'blob:stub'; };
+    URL.revokeObjectURL = function () {};
+    HTMLAnchorElement.prototype.click = function () { window.__downloads.push(this.download); };
+
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    var fail = function (status, obj) { return { ok: false, status: status, text: async function () { return JSON.stringify(obj); } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      if (method === 'POST' && u === '/api/session') {
+        var b = JSON.parse(opts.body);
+        return json({ data: { id: 'ses_new01', title: b.title || null, agent: b.agent || null,
+          model: b.model || null, projectID: 'pjN', time: { created: 9, updated: 9 },
+          tokens: { input: 0, output: 0 }, cost: 0, location: b.location, metadata: b.metadata } });
+      }
+      if (u.indexOf('/api/experimental/session/import') === 0) {
+        window.__importSeen++;
+        if (window.importConflictOnce && window.__importSeen === 1) {
+          return fail(409, { _tag: 'ConflictError', message: 'session already exists' });
+        }
+        var ib = JSON.parse(opts.body);
+        return json({ data: { id: ib.info.id, title: ib.info.title, projectID: 'pjN',
+          time: { created: 9, updated: 9 }, tokens: { input: 0, output: 0 }, cost: 0,
+          location: ib.location || ib.info.location } });
+      }
+      var m = u.match(/^\/api\/experimental\/session\/([^/?]+)\/export/);
+      if (m) {
+        var sid = decodeURIComponent(m[1]);
+        var san = /sanitize=true/.test(u);
+        return json({ data: {
+          info: { id: sid, title: san ? '[redacted:session-title:' + sid + ']' : '活动会话',
+                  projectID: 'pj1', cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+                  time: { created: 1, updated: 5 }, location: { directory: '/proj/a' } },
+          messages: [ { id: 'm1', type: 'user', time: { created: 2 }, text: 'hello' } ],
+        } });
+      }
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|message|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      if (method === 'PATCH') return { ok: true, status: 204, text: async function () { return ''; } };
+      if (method === 'POST' || method === 'DELETE') return { ok: true, status: 204, text: async function () { return ''; } };
+      return json({});
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (body) { try { window.__realFetch('/result', { method: 'POST', body: body }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var vals = function (sel) { return qa(sel + ' option').map(function (o) { return o.value; }); };
+    var reqs = function (re) { return window.calls.filter(function (c) { return re.test(c.url); }); };
+    var bodyOf = function (c) { return JSON.parse(c.body); };
+    var reset = function () { window.calls.length = 0; };
+    var seed = function () {
+      store.sessions.clear();
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, JSON.parse(JSON.stringify(s))); });
+      store.selected = null;
+    };
+    var setFile = function (input, name, text) {
+      var f = new File([text], name, { type: 'application/json' });
+      try {
+        var dt = new DataTransfer();
+        dt.items.add(f);
+        input.files = dt.files;
+      } catch (_) {
+        Object.defineProperty(input, 'files', { value: [f], configurable: true });
+      }
+      return f;
+    };
+
+    try {
+      /* ---------------- 归档判定 ---------------- */
+      T('未带 metadata → 未归档', isArchived({}) === false);
+      T('metadata 无 ocs → 未归档', isArchived({ metadata: { other: 1 } }) === false);
+      T('ocs 为空对象 → 未归档', isArchived({ metadata: { ocs: {} } }) === false);
+      T('ocs.archived 有值 → 已归档', isArchived({ metadata: { ocs: { archived: 1 } } }) === true);
+
+      /* ---------------- 列表过滤与标记 ---------------- */
+      seed();
+      store.showArchived = false;
+      renderSessions();
+      T('默认隐藏已归档会话', qa('#list tbody tr').length === 2, qa('#list tbody tr').length);
+      T('已归档会话不在列表里', !q('#list tbody tr[data-id="ses_b"]'));
+      T('可见计数只算未归档', q('#count').textContent === '2', q('#count').textContent);
+      T('提示剩余归档数量', q('#archivedCount').textContent.indexOf('1') >= 0, q('#archivedCount').textContent);
+
+      store.showArchived = true;
+      renderSessions();
+      T('勾选后显示全部会话', qa('#list tbody tr').length === 3, qa('#list tbody tr').length);
+      var trb = q('#list tbody tr[data-id="ses_b"]');
+      T('已归档行带 .archived 类', !!trb && trb.classList.contains('archived'));
+      T('已归档行显示 📦 标记', !!trb && trb.textContent.indexOf('已归档') >= 0, trb && trb.textContent);
+      T('已归档行按钮为「取消归档」',
+        !!trb && trb.querySelector('button[data-act="archive"]').textContent === '取消归档',
+        trb && trb.querySelector('button[data-act="archive"]').textContent);
+      T('已归档行按钮带 arch-on 类', !!trb && trb.querySelector('button[data-act="archive"]').classList.contains('arch-on'));
+      var tra = q('#list tbody tr[data-id="ses_a"]');
+      T('未归档行按钮为「归档」', tra.querySelector('button[data-act="archive"]').textContent === '归档');
+      T('未归档行无 📦 标记', !tra.querySelector('.arch-badge'));
+
+      /* ---------------- 归档动作:PATCH 必须读-改-写整个 metadata ---------------- */
+      seed();
+      reset();
+      await toggleArchive('ses_c'); // metadata: {other:{x:1}, ocs:{note:'keep'}}
+      var cp = reqs(/^\/api\/session\/ses_c$/).filter(function (c) { return c.method === 'PATCH'; })[0];
+      T('归档 PATCH 到 /api/session/:id', !!cp, cp && cp.url);
+      var meta = cp && bodyOf(cp).metadata;
+      T('归档保留其它 metadata 命名空间', !!meta && meta.other && meta.other.x === 1, meta);
+      T('归档保留 ocs 下已有键', !!meta && meta.ocs && meta.ocs.note === 'keep', meta);
+      T('归档写入 ocs.archived 时间戳', !!meta && typeof meta.ocs.archived === 'number', meta);
+      T('归档后内存中的会话被标记', isArchived(store.sessions.get('ses_c')) === true);
+      T('归档确认有提示文案', typeof confirmMsg === 'string' && confirmMsg.indexOf('归档') >= 0, confirmMsg);
+
+      seed();
+      reset();
+      await toggleArchive('ses_b'); // 只有 ocs.archived → 取消归档后 metadata 应为空对象
+      var cu = reqs(/^\/api\/session\/ses_b$/).filter(function (c) { return c.method === 'PATCH'; })[0];
+      T('取消归档 PATCH metadata 为空', !!cu && JSON.stringify(bodyOf(cu).metadata) === '{}', cu && bodyOf(cu));
+      T('取消归档后内存中不再标记', isArchived(store.sessions.get('ses_b')) === false);
+
+      seed();
+      reset();
+      var origConfirm = window.confirm;
+      window.confirm = function (m) { window.confirmMsg = m; return false; };
+      await toggleArchive('ses_a');
+      T('确认框取消则不发请求', reqs(/PATCH/).length === 0);
+      window.confirm = origConfirm;
+
+      /* ---------------- 聊天头部操作按钮 ---------------- */
+      seed();
+      store.selected = 'ses_a';
+      renderChatOps();
+      T('选中会话时显示操作区', q('#chatOps').hidden === false);
+      T('未归档时按钮为「归档」', q('#opArchive').textContent === '归档');
+      store.selected = 'ses_b';
+      renderChatOps();
+      T('已归档时按钮为「取消归档」', q('#opArchive').textContent === '取消归档');
+      T('已归档时按钮高亮', q('#opArchive').classList.contains('arch-on'));
+      store.selected = null;
+      renderChatOps();
+      T('未选会话时隐藏操作区', q('#chatOps').hidden === true);
+
+      /* ---------------- 新建会话 ---------------- */
+      q('#newDir').value = '/proj/a';
+      await fillNewSelectors();
+      T('新建:agent 下拉按规则过滤', JSON.stringify(vals('#newAgent')) === JSON.stringify(['', 'build', 'plan']), vals('#newAgent'));
+      T('新建:model 下拉按 provider 分组',
+        qa('#newModel optgroup').map(function (g) { return g.label; }).join(',') === 'p1,p2',
+        qa('#newModel optgroup').map(function (g) { return g.label; }));
+
+      seed();
+      store.selected = null;
+      reset();
+      q('#newDir').value = '/proj/new';
+      await fillNewSelectors();
+      q('#newTitle').value = '新建标题';
+      q('#newAgent').value = 'plan';
+      q('#newModel').value = 'p1/m1';
+      // 与真实的 change 处理一致:换模型后重算变体下拉
+      paintVariant(q('#newVariantWrap'), q('#newVariant'), q('#newModel').value);
+      q('#newVariant').value = 'high';
+      q('#newErr').hidden = true;
+      await submitNew();
+      var cn = reqs(/^\/api\/session$/).filter(function (c) { return c.method === 'POST'; })[0];
+      T('新建 POST /api/session', !!cn, cn && cn.url);
+      var nb = cn && bodyOf(cn);
+      T('新建体含 location.directory', !!nb && nb.location.directory === '/proj/new', nb);
+      T('新建体含 title', !!nb && nb.title === '新建标题', nb);
+      T('新建体含 agent', !!nb && nb.agent === 'plan', nb);
+      T('新建体含 model{variant}', !!nb && nb.model.providerID === 'p1' && nb.model.id === 'm1' && nb.model.variant === 'high', nb && nb.model);
+      T('新建后加入会话表', !!store.sessions.get('ses_new01'));
+      T('新建后自动选中', store.selected === 'ses_new01', store.selected);
+      T('新建后记住目录', store.seenDirs.has('/proj/new'));
+
+      // 校验分支
+      seed();
+      reset();
+      q('#newErr').hidden = true;
+      q('#newDir').value = '   ';
+      await submitNew();
+      T('空目录:报错且不发请求', q('#newErr').hidden === false && reqs(/^\/api\/session$/).length === 0, q('#newErr').textContent);
+      reset();
+      q('#newErr').hidden = true;
+      q('#newDir').value = 'relative/path';
+      await submitNew();
+      T('相对路径:报错且不发请求', q('#newErr').hidden === false && reqs(/^\/api\/session$/).length === 0, q('#newErr').textContent);
+
+      /* ---------------- 导入 ---------------- */
+      var exportFile = JSON.stringify({ data: { info: { id: 'ses_old', title: '导入我', projectID: 'pjo' }, messages: [ { id: 'm1', type: 'user' } ] } });
+
+      seed();
+      reset();
+      setFile(q('#importFile'), 'x.json', exportFile);
+      q('#importDir').value = '/proj/target';
+      q('#importErr').hidden = true;
+      window.__importSeen = 0;
+      await submitImport();
+      var ci = reqs(/experimental\/session\/import/)[0];
+      T('导入 POST 到 experimental import', !!ci, ci && ci.url);
+      var ib = ci && bodyOf(ci);
+      T('导入体解包 data 并保留 messages', !!ib && ib.messages.length === 1 && ib.messages[0].id === 'm1', ib);
+      T('导入体换新 ID', !!ib && ib.info.id !== 'ses_old' && /^ses/.test(ib.info.id), ib && ib.info.id);
+      T('导入体保留原有 info 其它字段', !!ib && ib.info.title === '导入我' && ib.info.projectID === 'pjo', ib && ib.info);
+      T('导入体用 location 指定目标目录', !!ib && ib.location.directory === '/proj/target', ib);
+      T('导入后加入会话表并选中', !!store.sessions.get(ib.info.id) && store.selected === ib.info.id, store.selected);
+      T('导入后清空文件选择', !q('#importFile').files || !q('#importFile').files.length);
+
+      // ID 冲突:服务端 409 → 换 ID 重试
+      seed();
+      reset();
+      setFile(q('#importFile'), 'y.json', exportFile);
+      window.importConflictOnce = true;
+      window.__importSeen = 0;
+      q('#importErr').hidden = true;
+      await submitImport();
+      var tries = reqs(/experimental\/session\/import/);
+      T('导入遇 409 会重试', tries.length === 2, tries.length);
+      T('重试使用不同 ID', tries.length === 2 && bodyOf(tries[0]).info.id !== bodyOf(tries[1]).info.id,
+        tries.map(function (c) { return bodyOf(c).info.id; }));
+      T('重试成功后无错误提示', q('#importErr').hidden === true, q('#importErr').textContent);
+      window.importConflictOnce = false;
+
+      // 非法文件
+      seed();
+      reset();
+      setFile(q('#importFile'), 'bad.json', '{not json');
+      q('#importErr').hidden = true;
+      await submitImport();
+      T('非法 JSON:报错且不发请求', q('#importErr').hidden === false && reqs(/import/).length === 0, q('#importErr').textContent);
+      reset();
+      setFile(q('#importFile'), 'wrong.json', JSON.stringify({ hello: 1 }));
+      q('#importErr').hidden = true;
+      await submitImport();
+      T('缺 info/messages:报错且不发请求', q('#importErr').hidden === false && reqs(/import/).length === 0, q('#importErr').textContent);
+      reset();
+      Object.defineProperty(q('#importFile'), 'files', { value: [], configurable: true });
+      q('#importErr').hidden = true;
+      await submitImport();
+      T('未选文件:报错且不发请求', q('#importErr').hidden === false && reqs(/import/).length === 0, q('#importErr').textContent);
+
+      /* ---------------- 导出 ---------------- */
+      seed();
+      store.selected = 'ses_a';
+      reset();
+      window.__blobs = [];
+      window.__downloads = [];
+      q('#exportSanitize').checked = false;
+      q('#exportErr').hidden = true;
+      await submitExport();
+      var ce = reqs(/\/export/)[0];
+      T('导出 GET export?sanitize=false', !!ce && ce.url === '/api/experimental/session/ses_a/export?sanitize=false', ce && ce.url);
+      T('导出触发一次下载', window.__downloads.length === 1, window.__downloads);
+      T('不脱敏时文件名带标题', window.__downloads[0].indexOf('活动会话') === 0 && /ses_a\.json$/.test(window.__downloads[0]), window.__downloads[0]);
+      var blobTxt = await window.__blobs[0].text();
+      var blobObj = JSON.parse(blobTxt);
+      T('导出文件外层为 {data:{info,messages}}', !!blobObj.data && !!blobObj.data.info && Array.isArray(blobObj.data.messages), Object.keys(blobObj));
+
+      reset();
+      window.__blobs = [];
+      window.__downloads = [];
+      q('#exportSanitize').checked = true;
+      await submitExport();
+      ce = reqs(/\/export/)[0];
+      T('导出 GET export?sanitize=true', !!ce && ce.url === '/api/experimental/session/ses_a/export?sanitize=true', ce && ce.url);
+      T('脱敏时文件名不含标题', window.__downloads[0] === 'ses_a.json', window.__downloads[0]);
+
+      /* ---------------- 深链:在 TUI 中打开 ---------------- */
+      T('tuiCommand 含 --session 与目录',
+        tuiCommand({ location: { directory: '/proj/a' } }, 'ses_x') === "opencode --session ses_x '/proj/a'",
+        tuiCommand({ location: { directory: '/proj/a' } }, 'ses_x'));
+      T('tuiCommand 转义目录里的单引号',
+        tuiCommand({ location: { directory: "/a'b" } }, 'ses_x') === "opencode --session ses_x '/a'\\''b'",
+        tuiCommand({ location: { directory: "/a'b" } }, 'ses_x'));
+      T('tuiCommand 无目录时只给会话 ID',
+        tuiCommand({}, 'ses_x') === 'opencode --session ses_x', tuiCommand({}, 'ses_x'));
+
+      seed();
+      store.selected = 'ses_a';
+      openTui();
+      T('openTui 填入命令', q('#tuiCmd').value === "opencode --session ses_a '/proj/a'", q('#tuiCmd').value);
+
+      /* ---------------- 小工具 ---------------- */
+      T('newSessionID 以 ses 开头', /^ses[a-z0-9_]*$/.test(newSessionID()), newSessionID());
+      T('newSessionID 每次不同', newSessionID() !== newSessionID());
+      T('safeName 去掉路径分隔与空白', safeName('a/b c:d') === 'a-b-c-d', safeName('a/b c:d'));
+      T('safeName 保留中文与数字', safeName('会话 2026') === '会话-2026', safeName('会话 2026'));
+
+      store.modelIndex.set('p1/m1', MODELS[0]);
+      T('modelRefOf 由 key 还原 Model.Ref', JSON.stringify(modelRefOf('p1/m1')) === JSON.stringify({ providerID: 'p1', id: 'm1' }),
+        modelRefOf('p1/m1'));
+      T('modelRefOf 带 variant', JSON.stringify(modelRefOf('p1/m1', 'high')) === JSON.stringify({ providerID: 'p1', id: 'm1', variant: 'high' }));
+      T('modelRefOf 空 key 返回 null', modelRefOf('') === null, modelRefOf(''));
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      post('PAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) + ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

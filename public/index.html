@@ -26,8 +26,15 @@
           <option value="asc">最早更新</option>
         </select>
       </label>
-      <button id="refresh">刷新</button>
-      <div class="hint">共 <span id="count">0</span> 个会话</div>
+      <div class="lbtools">
+        <button id="btnNew" class="chip primary" title="在指定工程目录新建一个会话">+ 新建</button>
+        <button id="btnImport" class="chip" title="从 JSON 文件导入会话">导入</button>
+        <button id="refresh" class="chip" title="重新拉取会话列表">刷新</button>
+      </div>
+      <label class="chk" title="归档只记录在本面板(见 README),OpenCode 本身暂无会话归档接口">
+        <input type="checkbox" id="showArchived"> 显示已归档
+      </label>
+      <div class="hint">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
     </aside>
 
     <div class="resizer" id="resizer-left" title="拖动调整宽度 · 双击复位"></div>
@@ -58,6 +65,11 @@
           <span id="chatState" class="state"></span>
         </div>
         <div id="chatMeta" class="meta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport" class="chip" title="导出该会话为 JSON">导出</button>
+          <button type="button" id="opTui" class="chip" title="给出在终端 TUI 里继续该会话的命令">在 TUI 打开</button>
+          <button type="button" id="opArchive" class="chip" title="在本面板归档/取消归档">归档</button>
+        </div>
         <button id="older" hidden>加载更旧消息</button>
       </div>
       <div id="messages"></div>
@@ -93,6 +105,76 @@
   </main>
 
   <div id="toast" hidden></div>
+
+  <datalist id="dirList"></datalist>
+
+  <dialog id="dlgNew" class="dlg">
+    <div class="dlgform">
+      <h3>新建会话</h3>
+      <label class="fld"><span>工程目录</span>
+        <input id="newDir" list="dirList" placeholder="/绝对/路径" autocomplete="off">
+      </label>
+      <label class="fld"><span>标题(可空)</span>
+        <input id="newTitle" placeholder="留空则由 OpenCode 命名" autocomplete="off">
+      </label>
+      <div class="fldrow">
+        <label class="fld"><span>智能体</span><select id="newAgent"><option value="">默认</option></select></label>
+        <label class="fld"><span>模型</span><select id="newModel"><option value="">默认</option></select></label>
+        <label class="fld" id="newVariantWrap" hidden><span>变体</span><select id="newVariant"></select></label>
+      </div>
+      <p class="dlgerr" id="newErr" hidden></p>
+      <div class="dlgacts">
+        <button type="button" class="chip" data-close>取消</button>
+        <button type="button" class="chip primary" id="newOk">创建</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlgImport" class="dlg">
+    <div class="dlgform">
+      <h3>导入会话</h3>
+      <label class="fld"><span>JSON 文件</span>
+        <input type="file" id="importFile" accept=".json,application/json">
+      </label>
+      <label class="fld"><span>目标工程目录</span>
+        <input id="importDir" list="dirList" placeholder="留空 = 用文件里记录的目录" autocomplete="off">
+      </label>
+      <p class="dlghint">
+        接受本面板「导出」得到的文件(也可交给 <code>opencode session import</code>)。
+        服务端会为新会话分配目录与项目,导入时<b>必须换新 ID</b>,因此文件名冲突时会自动重试。
+      </p>
+      <p class="dlgerr" id="importErr" hidden></p>
+      <div class="dlgacts">
+        <button type="button" class="chip" data-close>取消</button>
+        <button type="button" class="chip primary" id="importOk">导入</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlgExport" class="dlg">
+    <div class="dlgform">
+      <h3>导出会话</h3>
+      <label class="chk"><input type="checkbox" id="exportSanitize" checked> 脱敏(隐藏标题、目录与 metadata)</label>
+      <p class="dlghint">下载为 JSON 文件;取消勾选可得到完整内容(含会话标题与工程目录)。</p>
+      <p class="dlgerr" id="exportErr" hidden></p>
+      <div class="dlgacts">
+        <button type="button" class="chip" data-close>取消</button>
+        <button type="button" class="chip primary" id="exportOk">导出</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlgTui" class="dlg">
+    <div class="dlgform">
+      <h3>在 TUI 中继续</h3>
+      <p class="dlghint">在终端里执行下面的命令(<code>--session</code> 指定会话 ID;若目录或会话不存在,OpenCode 会新建):</p>
+      <div class="cmdbox"><textarea id="tuiCmd" readonly rows="2" spellcheck="false"></textarea></div>
+      <div class="dlgacts">
+        <button type="button" class="chip" data-close>关闭</button>
+        <button type="button" class="chip primary" id="tuiCopy">复制</button>
+      </div>
+    </div>
+  </dialog>
 
   <script src="/app.js"></script>
 </body>
