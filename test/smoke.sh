@@ -226,6 +226,12 @@ if has "$APPJS" 'history.replaceState' && has "$APPJS" 'restoreFromHash'; then
 else
   echo "FAIL: app.js 缺 hash 持久化 / 恢复逻辑"; fail=$((fail + 1))
 fi
+# H 组 2:点会话进历史栈,浏览器前后退能跟着切会话
+if has "$APPJS" 'history.pushState' && has "$APPJS" 'popstate' && has "$APPJS" 'setupHistoryNav'; then
+  echo "PASS: app.js 点会话 pushState + 监听前后退切会话"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺前后退同步(pushState / popstate)"; fail=$((fail + 1))
+fi
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if has "$sse" 'server.connected'; then

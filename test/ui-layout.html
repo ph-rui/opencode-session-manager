@@ -119,6 +119,14 @@
       if (hiddenOf(ao)) return 'ac';
       return 'both';
     };
+    /* 等异步链路跑完:纯微任务轮转,不用定时器(本页把 setTimeout 打桩了) */
+    var settle = async function (pred, tries) {
+      for (var i = 0; i < (tries || 300); i++) {
+        if (pred()) return true;
+        await Promise.resolve();
+      }
+      return pred();
+    };
 
     try {
       /* ============ 1. 列表折叠:默认展开 ============ */
@@ -264,6 +272,59 @@
       location.hash = '#foo';
       await restoreFromHash();
       T('hash 非法时不选任何会话', store.selected === null, store.selected);
+
+      /* ============ 9. 浏览器前进/后退(H 组 2) ============ */
+      window.__pop = 0;
+      window.addEventListener('popstate', function () { window.__pop++; });
+      setupHistoryNav();
+
+      /* 点会话入历史栈;重复点同一个不再多压一格 */
+      history.replaceState(null, '', location.pathname + location.search);
+      store.selected = null;
+      var LEN = history.length;
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); }); // 第 7 节删过 ses_b,这里补回来
+      await selectSession('ses_a');
+      T('点会话把这一格压进历史栈', history.length === LEN + 1, history.length + ' vs ' + (LEN + 1));
+      T('pushState 后 hash 是 #ses_a', location.hash === '#ses_a', location.hash);
+      await selectSession('ses_a');
+      T('重复点同一个会话不再入栈(否则后退要点好几次才动)', history.length === LEN + 1, history.length);
+      await selectSession('ses_b');
+      T('切到另一个会话再入一格', history.length === LEN + 2, history.length);
+
+      /* 模拟后退:浏览器会先把 URL 换成上一格,再派发 popstate */
+      history.replaceState(null, '', '#ses_a');
+      T('只换 URL 还没触发事件时不动会话', store.selected === 'ses_b', store.selected);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      T('收到 popstate 后切到 URL 里的会话', store.selected === 'ses_a', store.selected);
+      T('跟随后退不会把这一格再压一遍', history.length === LEN + 2, history.length);
+      await settle(function () { return q('#messages').textContent.indexOf('会话 A 的第一问') >= 0; });
+      T('跟随后退后消息也换成该会话的', q('#messages').textContent.indexOf('会话 A 的第一问') >= 0,
+        q('#messages').textContent);
+
+      /* 前进:URL 换回下一格 */
+      history.replaceState(null, '', '#ses_b');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      T('收到 popstate 后前进到下一个会话', store.selected === 'ses_b', store.selected);
+      await settle(function () { return q('#messages').textContent.indexOf('会话 B 的第一问') >= 0; });
+      T('跟随前进后消息也换成该会话的', q('#messages').textContent.indexOf('会话 B 的第一问') >= 0,
+        q('#messages').textContent);
+
+      /* 后退到「面板最初那一格」(无 hash):取消选中并清空对话区 */
+      T('已选中时对话操作条是显示的', q('#chatOps').hidden === false);
+      history.replaceState(null, '', location.pathname + location.search);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      T('后退到无 hash 时取消选中', store.selected === null, store.selected);
+      T('取消选中后标题回到空态', q('#chatTitle').textContent === '未选择会话', q('#chatTitle').textContent);
+      T('取消选中后对话区被清空', q('#messages').innerHTML === '', q('#messages').innerHTML.slice(0, 80));
+      T('取消选中后发送键禁用', q('#send').disabled === true);
+      T('取消选中后对话操作条隐藏', q('#chatOps').hidden === true);
+      T('取消选中不清历史栈(用 replaceState)', history.length === LEN + 2, history.length);
+
+      /* 已经在 URL 指向的会话上 / 本来就没选中:重复 popstate 是空操作 */
+      store.selected = null;
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      T('hash 为空且本来就没选中:popstate 是空操作', store.selected === null, store.selected);
+      T('空操作也不入栈', history.length === LEN + 2, history.length);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

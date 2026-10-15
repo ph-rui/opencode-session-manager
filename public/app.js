@@ -905,7 +905,14 @@ function renderDirOptions() {
 /* --------- 选中会话的持久化(刷新后回到刚才那个会话) ---------
  * 选中的 id 落在 URL hash(#ses_xxx):刷新、复制链接、书签、在另一个标签打开
  * 都能落到同一会话 —— 与「深链跳回 TUI」是同一个主题。
- * 用 replaceState 而不是 pushState:点会话不该把浏览器后退键灌满。 */
+ *
+ * H 组 2:点会话用 pushState,于是浏览器后退/前进能在会话之间来回走;
+ * 刷新恢复与「清空选择」用 replaceState,不新增历史项。
+ *
+ * 两条路都靠 persistSelected 里那句「已经是这个 hash 就直接返回」收口:
+ * 点会话时 hash 变了 → pushState 进一格;被后退/前进带回来时浏览器【先】把
+ * hash 改好【再】派发 popstate,所以进到 selectSession 时 hash 已经等于目标
+ * → 什么都不做,不会把同一格再压一遍。 */
 
 function hashToID(h) {
   const raw = String(h == null ? '' : h).replace(/^#/, '');
@@ -917,15 +924,39 @@ function hashToID(h) {
   return id.indexOf('ses') === 0 ? id : null;
 }
 
-function persistSelected(id) {
-  const url = id ? '#' + encodeURIComponent(id) : location.pathname + location.search;
+function sessionHash(id) {
+  return id ? '#' + encodeURIComponent(id) : '';
+}
+
+// mode:'push'(默认,点会话 → 进历史)| 'replace'(刷新恢复 / 清空 → 不动历史)
+function persistSelected(id, mode) {
+  const hash = sessionHash(id);
+  if (location.hash === hash) return; // 已经是这个会话了,不再多压一格
+  const url = id ? hash : location.pathname + location.search;
   try {
-    history.replaceState(null, '', url);
+    if (mode === 'replace') history.replaceState(null, '', url);
+    else history.pushState(null, '', url);
   } catch (_) {
-    // 极端情况下(例如 file://)replaceState 不可用,退回直接改 hash
-    if (id) location.hash = encodeURIComponent(id);
-    else location.hash = '';
+    // 极端情况下(例如 file://)改历史不可用,退回直接改 hash
+    location.hash = hash;
   }
+}
+
+// 取消选中:回到「未选择会话」的空态。删除会话、以及浏览器后退到面板最初那一格,都走这里。
+function clearSelection() {
+  const id = store.selected;
+  store.selected = null;
+  persistSelected(null, 'replace');
+  store.messages.clear();
+  msgEls.clear();
+  if (id) dropAsksFor(id);
+  $('#messages').innerHTML = '';
+  $('#chatTitle').textContent = '未选择会话';
+  $('#chatMeta').textContent = '';
+  renderAsks();
+  renderInbox();
+  renderChatOps();
+  updateChatStatus();
 }
 
 // 刷新后恢复:只在「还没选过任何会话」时出手,不抢用户已经做出的选择。
@@ -935,6 +966,27 @@ async function restoreFromHash() {
   const id = hashToID(location.hash);
   if (!id) return;
   await selectSession(id);
+}
+
+/* 浏览器前进/后退 → 跟着切会话(H 组 2)。
+ * 同时听 popstate 与 hashchange:hash 变化两者都会来,但 syncFromHash 先比 store.selected,
+ * 第二次进来直接返回,所以重复触发无害;而 fallback 里直接改 location.hash 时只有 hashchange 会来。 */
+async function syncFromHash() {
+  const id = hashToID(location.hash);
+  if (id === store.selected) return;
+  if (!id) {
+    if (store.selected) {
+      clearSelection();
+      renderSessions();
+    }
+    return;
+  }
+  await selectSession(id);
+}
+
+function setupHistoryNav() {
+  window.addEventListener('popstate', syncFromHash);
+  window.addEventListener('hashchange', syncFromHash);
 }
 
 async function selectSession(id) {
@@ -2174,18 +2226,7 @@ async function onAction(act, id) {
     if (!confirm('确定删除该会话?此操作不可撤销。')) return;
     await guard(() => api('/api/session/' + id, { method: 'DELETE' }));
     store.sessions.delete(id);
-    if (store.selected === id) {
-      store.selected = null;
-      persistSelected(null);
-      store.messages.clear();
-      msgEls.clear();
-      dropAsksFor(id);
-      $('#messages').innerHTML = '';
-      renderAsks();
-      $('#chatTitle').textContent = '未选择会话';
-      $('#chatMeta').textContent = '';
-      updateChatStatus();
-    }
+    if (store.selected === id) clearSelection();
     renderSessions();
     return;
   }
@@ -2663,12 +2704,7 @@ function handleControlEvent(e) {
       store.active.delete(id);
       store.inbox.delete(id);
       for (const [mid, L] of store.live) if (L.sid === id) store.live.delete(mid);
-      if (store.selected === id) {
-        store.selected = null;
-        persistSelected(null);
-        renderInbox();
-        updateComposerControls();
-      }
+      if (store.selected === id) clearSelection();
       dirty = true;
     }
     refreshActive = true;
@@ -2835,6 +2871,7 @@ function init() {
   setupEvents();
   setupResizers();
   setupListToggle();
+  setupHistoryNav();
   paintDelivery();
 
   $('#search').addEventListener(
