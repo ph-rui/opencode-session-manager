@@ -886,6 +886,8 @@ function renderSessions() {
 
 function renderDirOptions() {
   const dirs = Array.from(store.seenDirs).sort();
+  // 记住的目录这次可能没出现在结果里(该目录下暂时没有会话),也得能选回去
+  if (store.directory && dirs.indexOf(store.directory) < 0) dirs.unshift(store.directory);
   const sel = $('#dirFilter');
   sel.innerHTML = '<option value="">全部</option>';
   dirs.forEach((d) => {
@@ -1047,6 +1049,74 @@ function setupScrollMemory() {
     saveScrollAnchor();
   });
   window.addEventListener('pagehide', saveScrollAnchor); // 关页/刷新前兜一次,避免节流丢掉最后一个位置
+}
+
+/* --------- 顶栏筛选/排序/搜索的持久化(H 组 4)---------
+ * 与 G 组的分工:URL hash 管「选中哪个会话」,localStorage 管「列表怎么筛」。
+ * 启动时【先回填 store 与控件,再 loadSessions】—— 否则会先按默认值拉一次、
+ * 再按恢复出来的条件重拉一次,白费一次请求还会闪一下。 */
+
+const FILTER_KEYS = {
+  search: 'ocs.q.search',
+  dir: 'ocs.q.dir',
+  order: 'ocs.q.order',
+  archived: 'ocs.q.archived',
+};
+
+function readLS(key, dflt) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? dflt : v;
+  } catch (_) {
+    return dflt;
+  }
+}
+
+function saveFilters() {
+  try {
+    localStorage.setItem(FILTER_KEYS.search, store.search || '');
+    localStorage.setItem(FILTER_KEYS.dir, store.directory || '');
+    localStorage.setItem(FILTER_KEYS.order, store.order || 'desc');
+    localStorage.setItem(FILTER_KEYS.archived, store.showArchived ? '1' : '');
+  } catch (_) {}
+}
+
+// 回填 store 与顶栏控件。目录下拉的选项要等 loadSessions 回来才有(renderDirOptions 会再选一次)。
+function restoreFilters() {
+  store.search = readLS(FILTER_KEYS.search, '');
+  store.directory = readLS(FILTER_KEYS.dir, '');
+  store.order = readLS(FILTER_KEYS.order, 'desc') || 'desc';
+  store.showArchived = readLS(FILTER_KEYS.archived, '') === '1';
+  $('#search').value = store.search;
+  $('#order').value = store.order;
+  $('#showArchived').checked = store.showArchived;
+  $('#dirFilter').value = store.directory; // 选项还没填时这一步会被忽略,renderDirOptions 再补
+}
+
+function setupFilters() {
+  restoreFilters(); // 先回填再接线,避免开场用默认值拉一次
+  // 只在「取列表」上防抖;store 与存储立即跟上输入框,别让存的值落后于界面
+  const reload = debounce(() => loadSessions({ reset: true }), 250);
+  $('#search').addEventListener('input', () => {
+    store.search = $('#search').value.trim();
+    saveFilters();
+    reload();
+  });
+  $('#dirFilter').addEventListener('change', () => {
+    store.directory = $('#dirFilter').value;
+    saveFilters();
+    loadSessions({ reset: true });
+  });
+  $('#order').addEventListener('change', () => {
+    store.order = $('#order').value;
+    saveFilters();
+    loadSessions({ reset: true });
+  });
+  $('#showArchived').addEventListener('change', () => {
+    store.showArchived = $('#showArchived').checked;
+    saveFilters();
+    renderSessions();
+  });
 }
 
 /* 浏览器前进/后退 → 跟着切会话(H 组 2)。
@@ -2956,6 +3026,7 @@ function debounce(fn, ms) {
 function init() {
   health();
   setInterval(health, 15000);
+  setupFilters(); // 先回填顶栏筛选/排序/搜索,再拉列表(否则会按默认值白拉一次)
   // 恢复顺序:先让列表落地(会话标题/目录要能取到),再回到 hash 里那个会话
   loadSessions({ reset: true }).then(restoreFromHash);
   loadActive();
@@ -2967,21 +3038,6 @@ function init() {
   setupScrollMemory();
   paintDelivery();
 
-  $('#search').addEventListener(
-    'input',
-    debounce(() => {
-      store.search = $('#search').value.trim();
-      loadSessions({ reset: true });
-    }, 250)
-  );
-  $('#dirFilter').addEventListener('change', () => {
-    store.directory = $('#dirFilter').value;
-    loadSessions({ reset: true });
-  });
-  $('#order').addEventListener('change', () => {
-    store.order = $('#order').value;
-    loadSessions({ reset: true });
-  });
   $('#refresh').addEventListener('click', () => {
     health();
     loadSessions({ reset: true });

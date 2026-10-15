@@ -5,7 +5,7 @@
   <header id="topbar"><div class="brand">t</div>
     <label class="f"><span>搜索</span><input id="search"></label>
     <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
-    <label class="f"><span>排序</span><select id="order"></select></label>
+    <label class="f"><span>排序</span><select id="order"><option value="desc">最近更新</option><option value="asc">最早更新</option></select></label>
     <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
     <label class="chk"><input type="checkbox" id="showArchived"></label>
     <span id="count"></span><span id="archivedCount"></span>
@@ -410,6 +410,64 @@
       var pkeys = Object.keys(JSON.parse(sessionStorage.getItem('ocs.scroll') || '{}'));
       T('存档最多留 20 个会话', pkeys.length === 20, pkeys.length);
       T('淘汰的是最久没用过的', pkeys.indexOf('ses_p0') < 0 && pkeys.indexOf('ses_p24') >= 0, pkeys);
+
+      /* ============ 11. 顶栏筛选/排序/搜索持久化(H 组 4) ============ */
+      localStorage.clear();
+      restoreFilters();
+      T('没有存档时搜索为空', store.search === '', store.search);
+      T('没有存档时目录为「全部」', store.directory === '' && q('#dirFilter').value === '', q('#dirFilter').value);
+      T('没有存档时排序回到最近更新', store.order === 'desc' && q('#order').value === 'desc', q('#order').value);
+      T('没有存档时不显示已归档', store.showArchived === false && q('#showArchived').checked === false);
+
+      localStorage.setItem('ocs.q.search', 'lcd');
+      localStorage.setItem('ocs.q.dir', '/proj/a');
+      localStorage.setItem('ocs.q.order', 'asc');
+      localStorage.setItem('ocs.q.archived', '1');
+      restoreFilters();
+      T('搜索被恢复(store 与输入框都跟上)', store.search === 'lcd' && q('#search').value === 'lcd', q('#search').value);
+      T('排序被恢复', store.order === 'asc' && q('#order').value === 'asc', q('#order').value);
+      T('「显示已归档」被恢复', store.showArchived === true && q('#showArchived').checked === true);
+      T('工程目录被恢复进 store', store.directory === '/proj/a', store.directory);
+
+      history.replaceState(null, '', location.pathname + location.search);
+      store.selected = null;
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); });
+      renderSessions();
+      var dirVals = Array.prototype.map.call(q('#dirFilter').options, function (o) { return o.value; });
+      T('恢复的目录即使不在结果里也出现在下拉中(还能选回去)', dirVals.indexOf('/proj/a') >= 0, dirVals);
+      T('恢复的目录在下拉里是选中态', q('#dirFilter').value === '/proj/a', q('#dirFilter').value);
+
+      /* 改一下就存一下(setupFilters 才接线,本页自己控制接线时机) */
+      setupFilters();
+      q('#order').value = 'asc';
+      q('#order').dispatchEvent(new Event('change'));
+      T('改排序立即存下', localStorage.getItem('ocs.q.order') === 'asc', localStorage.getItem('ocs.q.order'));
+      await settle(function () {
+        return Array.prototype.some.call(q('#dirFilter').options, function (o) { return o.value === '/proj/b'; });
+      });
+      q('#dirFilter').value = '/proj/b';
+      q('#dirFilter').dispatchEvent(new Event('change'));
+      T('改工程目录立即存下', localStorage.getItem('ocs.q.dir') === '/proj/b', localStorage.getItem('ocs.q.dir'));
+      q('#showArchived').checked = true;
+      q('#showArchived').dispatchEvent(new Event('change'));
+      T('勾「显示已归档」立即存下', localStorage.getItem('ocs.q.archived') === '1', localStorage.getItem('ocs.q.archived'));
+      q('#showArchived').checked = false;
+      q('#showArchived').dispatchEvent(new Event('change'));
+      T('取消勾选也存下(空串)', localStorage.getItem('ocs.q.archived') === '', JSON.stringify(localStorage.getItem('ocs.q.archived')));
+      q('#search').value = 'wayland';
+      q('#search').dispatchEvent(new Event('input'));
+      T('搜索框输入立即存下(不等防抖)', localStorage.getItem('ocs.q.search') === 'wayland', localStorage.getItem('ocs.q.search'));
+      T('输入同时更新 store.search', store.search === 'wayland', store.search);
+      T('清空搜索会存成空串(下次启动不会又冒出旧词)', (function () {
+        q('#search').value = '';
+        q('#search').dispatchEvent(new Event('input'));
+        return localStorage.getItem('ocs.q.search') === '';
+      })(), localStorage.getItem('ocs.q.search'));
+      T('存的是 localStorage 而不是 sessionStorage(跨标签/跨次启动都记得)',
+        sessionStorage.getItem('ocs.q.search') === null);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

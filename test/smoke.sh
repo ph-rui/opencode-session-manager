@@ -238,6 +238,23 @@ if has "$APPJS" 'ocs.scroll' && has "$APPJS" 'sessionStorage' && has "$APPJS" 's
 else
   echo "FAIL: app.js 缺会话内滚动位置记忆"; fail=$((fail + 1))
 fi
+# H 组 4:顶栏筛选/排序/搜索持久化
+if has "$APPJS" 'ocs.q.search' && has "$APPJS" 'ocs.q.dir' && has "$APPJS" 'ocs.q.order' &&
+   has "$APPJS" 'ocs.q.archived' && has "$APPJS" 'restoreFilters' && has "$APPJS" 'setupFilters'; then
+  echo "PASS: app.js 持久化顶栏筛选/排序/搜索"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺顶栏条件持久化"; fail=$((fail + 1))
+fi
+# 顺序锁:init() 里 setupFilters() 必须排在 loadSessions 之前,否则会按默认值白拉一次
+INIT_ORDER=$(printf '%s' "$APPJS" | awk '
+  /^function init\(\)/ { ininit = 1 }
+  ininit && /setupFilters\(\);/ { seen = 1 }
+  ininit && /loadSessions\(\{ reset: true \}\)\.then/ && !done { print (seen ? "filters-first" : "list-first"); done = 1 }
+')
+case "$INIT_ORDER" in
+  filters-first) echo "PASS: init() 先回填顶栏条件再拉列表(不会白拉一次)"; pass=$((pass + 1)) ;;
+  *)             echo "FAIL: init() 没有先回填顶栏条件 (got '$INIT_ORDER')"; fail=$((fail + 1)) ;;
+esac
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if has "$sse" 'server.connected'; then
