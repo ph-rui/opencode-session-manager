@@ -1,14 +1,15 @@
 :root {
-  --bg: #0f1116;
-  --panel: #171a21;
-  --panel2: #1e222b;
-  --border: #2a2f3a;
-  --fg: #e6e8ee;
-  --muted: #98a0b0;
-  --accent: #4c8bf5;
-  --ok: #3fb950;
-  --bad: #f85149;
-  --danger: #d1453b;
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f3f3f3;
+  --panel2: #ffffff;
+  --border: #dcdcdc;
+  --fg: #333333;
+  --muted: #6f6f6f;
+  --accent: #007acc;
+  --ok: #388a34;
+  --bad: #e51400;
+  --danger: #d13438;
 }
 
 * { box-sizing: border-box; }
@@ -105,7 +106,7 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 #list tbody tr { cursor: pointer; border-bottom: 1px solid var(--border); }
 #list tbody tr:hover { background: var(--panel); }
-#list tbody tr.selected { background: #21304d; }
+#list tbody tr.selected { background: #d6ebff; }
 #list td { padding: 8px 10px; vertical-align: top; font-size: 12px; }
 #list td.title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #list td.dir { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -114,12 +115,12 @@ table#list { width: 100%; border-collapse: collapse; }
   position: sticky;
   right: 0;
   white-space: nowrap;
-  box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.7);
+  box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.12);
 }
 #list th.actions { background: var(--panel); z-index: 2; }
 #list td.actions { background: var(--bg); }
 #list tbody tr:hover td.actions { background: var(--panel); }
-#list tbody tr.selected td.actions { background: #21304d; }
+#list tbody tr.selected td.actions { background: #d6ebff; }
 #list td.actions button {
   padding: 2px 6px;
   margin-right: 2px;
@@ -153,7 +154,7 @@ table#list { width: 100%; border-collapse: collapse; }
   border-radius: 8px;
   padding: 8px 10px;
 }
-.msg.user .bubble { background: #21304d; border-color: #2f4a7a; }
+.msg.user .bubble { background: #d6ebff; border-color: #a9cdf0; }
 .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .msg.minor { font-size: 11px; color: var(--muted); }
 .msg .reasoning { margin: 4px 0; }
@@ -161,7 +162,7 @@ table#list { width: 100%; border-collapse: collapse; }
 .msg .reasoning pre {
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--panel2);
+  background: #f6f6f6;
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
@@ -172,8 +173,8 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 .msg .tool {
   font-size: 12px;
-  color: #c9a227;
-  border-left: 2px solid #c9a227;
+  color: #7a5c00;
+  border-left: 2px solid #b58900;
   padding: 3px 8px;
   margin: 4px 0;
   background: var(--panel);
