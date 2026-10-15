@@ -107,6 +107,7 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 | 每行 6 个动作按钮 | 收进右上角「**⋯**」,点开复用现成的选择框 |
 | 顶栏所有筛选控件 | 只留短标题 / 搜索 / `+ 新建` / 状态,其余点「**筛选**」就地展开 |
 | 分栏条 + 折叠手柄 | 隐掉(单栏了,不需要) |
+| 底部输入区(智能体/模型/变体 + 输入框) | **默认收起成一条细边**,点它右上角「▴ 输入」拉回来 |
 
 - **手机上没 Esc 键**:中断走输入框边上的「**■ 中断**」按钮;命令面板 / `@` 补全 / 中断的
   Esc 优先级是桌面才有的东西
@@ -117,6 +118,14 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 - 键盘:视口加了 `interactive-widget=resizes-content`,安卓弹键盘时压缩视口,
   输入框和发送键不会被顶出屏幕
 - 附件照旧:📎 会弹安卓的文件/相册选择器
+- **底部输入区默认收起**:一进会话只剩一条细边,高度全给会话内容(393×894 上从约 130px 收到 48px)。
+  点细边右上角的「**▴ 输入**」展开 —— 展开即聚焦输入框,弹出来的键盘正好用来回一句;
+  运行中细边上留着「**■ 中断**」(它是运行中唯一不能藏的东西);
+  细边左侧还会提醒你输入框里压着「● 草稿」、挂着「📎 n」个附件,免得以为字被收没了
+- 收起状态**桌面 / 手机各记一份**(`ocs.composerHidden` / `ocs.composerHiddenNarrow`):手机上收起不影响桌面,
+  桌面首次打开仍是展开(键盘打字是主要入口);转屏跨过断点各读各的那一份
+- 收起时**把文件拖进来会自动展开**,不用先去点手柄;粘贴则要先展开才收得到 ——
+  收起时输入框是 `display:none`,粘贴事件根本落不到它上面,所以那条没挂钩子
 
 > 窄屏样式全部挂在 `html.narrow` 前缀下,**没有第二份 `@media` 断点** ——
 > 判定源只有 `<head>` 里那一句内联脚本,桌面渲染结果因此一个像素不变。
@@ -125,6 +134,7 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 
 - **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
 - **会话列表整列可收起**:分栏条顶部的小手柄一键收起,收起后对话区占满整宽;状态记在本地,刷新后保持
+- **底部输入区可收起**:底板上沿右侧的小手柄一键收起/展开,收起后只剩一条细边(运行中留「■ 中断」,有草稿/附件时在细边上提示);收起时手柄绝不消失,随时点得回来。状态桌面与手机各记一份
 - **刷新后回到刚才的会话**:选中的会话写进 URL hash(`#ses_xxx`),刷新 / 复制链接 / 书签 / 换标签打开都会落到同一会话
 - **浏览器前进 / 后退能在会话之间走**:点会话进历史栈(后退回上一个,前进回下一个);退到打开面板那一格则回到「未选择会话」的空态
 - **刷新后回到会话里读到的位置**:滚动位置按「顶部可见的消息 + 偏移」记在 `sessionStorage`,刷新回到原处,而不是一律跳到最新
@@ -426,11 +436,12 @@ node test/ui-attach-run.js    # 文件附件与 @ 补全的前端逻辑(无头 F
 node test/ui-commands-run.js  # / 命令面板、Esc 中断、输入历史、Shift+Tab 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessions 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/netallow-run.js     # 来源地址白名单的纯函数(不起浏览器;含「空配置=不限制」「配错=fail closed」)
+node test/ui-composer-run.js  # 底部输入区(底板)收起/展开的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(390×844 竖屏、894×393 横屏;无头 Firefox)
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:130 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:150 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -452,6 +463,14 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
      窄屏两屏二选一的规则 + `view-chat` 由 `store.selected` 派生、
      窄屏复位桌面折叠态、`dialog.dlg` 的 `min-width` 归零、命中区 44px、输入控件 16px、
      `--chat-fs` 全文只定义 1 次、`setupNarrow()` 接进 `init()` 且只出现 2 次、监听了 `change`。
+   - M 组的 16 项(底板收起/展开):`index.html` 有 `#btnComposer`/`#cstripMeta` 且手柄只有一个、
+     手柄在 `#composer` 里且是 `.chip`、**收起的隐藏名单里没有「中断」**(运行中它是唯一不能藏的)、
+     手柄样式绝不 `display:none`、手机上细边有 44px 级高度且给手柄让了位、
+     `paintComposer` 里有「没有手柄就不收起」的守卫(新 app.js 配旧 index.html 不会把底板锁死)、
+     两份记忆的键名、没记过时默认值跟着 `html.narrow` 走、`syncNarrowClass()` 里会重读、
+     `renderAttachments()` 会同步细边提示、drop 处理器里会 `expandComposer()`、
+     `setupComposerToggle()` 接进 `init()` 且只有一次,以及两个测试文件都在。
+     真正的行为验证在 `ui-composer-run.js`。
      来源白名单那三条语义(默认值 / 空=不限制 / 配错=全拒)由 `netallow-run.js` 正面覆盖,这里不重复。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
@@ -478,6 +497,7 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
 - `ui-picks-run.js`:87 项浏览器内断言,覆盖①通用选择框 `openPick`/`renderPick`(标题、`current` 默认高亮、`current` 不在列表里时停在第一条、`filter=false` 藏过滤框 / `filter=true` 露出来并清空、分组标题每组只出现一次、`sub` 写进 `.pi-sub`、无匹配给空态且不崩高亮),②过滤 `pickVisible`(没查询词=全部、按 label、按 sub、大小写不敏感、纯空白等于没过滤、无匹配返回空),③键位 `pickKey`(↑/↓ 环绕、方向键与 Enter 都 `preventDefault`、不认识的键不管、框关着时不管、空列表不吞键、点「关闭」按钮的 Enter 不抢),④选中 `pickChoose`(回调拿到 key、关框后才回调、`disabled` 项点不动),⑤接线 `setupPick`(过滤框输入即过滤、换查询词把高亮归位、过滤框里 ↓ 交给选择框、点条目选中、关掉后焦点回输入框),⑥`/sessions`(标题、列的就是左栏那批且同序、标题作 label、副文案含目录名、当前会话高亮、打开「显示已归档」后也在、按顶部排序走、选中即切过去),⑦`/models`(按 provider 分组、key/label/sub 的来源、`enabled=false` 的与工具栏一致地不出现、当前模型高亮、当前模型不在列表里时补一条「当前」、有变体就追问且当前档位高亮、选档位带 `variant`、选「默认」不带 `variant`、没有变体就直接切、换模型后追问的是新模型的变体、空 key 只提示不发请求、列表里没有的 key 也能按 `providerID/modelID` 拆开),⑧`/agents`(`hidden` 与 `subagent` 被滤掉、label/sub 来源、当前智能体高亮、不提供「默认」空选项、选中即切、当前智能体不在列表里时补一条),⑨没选中会话时三条都不开,以及⑩三条面板命令仍在、说明已不再写「跳到…」、`focusEl` 这个旧做法已经不存在。
   真实目检(`/tmp/ocsm-probe/picks-build.js` 用真实 `index.html`/`styles.css`/`app.js` + 真实形状的模型数据)看三张图:`/models` 的按 provider 分组与当前项高亮、选完模型后追问变体、`/sessions` 与左栏同源的列表。
 - `netallow-run.js`:74 项纯函数断言(不起浏览器,毫秒级)。覆盖 `parseIPv4Bytes`/`unmapIPv4`/`parseAllowRule`/`matchAllowRule`/`sourceAllowed` 的边界:CIDR 的边界地址(网段首尾、多一位)、`::1` 与 `:::`、来源为 `undefined` 时不崩、空配置 = 不限制、配了却一条都解析不出 = 一律拒绝。真实 `403` 也在这一套里:起一个只放行回环的临时实例(`OCS_ALLOW='127.0.0.0/8,::1'`),用非回环来源请求应得 `403`,且**返回体里写明来源地址与白名单**(那条「网页版访问不了」就是靠这个一眼定位的)。
+- `ui-composer-run.js`:84 项浏览器内断言,覆盖底部输入区(底板)的收起 / 展开。运行器也把 `index.html` 里那段判定脚本抠出来当 `/narrow.js` 送过去,然后用 `matchMedia` 桩在同一个进程里把「手机 / 桌面」翻一遍 —— 判定源就是 `<html>.narrow` 这一个类(「真 390px 视口 → `narrow`」那条链路由 `ui-mobile-run.js` 的 A3/A4 守着,这里不重复)。覆盖:手柄唯一且在 `#composer` 里、桌面没记过 = 展开、手机没记过 = 收起(输入框 / 📎 / 发送 / 三个选择器一起让位,细边 ≤60px 且比展开矮 ≥40px)、手柄两种状态都可见且手机上 ≥44px、点手柄展开会把光标放进输入框、两份记忆互不干扰(桌面记的管不着手机,反之亦然)、把记忆清掉能回到默认、运行中细边上留「■ 中断」(中断在左、手柄在右,不重叠)、空闲时中断收回去、细边的「● 草稿」「📎 2」跟着正文与附件一起变、拖文件进来自动展开且文件进待发送列表、点细边空白处展开但点「中断」不误展开、手柄点一次只翻一次(防冒泡双触发),以及**手柄不在 DOM 里时一律不收起** —— 这条不变量是被老测试页逼出来的:收起之后唯一的出口就是那个手柄。
 - `ui-mobile-run.js`:154 项浏览器内断言(**两个视口各跑一遍**)。做法是把测试页塞进一个**固定尺寸的 `<iframe>`**(媒体查询按 iframe 自己的视口算,拿到的是真布局),并在临时 profile 的 `user.js` 里把 `ui.primaryPointerCapabilities` / `ui.allPointerCapabilities` 设成粗指针 —— 于是横屏 `894×393` 那一半(宽度 894 不命中,只能靠 `max-height:560px and (pointer:coarse)` 进来)是**真的**跑出来的,不是打桩。覆盖:窄屏 + 无选中 → 列表可见;选中 → 对话可见;`#backList` 的可见性与点击(等于 `clearSelection()`,hash 一起清掉);`.resizer`/`.handle` 不可见;`thead` 不可见且 `tr`/`td` 变 block;每行的 `⋯` 点开 `#dlgPick` 且选中项走 `onAction(key, id)`、**原有 6 个动作按钮一个不少**;命中区高度 ≥44px(`⋯` / `#btnFilters` / `#backList` / `#send` / `📎`);`#btnFilters` 展开与 `aria-expanded` 同步,且展开的是**同一批 DOM**(没有镜像副本);输入控件字号 ≥16px;横屏带 `short` 类而竖屏(844 高)不带。
 
 ## 开机自启(systemd 用户服务)
