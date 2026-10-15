@@ -250,6 +250,13 @@ table#list { width: 100%; border-collapse: collapse; }
 .ref-agent { color: var(--accent); border-color: #bcd9ef; background: #f2f8fd; }
 .ref-skill { color: #7a5c14; border-color: #e6d9a8; background: #fdf9ec; }
 
+/* 用户消息里带的附件(H 组 6):非图片一行一条,图片直接给缩略图 */
+.atts { display: flex; flex-direction: column; gap: 4px; margin-top: 5px; }
+.att { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 0.88em; color: var(--muted); }
+.att-name { color: var(--fg); }
+.att-src { font-size: 0.92em; word-break: break-all; }
+.att-img { display: block; max-width: 320px; max-height: 160px; margin-top: 2px; border: 1px solid var(--border); border-radius: 5px; }
+
 /* Markdown */
 .content p { margin: 0 0 8px; }
 .content > *:last-child { margin-bottom: 0; }
@@ -552,6 +559,7 @@ table#list { width: 100%; border-collapse: collapse; }
   flex-direction: column;
   border-top: 1px solid var(--border);
   background: var(--panel);
+  position: relative; /* #mentions 的定位基准(H 组 6) */
 }
 #ctoolbar {
   display: flex;
@@ -629,6 +637,91 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 #send:hover { filter: brightness(1.1); }
 #send:disabled { opacity: 0.5; cursor: default; filter: none; }
+
+/* --------------------- 附件与 @ 补全(H 组 6) --------------------- */
+
+.attachbtn {
+  flex: none;
+  align-self: flex-end;
+  padding: 0 10px;
+  height: 38px;
+  font-size: 1.08em;
+  line-height: 1;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.attachbtn:hover { border-color: var(--accent); }
+.attachbtn:disabled { opacity: 0.5; cursor: default; border-color: var(--border); }
+
+/* 待发送的附件 chips(浮在输入框上方那一行) */
+#attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px 0; }
+#attach[hidden] { display: none; }
+.achip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+  padding: 2px 6px 2px 8px;
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.achip.busy { opacity: 0.6; }
+.achip-img { flex: none; width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }
+.achip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.achip-size { flex: none; color: var(--muted); }
+.achip-x {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font: inherit;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.achip-x:hover { background: #f3dcdc; color: var(--danger); }
+
+/* @ 文件补全:贴着输入区上沿浮出(不挤动其它元素) */
+#mentions {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 100%;
+  z-index: 30;
+  max-height: 240px;
+  overflow: auto;
+  margin-bottom: 4px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+#mentions[hidden] { display: none; }
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mention-item + .mention-item { border-top: 1px solid #f1f1f1; }
+.mention-item.active { background: #eef6ff; }
+.mention-item .mi-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mention-item .mi-dir { color: var(--muted); }
+.mention-item .mi-name { font-weight: 600; }
+.mention-empty { padding: 6px 10px; color: var(--muted); }
 
 /* 列表中的运行中标记 */
 .run-badge { color: var(--accent); font-size: 11px; white-space: nowrap; }

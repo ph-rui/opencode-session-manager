@@ -264,6 +264,60 @@ if has "$APPJS" 'userRefsHtml' && has "$APPJS" 'ref-agent' && has "$APPJS" 'ref-
 else
   echo "FAIL: app.js 缺 agent/skill 提及渲染"; fail=$((fail + 1))
 fi
+# H 组 6:文件附件(浏览器上传 → 暂存目录;@ 引用来自 fs/find 的补全)
+if has "$APPJS" 'resolveMentions' && has "$APPJS" 'userFilesHtml' && has "$APPJS" 'setupAttachments' &&
+   has "$APPJS" 'uploadPathFor' && has "$APPJS" 'mentionQuery'; then
+  echo "PASS: app.js 有附件与 @ 补全(解析/渲染/接线)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺附件或 @ 补全逻辑"; fail=$((fail + 1))
+fi
+# 上传绝不能自己另起端点:走 OpenCode 自带的 fs/write,代理只负责建目录 + 清理
+if has "$APPJS" '/api/experimental/fs/write' && has "$APPJS" 'uploadDir'; then
+  echo "PASS: 上传复用 OpenCode 的 fs/write(代理不新增上传端点)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 上传没有走 fs/write"; fail=$((fail + 1))
+fi
+if has "$CSS" '#mentions' && has "$CSS" '.achip' && has "$CSS" '.att-img' && has "$CSS" '.att-src'; then
+  echo "PASS: styles.css 有 @ 补全与附件样式"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 @ 补全 / 附件样式"; fail=$((fail + 1))
+fi
+if has "$HOME_HTML" 'id="btnAttach"' && has "$HOME_HTML" 'id="filePick"' &&
+   has "$HOME_HTML" 'id="attach"' && has "$HOME_HTML" 'id="mentions"'; then
+  echo "PASS: 输入区有附件按钮/文件框/待发送行/补全下拉"; pass=$((pass + 1))
+else
+  echo "FAIL: 输入区缺附件相关元素"; fail=$((fail + 1))
+fi
+# 服务端:暂存目录要能通过 /__health 告知前端,并且代理自己会建目录 + 定期清理
+HEALTH=$(curl -s "${AUTH[@]}" "$PROXY/__health")
+if has "$HEALTH" 'uploadDir'; then
+  echo "PASS: /__health 告知附件暂存目录(前端据此拼落盘路径)"; pass=$((pass + 1))
+else
+  echo "FAIL: /__health 没给出 uploadDir"; fail=$((fail + 1))
+fi
+SERVERJS=$(cat "$(dirname "$0")/../server.js")
+if has "$SERVERJS" 'ensureUploadDir' && has "$SERVERJS" 'pruneUploads' && has "$SERVERJS" 'UPLOAD_TTL_MS'; then
+  echo "PASS: 代理会建暂存目录并定期清理旧附件"; pass=$((pass + 1))
+else
+  echo "FAIL: 代理缺暂存目录的建立/清理"; fail=$((fail + 1))
+fi
+# 顺序锁:init() 里 setupAttachments() 必须在 paintDelivery() 之前接好线
+ATT_ORDER=$(printf '%s' "$APPJS" | awk '
+  /^function init\(\)/ { ininit = 1 }
+  ininit && /setupAttachments\(\);/ { seen = 1 }
+  ininit && /paintDelivery\(\);/ && !done { print (seen ? "attach-first" : "attach-late"); done = 1 }
+')
+case "$ATT_ORDER" in
+  attach-first) echo "PASS: init() 先接好附件/补全的线再画输入区"; pass=$((pass + 1)) ;;
+  *)            echo "FAIL: init() 没在画输入区前接好附件线 (got '$ATT_ORDER')"; fail=$((fail + 1)) ;;
+esac
+# 反向封锁:附件 uri 必须是 file: URI(service 端只认这个),不能被改成裸路径
+if has "$APPJS" "return 'file://' + String(abs"; then
+  echo "PASS: 附件 uri 统一加 file:// 前缀(服务端只认 file: URI)"; pass=$((pass + 1))
+else
+  echo "FAIL: 附件 uri 没有加 file:// 前缀(会被服务端 400)"; fail=$((fail + 1))
+fi
+
 # 顺序锁:init() 里 setupFilters() 必须排在 loadSessions 之前,否则会按默认值白拉一次
 INIT_ORDER=$(printf '%s' "$APPJS" | awk '
   /^function init\(\)/ { ininit = 1 }

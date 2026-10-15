@@ -285,7 +285,7 @@ opencode-session-manager/
       hash 指向已删除/不存在的会话 → 走已有兜底,不炸不白屏;hash 为空或不是 `ses` 开头 → 什么都不做。
   - **G 组当时明确不做**(其中三条在 H 组被推翻或补上,见下):顶栏筛选/排序/搜索的持久化、
     `hashchange` 的前后退同步、折叠动画、会话内滚动位置的恢复(刷新后停在最新消息,与「打开会话」一致)。
-- **H 观感 / 持久化 / 提及(已实现)** — 一次成组的补完,五小项各自独立提交。
+- **H 观感 / 持久化 / 提及 / 附件(已实现)** — 一次成组的补完,六小项各自独立提交(第 ⑥ 项为追加)。
 
   - **H1 会话区字号旋钮**
     - 现状:消息区 `12.5px/1.6` 是整块 UI 里最小的字。
@@ -325,7 +325,41 @@ opencode-session-manager/
     - `userRefsHtml(m)` 是纯函数:缺 `name` 用 `id` 兜底,两者都缺则跳过,名字走 `esc`(与正文同一套)。
     - 位置:角色行 / 正文 / 提及行;沿用终端风(不加气泡,只用色条 + 标记)。样式 `.refs`/`.ref`/`.ref-agent`/`.ref-skill`
       写在会话区内,字号用相对 `em` 跟着 `--chat-fs` 缩放。
-  - **本轮明确不做**:`hashchange` 与「手动改 URL」的同步、会话内滚动位置对「点会话」也还原、
+  - **H6 文件附件(选择 / 拖放 / 粘贴 + `@` 引用)**
+    - **先实测服务端契约,再决定实现** —— 这一步直接决定了整块做法:
+      - `PromptInput.FileAttachment` 只有 `uri`,**内容由服务端自己读**;`uri` 必须是 `file:` URI:
+        裸绝对路径/相对路径 → `400 Invalid attachment URI`,`https://` → `400 Unsupported attachment URI`;
+        `file:///abs`、`file://abs`、`file:/abs` 都能过(内部归一化成 `file:///abs`)。
+      - 落库为 `Prompt.FileAttachment = {data(base64), mime, source:{type:'uri',uri}, name?, description?, mention?}`,
+        `data`/`mime` 是服务端读文件时补的,`name` 与 `mention` 原样保留。
+      - 于是「上传」不必自己写:**OpenCode 自带 `POST /api/experimental/fs/write?path=<绝对路径>`**
+        (原始字节写盘,返回落盘的绝对路径),它走已有的 `/api/*` 透传 ⇒ **代理零改动**,不新增任何上传端点。
+    - **A)`@` 引用**:补全数据源是 `GET /api/fs/find`(与 TUI 同源),参数必须写成 deepObject 的
+      `location[directory]=<会话工程目录>`(传 JSON 字符串会报 `Expected object | undefined at ["location"]`);
+      返回的是**相对该目录**的路径,所以绝对路径用**响应里的 `location.directory`** 拼 —— 不去猜、也不从会话对象另取一份。
+      - 选中后正文插入 `@相对路径` 并把「相对路径 → 绝对路径」记进 `mentionHits`;发送时把仍在正文里的引用变成 `files[] + mention{start,end,text}`。
+      - **只认补全确认过的路径**:生成附件前无法确认任意路径是否真的存在,而一个不存在的文件会让整条 prompt `400` 失败,
+        所以宁可「手打不生效」也不冒整条消息失败的风险(与 TUI 里 `@` 同为补全入口的语义一致)。
+      - 匹配方式是**拿确认过的路径去正文里找**(长路径优先),不是按空格切 token:中文正文里
+        `@Makefile,再改` 这种紧跟标点、又没有空格的情形也得认出来(路径后允许跟标点/空白,不允许跟字)。
+      - 输入框上方即时出现 `@ 引用` chip;删掉正文里的那个 `@` 即取消 —— 发之前所见即所得。
+    - **B)选择 / 拖放 / 粘贴**:文件先经 `fs/write` 落到暂存目录,再把返回的绝对路径当 `uri`。
+      - 暂存目录由 `/__health` 的 `uploadDir` 告知(默认 `$TMPDIR/opencode-session-manager-uploads`,可用 `OCS_UPLOAD_DIR` 覆盖);
+        代理启动时建好(0700),并**最多每小时清理一次 6 小时前的旧文件**(顺手做,失败只记日志、绝不影响附件功能)。
+      - 拖放只挂在输入区上并 `preventDefault` 掉 `dragover`(否则浏览器会直接把文件当页面打开);粘贴取 `clipboardData.files`(普通文本照旧能粘)。
+      - 单文件上限 32MB(超限直接拒,不浪费一次上传);上传失败把该条从待发送列表里回滚并提示。
+      - **只有发送成功才清空待发送列表**:失败时留着便于原样重发(清空输入框是原有行为,没动)。
+      - 暂存目录未知时(刚打开页面就拖文件)先问一次 `/__health` 再传,不靠 `init()` 的时序。
+    - **消息流里怎么显示**:用户消息的正文/提及之后追加附件行(`📎 名字 mime · 大小 来源路径`),
+      `image/*` 且带 `data` 的直接内联成缩略图(`data:` URL,不需要额外请求)。
+      - 大小按 base64 长度反算(服务端不回 `size`);只有 `source.type === 'uri'` 才显示来源路径,`inline` 的没路径可显示。
+      - 条件追加 ⇒ **没有附件就不产生空的附件行**,所以 H5 那条「用户消息仍是角色行/正文/提及 3 个子节点」的断言照旧成立。
+      - 附件文件名刻意**不复用**导出用的 `safeName`(它会把 `.txt` 的扩展名点也换成 `-`),另起 `uploadName`:
+        只去掉路径分隔与控制字符、去掉开头的点,保留扩展名与中文。
+    - **H6 明确不做**:分片/断点续传、上传进度条、附件的持久化与临时文件清理之外的花样
+      (暂存文件只是「让服务端能读到」的中转,消息里已存 base64,清掉不影响历史回看);
+      `@` 的补全范围仍限于会话的工程目录(要引用外部文件请用 📎,它会复制一份进暂存目录)。
+  - **H1–H5 明确不做**:`hashchange` 与「手动改 URL」的同步、会话内滚动位置对「点会话」也还原、
     为每次点会话之外的操作 push 历史、可拖动的字号滑块(只给变量)。
 
 ## 8. 测试
@@ -371,6 +405,12 @@ opencode-session-manager/
 - [ ] 列表「归档」后该会话从列表消失,顶栏提示「另 N 个已归档」;勾选「显示已归档」可见 `📦 已归档` 行并能「取消归档」。
 - [ ] 聊天头部「导出」下载 JSON;「在 TUI 打开」给出的命令粘到终端能进入同一会话。
 - [ ] 顶栏「导入」选择导出得到的 JSON,指定目标目录后导入成功并自动打开(消息完整)。
+- [ ] 输入框里敲 `@`:上方浮出工程内的文件列表(目录名淡色、文件名加粗),↑↓ 选、Enter 补进正文;Esc 关掉。
+- [ ] 补全选中后输入框上方出现 `@ 引用` chip;把正文里那个 `@` 删掉,chip 随即消失(发之前就知道会带什么)。
+- [ ] 点 📎 选文件 / 把文件拖进输入区 / 截图后直接粘贴:输入框上方出现带文件名与大小的 chip,点 `×` 能移除。
+- [ ] 发出去之后,用户消息下方逐条列出 `📎 名字 mime · 大小 来源路径`;**图片直接显示缩略图**。
+- [ ] 硬刷新(`Ctrl+Shift+R`)后历史消息里的附件与缩略图照旧(内容在消息里,不依赖暂存文件)。
+- [ ] 故意选一个超过 32MB 的文件:被拒并提示,不会发出请求、也不会把消息卡住。
 
 ### 问询应答的自动化验证(本次已执行)
 - 浏览器内断言 36 项(`/tmp/ocsm-probe/asks-unit*.html`,真实 `app.js`):字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装与本地校验(含 `external`、数值范围、`minItems/maxItems`、`minLength`、`email/uri`)。
@@ -509,6 +549,46 @@ opencode-session-manager/
   提及名里的 HTML 被转义、落进 `renderMessage` 后顺序是「角色行 / 正文 / 提及」、没有提及时不产生空的 `refs` 行、
   用户消息正文仍被转义。
 - 既有其余五套测试复跑全绿:`ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71、`ui-stream` 102(计数未变)。
+
+### H 组第 ⑥ 项(文件附件)的自动化验证(本次已执行)
+- 冒烟 `test/smoke.sh`:**74 项全部通过**(由 66 项起,新增 8 项):附件与 `@` 补全的前端逻辑(`resolveMentions`/`userFilesHtml`/`setupAttachments`/`uploadPathFor`/`mentionQuery`)、
+  上传必须走 `/api/experimental/fs/write` 而不是自建端点(`/__health` 的 `uploadDir` 也在)、
+  `#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、
+  `/__health` 给出 `uploadDir`、代理会建目录并定期清理(`ensureUploadDir`/`pruneUploads`/`UPLOAD_TTL_MS`)、
+  附件 uri 必须加 `file://` 前缀;外加**第二条顺序锁**(`setupAttachments()` 必须排在 `paintDelivery()` 之前)。
+- 端到端 `test/e2e-attach.sh`:**32 项全部通过**(纯 curl,只建临时会话与临时文件,结束时全删)。验的是面板依赖的服务端契约:
+  ① 代理建好暂存目录并把 `uploadDir` 通过 `/__health` 告知前端;
+  ② `POST /api/experimental/fs/write?path=<绝对路径>` 原始字节写盘、内容**逐字节一致**、返回的绝对路径正是前端要当 `uri` 的那个;
+  ③ `GET /api/fs/find` 返回相对工程目录的路径、并回报基准目录;
+  ④ 带 `file:` URI 的提示词被接受,读回的用户消息 `files[0]` 里 `name`/`mime`/`source.uri` 都在、`data` 解出来正是原文、`mention` 原样落库;
+  ⑤ 裸绝对路径 / 相对路径 / `https` 三种非法 uri 都被 `400` 拒且原因可辨(`Invalid` vs `Unsupported`);
+  ⑥ 面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了附件功能。
+- 浏览器内断言 `test/ui-attach-run.js`:**132 项全部通过**(真实 `public/app.js`,无头 Firefox):
+  - **纯函数**:`fileURI`(含空值不炸)、`baseName`/`joinDir` 的边界、`humanSize` 的 B/KB/MB 与非法值、
+    `uploadName`(斜杠/反斜杠换下划线、路径穿越、开头点号、空值兜底、超长截断、中文保留)、
+    `uploadPathFor`(时间戳+随机串+安全名、名字里的斜杠跑不出目录、目录结尾多余斜杠被吃掉)、`b64Size`(补 1/2 个 `=` 与 3 的倍数)。
+  - **`userFilesHtml`**:两条都渲染、文件名/mime/按 base64 反算的大小、uri 来源显示路径而 inline 不显示、
+    `image/*` 内联 `data:` 缩略图、非图片不给缩略图、缺 `name` 用路径末段兜底、`name`/`mime` 都缺也不炸、名字里的 HTML 被转义、
+    落进 `renderMessage` 后顺序是「角色行 / 正文 / 提及 / 附件」、没有附件时不产生空的 `atts` 行。
+  - **`resolveMentions`**:没确认过的 `@` 不生成附件、确认过才生成、uri 是 `file:` URI、`mention` 的 `start/end/text` 切出来正好是那一段、
+    多个引用各自的锚点都对、中文里紧跟标点不算进引用、邮箱里的 `@` 不当路径。
+  - **`@` 补全**:光标前 token 的提取边界(没有 `@`/刚打一个 `@`/取最后一个 `@`/后面有空格就不补全/紧贴中文/光标在中间)、
+    请求 `/api/fs/find` 且带 `query`+`type=file`+`location[directory]` 的 deepObject 编码、补全项用响应的 `location.directory` 拼绝对路径、
+    目录名与文件名分列、上下键环绕与高亮重绘、Enter 被补全消费(不会顺手把消息发出去)、插入后光标位置与记忆绝对路径、Esc 关闭、
+    下拉关着时不吃按键、点选走同一条路、没有匹配时的空状态。
+  - **附件排队**:上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、点 × 移除、
+    拖放(`drop` + `dragover` 被拦)、粘贴 `clipboardData.files`、文件框 `change`、超限直接拒且**没有发出任何请求**、上传失败回滚并提示。
+  - **`send()`**:`files[]` = 上传的文件 + `@` 引用(共 2 条)、`@` 引用的 uri 指向工程目录里那个文件、`mention` 锚点正确、
+    正文首尾空白被 trim、发送成功才清空待发送列表、失败时保留可重发且弹提示、切会话清空并关掉补全、
+    没选中会话时附件按钮禁用、暂存目录未知时先问 `/__health` 再传。
+- 其余六套 UI 测试与四套 e2e 测试复跑全绿(计数见 README)。其中踩到一个**命名冲突**:新版 `uploadName` 最初叫 `safeName`,
+  而 `app.js` 里早就有一个给导出文件名用的 `safeName` —— 后声明的函数把前者整个盖掉,`ui-capabilities` 立刻红了 2 项
+  (「去掉路径分隔与空白」「保留中文与数字」)。改名后恢复;**这正是既有测试的价值所在**。
+- 真实目检:`/tmp/ocsm-probe/attach-build.js` 用真实 `index.html`/`styles.css`/`app.js` + 真实形状的附件消息
+  (一段文本 + 一张 240×120 PNG,`data` 是服务端形状的 base64)渲染截图 —— 用户消息下方两条附件行(`📎 note.txt text/plain · 17 B file:///...`、
+  `📎 shot.png image/png · 59.4 KB file:///...`)与缩略图、输入区两种 chip(`@ 引用` 与已上传文件)、
+  `@` 补全下拉(目录名淡色 / 文件名加粗、当前项高亮)都如预期。
+
 - 离线渲染核对(H1 专用):`/tmp/ocsm-probe/font-build.js` 用真实 `styles.css` + `app.js` 渲染
   真实用户消息 + 真实整条助手消息 + `write`/`bash` 工具卡片,并在页尾把每个关键选择器的
   `getComputedStyle().fontSize` **印成可见文字**(截图即可核对)。对照 `git show HEAD:public/styles.css` 的新旧两版:
@@ -553,3 +633,9 @@ opencode-session-manager/
   理由是「点会话」的意图通常是看最新进展,而「刷新」的意图是接着读 —— 两者混在一起会让点击行为变得难以预期。
 - H1 的字号**只给了变量,没给可拖动的滑块**:使用者可随时报一个新数值,改 `:root` 里一个数即可;
   等真出现「想按会话/按屏分别调」的需求再加控件。
+- H6 的一个**刻意的取舍**:`@` 只在「补全里确认过」时才变成附件。理由是服务端在读到不存在的文件时会让整条 prompt `400`,
+  而在浏览器侧无法可靠地判定任意路径是否存在(要么多一次探测请求、要么赌它存在)。代价是手打一个没走过补全的 `@路径` 不会带上附件;
+  要带任意文件请用 📎 / 拖放 / 粘贴(它会把文件复制进暂存目录,不受工程目录范围限制)。
+- H6 的暂存目录是一处**有意的「不持久」**:`$TMPDIR/opencode-session-manager-uploads` 里的文件只是为了让服务端能读到,
+  消息里已经存了 base64,所以文件被 6 小时清理或 `/tmp` 被重启清空都不影响历史回看,也不会出现「附件链接失效」的观感问题。
+  真需要长期保存原件,应在会话里让智能体把文件 `write` 进工程目录。

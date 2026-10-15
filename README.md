@@ -32,6 +32,7 @@ node server.js
 | `OCS_HOST` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 可开放局域网访问 |
 | `OCS_AUTH` | (空) | 面板访问密码,格式 `用户名:密码`。设置后需 HTTP Basic 登录 |
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | 用于读取 `service.json` 中的密码 |
+| `OCS_UPLOAD_DIR` | `$TMPDIR/opencode-session-manager-uploads` | 附件的临时落盘目录(代理启动时建好,并定期清理 6 小时前的旧文件) |
 
 ## 局域网访问与面板密码
 
@@ -73,6 +74,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 - 管理动作:重命名、删除、移动到其它工程目录、分叉
 - 点击会话打开对话:加载历史消息、发送消息、`/api/event` SSE 实时刷新
 - **用户消息上的提及标记**:`agents[]` 显示成 `@名字`,`skills[]` 显示成 `#名字`(缺 `name` 用 `id` 兜底)
+- **文件附件**:在输入框里 `@` 补全工程内文件直接引用;或用 📎 / 拖放 / 粘贴把文件带上去(见下文「文件附件」)
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
 - **会话控制**(输入框上方的工具栏):
@@ -233,9 +235,40 @@ chmod 600 ~/.config/opencode-session-manager/env
 - 一个前提假设:`metadata.diagnostics` 的形状是从服务端 TUI 的用法反推的,本机实测一直是空对象 `{}`;
   面板按「精确路径优先、相对/绝对宽松兜底」取值,取不到就不显示(假设不成立也不会报错)。
 
+## 文件附件
+
+两条路都归结成「一个 `file:` URI」——这是服务端的硬要求,实测**裸绝对路径与相对路径都会被拒**
+(`400 Invalid attachment URI`),`https://` 则是 `Unsupported attachment URI`;
+而且文件内容不是浏览器上传的,**是服务端自己按 URI 去读的**(读回消息时才补上 `data`(base64)与 `mime`)。
+
+- **A)`@` 引用工程内的文件**(和 TUI 同一个入口):在输入框里敲 `@`,下拉列表来自 `GET /api/fs/find`
+  (`?query=&type=file&limit=12&location[directory]=<会话的工程目录>`),返回的是**相对工程目录**的路径。
+  选中后正文里插入 `@相对路径`,并把「相对路径 → 绝对路径」记进 `mentionHits`(绝对路径用响应里的
+  `location.directory` 拼,而不是猜)。
+  - 发送时只把**补全里确认过**的 `@路径` 变成 `files[]` + `mention{start,end,text}`。这条限制是有意的:
+    发给服务端一个不存在的文件会让整条 prompt 直接 `400` 失败,而只靠正文文本无法确认文件真的存在。
+    代价是手打一个没走过补全的 `@路径` 不会变成附件(与 TUI 里「`@` 是补全入口」一致)。
+  - 解析用「拿确认过的路径去正文里找」而不是「按空格切 token」:中文正文里 `@Makefile,再改` 这种
+    后面紧跟标点、又没有空格的情形也要认出来(路径后允许跟标点/空白,不允许跟字)。
+  - 输入框上方会即时出现一枚 `@ 引用` 的 chip,删掉正文里的那个 `@` 就取消 —— 发之前所见即所得。
+- **B)选择 / 拖放 / 粘贴的文件**:浏览器手里没有服务端路径,于是**借用 OpenCode 自带的**
+  `POST /api/experimental/fs/write?path=<绝对路径>`(原始字节写盘),把返回的绝对路径当 `uri`。
+  - 好处是**代理层零改动**:这个端点走已有的 `/api/*` 透传,写盘由 OpenCode 自己完成,代理不新增任何上传路由。
+  - 落盘目录由 `/__health` 的 `uploadDir` 告知(默认 `$TMPDIR/opencode-session-manager-uploads`,
+    可用 `OCS_UPLOAD_DIR` 覆盖);代理负责建目录(0700)并**最多每小时清一次 6 小时前的旧文件**。
+    落盘只是「让服务端能读到」的临时中转,消息里已存了 base64,所以文件被清掉也不影响历史回看。
+  - 单个文件上限 32MB;超限直接拒,不浪费一次上传。
+  - 拖放只接在输入区上(拦了 `dragover`),否则浏览器会直接把文件当页面打开。
+- **消息流里怎么显示**:用户消息正文下方逐条列出 `📎 名字 mime · 大小 来源路径`;
+  `image/*` 且带 `data` 的直接内联成缩略图(`data:` URL),不需要额外请求。
+  - 大小是按 base64 长度反算的(服务端不回 `size`);`source.type === 'uri'` 时才显示来源路径,
+    `inline` 的没路径可显示就省略。
+  - 这些都在 `renderMessage` 的用户分支里,和 `agents[]`/`skills[]` 一样是**条件追加**:
+    没有附件就不产生空的附件行(所以「没有提及/附件时用户消息仍是 3 个子节点」这条老断言照旧成立)。
+
 ## 尚未实现(v2+ 剩余项)
 
-文件附件。
+无。
 
 工具卡片上明确不做的:并排 / split 视图、语法高亮(`config.diffs.view` / `filetype` / `syntaxStyle`)、
 字符级行内高亮(`diffHighlightAdded` / `Removed`)、会话级「变更」面板与 revert。
@@ -255,17 +288,20 @@ OCS_E2E_LLM=1 bash test/e2e-controls.sh   # 追加真实运行中的 queue/steer
 bash test/e2e-capabilities.sh # 能力扩展端到端(纯 curl):新建→归档→导出→导入(含 409/400 负例)→清理
 bash test/e2e-stream.sh       # 流式端到端(纯 curl):事件流形状;默认只跑不消耗模型的部分
 OCS_E2E_LLM=1 OCS_E2E_MODEL=company/deepseek-v4-flash bash test/e2e-stream.sh   # 追加真实逐 token 流式断言
+bash test/e2e-attach.sh       # 文件附件端到端(纯 curl):上传写盘 → @ 补全数据源 → 附件落库形状 → 非法 uri 负例
 node test/ui-asks-run.js      # 问询前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-controls-run.js  # 会话控制前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-layout-run.js    # 列表折叠 + 刷新后的恢复(会话 / 滚动位置 / 顶栏条件)(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-attach-run.js    # 文件附件与 @ 补全的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
-- `smoke.sh`:66 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:74 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
-   外加一条**顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)。
+   H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
+   外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区)。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
@@ -281,6 +317,9 @@ node test/ui-layout-run.js    # 列表折叠 + 刷新后的恢复(会话 / 滚�
   **前进 / 后退**(点会话入栈、重复点同一个不多压一格、收到 `popstate` 切到 URL 里的会话且不重复入栈、后退到无 hash 时取消选中并清空对话区、空操作不入栈)、
   **会话内滚动位置**(跳到底部 / 存锚点 / 刷新后回到原处且确实不在底部 / 只还原一次 / 点会话进来仍跳底部 / 锚点消息不存在时退回像素值 / 无存档照旧 / 上限 20 与淘汰顺序 / 存的是 `sessionStorage`)、
   **顶栏条件持久化**(空存档的默认值、四项恢复、记住的目录不在结果里也能选回、四类控件改动即时落盘、清空搜库存空串、存的是 `localStorage`)。
+
+- `e2e-attach.sh`:32 项。只用临时会话与临时文件,结束时全部删除;验证①代理建好暂存目录并把 `uploadDir` 通过 `/__health` 告知前端、②`POST /api/experimental/fs/write?path=<绝对路径>` 原始字节写盘且内容逐字节一致、③`GET /api/fs/find` 给出相对工程目录的路径与基准目录、④提示词里的附件只认 `file:` URI(服务端自己补 `data`/`mime`,`name`/`mention` 原样落库)、⑤裸绝对路径/相对路径/`https` 三种非法 uri 都被 `400` 拒且原因可辨、⑥面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了附件功能。
+- `ui-attach-run.js`:132 项浏览器内断言,覆盖路径与大小的纯函数(`fileURI`/`baseName`/`joinDir`/`humanSize`/`uploadName`/`uploadPathFor`/`b64Size`)、`userFilesHtml`(uri 来源显示路径、inline 不显示、图片内联缩略图、按 base64 反算大小、缺 `name`/`mime` 兜底、转义、在 `renderMessage` 里的位置与「没有附件就不产生空行」)、`resolveMentions`(只认补全确认过的路径、锚点 `start/end/text` 切出来正好是那一段、多引用、中文里紧跟标点、邮箱里的 `@` 不算)、`@` 补全(光标前 token 的提取边界、请求参数含 `location[directory]` 的 deepObject 写法、目录名与文件名分列、上下键环绕、Enter 消费按键并插入+记忆绝对路径、Esc 关闭、点选、无匹配的空态)、附件排队(上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、超限拒绝、上传失败回滚、拖放/粘贴/文件框三条入口)、以及 `send()` 的请求体(上传文件与 `@` 引用合并进 `files[]`、`mention` 锚点、成功才清空待发送列表、失败保留可重发、切会话清空并关掉补全、没选中会话时按钮禁用、暂存目录未知时先问 `/__health`)。
 
 ## 开机自启(systemd 用户服务)
 
@@ -351,3 +390,7 @@ journalctl --user -u opencode-session-manager.service -f
   隐藏谁都不影响别人。冒烟与 `ui-layout` 各有一条回归锁盯着这件事。
 - 选中会话用 URL hash 承载(`#ses_xxx` + `history.replaceState`),因为它是唯一「刷新、复制链接、书签、换标签打开」都成立的载体;
   `localStorage` 存不了可分享的链接。恢复放在首次 `loadSessions()` 之后而不是之前:会话标题/工程目录要能取到,且 `loadSessions` 内部自己吞异常(不会 reject),`.then` 一定会跑到。
+- **提示词的附件只认 `file:` URI**:`files[].uri` 传裸绝对路径或相对路径会当场 `400 Invalid attachment URI`,传 `https://` 是 `400 Unsupported attachment URI`;`file:///abs`、`file://abs`、`file:/abs` 三种写法都能过。**内容不是上传的**:服务端自己按 URI 读文件,落库时才补 `data`(base64)与 `mime`,所以面板在上传后不需要回读内容。`mention` 会原样落库(`{start,end,text}`),`name` 也保留。
+- **`GET /api/fs/find` 的 `location` 必须写成 deepObject 的 `location[directory]=<绝对目录>`**;传 JSON 字符串(如 `location={...}`)会报 `Expected object | undefined at ["location"]`。返回的 `data[].path` 是**相对该目录**的路径,响应里带的 `location.directory` 才是唯一可靠的基准 —— 面板拿它拼绝对路径,不去猜。
+- **`POST /api/experimental/fs/write?path=<urlencoded 绝对路径>`**:body 就是原始字节,`content-type: application/octet-stream`;返回 `{"location":{...},"data":{"path":"<绝对路径>"}}`。有两个坑:①**绝对路径要 URL 编码**(浏览器用 `URLSearchParams` 正好把 `/` 编成 `%2F`);②用 curl 手测时**不要**把 `--get` 和 `-X POST --data-binary` 混在一起(会退化成 GET)。由于这个端点走的是已有的 `/api/*` 透传,代理层不必新增任何上传路由 —— 代理只建目录、告知路径、定期清理。
+- **上传的文件只是「中转」**:消息里已存了 base64,所以暂存目录里的文件被清理或 `/tmp` 被重启清空,都不影响历史消息的回看。

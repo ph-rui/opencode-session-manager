@@ -25,6 +25,12 @@ const store = {
   showArchived: false, // 列表是否显示已归档会话
   restoreScroll: null, // 刷新恢复时要还原的滚动锚点(只由 restoreFromHash 设置,renderMessages 消费)
   live: new Map(), // assistantMessageID -> 流式本地缓冲(见「逐 token 流式」)
+  uploadDir: '', // 附件暂存目录(来自 /__health)
+  attachments: [], // 待发送的附件:[{ id, name, size, mime, path, uri }]
+  mentionHits: new Map(), // @ 补全里确认过的条目:'相对路径' -> 绝对路径(H 组 6 A)
+  mentionItems: [], // 当前补全列表
+  mentionAt: -1, // 补全列表当前高亮项
+  mentionRange: null, // 正在补全的 @token 在输入框里的 [start, end)
 };
 
 const $ = (s) => document.querySelector(s);
@@ -92,6 +98,7 @@ async function health() {
   const el = $('#status');
   try {
     const j = await api('/__health');
+    if (j && j.uploadDir) store.uploadDir = j.uploadDir; // 附件的落盘目录(H 组 6)
     if (j.ok) {
       el.className = 'status ok';
       el.textContent = '已连接 ' + (j.base || '');
@@ -332,6 +339,8 @@ function updateComposerControls() {
   if (dl) dl.hidden = !busy;
   const send = $('#send');
   if (send) send.disabled = !sel;
+  const att = $('#btnAttach');
+  if (att) att.disabled = !sel;
 }
 
 async function interrupt() {
@@ -956,6 +965,9 @@ function clearSelection() {
   $('#messages').innerHTML = '';
   $('#chatTitle').textContent = '未选择会话';
   $('#chatMeta').textContent = '';
+  clearAttachments();
+  closeMentions();
+  store.mentionHits.clear();
   renderAsks();
   renderInbox();
   renderChatOps();
@@ -1152,6 +1164,9 @@ async function selectSession(id) {
   store.msgOlderCursor = null;
   store.pending = false;
   store.forceBottom = !rs;
+  clearAttachments(); // 待发送附件属于上一个会话,不带过去(H 组 6)
+  closeMentions();
+  store.mentionHits.clear();
   renderSessions();
   const s = store.sessions.get(id);
   $('#chatTitle').textContent = s ? s.title || '(无标题)' : id;
@@ -1648,6 +1663,42 @@ function userRefsHtml(m) {
   return out.length ? '<div class="refs">' + out.join('') + '</div>' : '';
 }
 
+// base64 的字节数(服务端不回 size,自己按填充算)
+function b64Size(data) {
+  const s = String(data || '');
+  if (!s) return 0;
+  let n = Math.floor((s.length * 3) / 4);
+  if (s.endsWith('==')) n -= 2;
+  else if (s.endsWith('=')) n -= 1;
+  return n > 0 ? n : 0;
+}
+
+// 用户消息里的附件(H 组 6)。消息里的形状是 { data(base64), mime, source, name },
+// data/mime 是服务端读文件时补的;source.type==='uri' 时把来源路径也显示出来,
+// 便于确认到底带了哪个文件。图片直接给缩略图(data: URL)。
+function userFilesHtml(m) {
+  const files = Array.isArray(m.files) ? m.files : [];
+  const out = [];
+  for (const f of files) {
+    if (!f) continue;
+    const src = f.source && f.source.type === 'uri' ? f.source.uri : '';
+    const name = f.name || baseName(src) || '附件';
+    const mime = f.mime || '';
+    const size = b64Size(f.data);
+    const meta = [mime, size ? humanSize(size) : ''].filter(Boolean).join(' · ');
+    const isImg = /^image\//.test(mime) && f.data;
+    out.push(
+      '<div class="att">' +
+        '<span class="att-name">📎 ' + esc(name) + '</span>' +
+        (meta ? '<span class="att-meta">' + esc(meta) + '</span>' : '') +
+        (src ? '<span class="att-src">' + esc(src) + '</span>' : '') +
+        '</div>' +
+        (isImg ? '<img class="att-img" alt="' + esc(name) + '" src="data:' + esc(mime) + ';base64,' + String(f.data) + '">' : '')
+    );
+  }
+  return out.length ? '<div class="atts">' + out.join('') + '</div>' : '';
+}
+
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -1657,7 +1708,8 @@ function renderMessage(m, opts) {
     el.innerHTML =
       '<div class="turn-head"><span class="marker">❯</span><span class="who">你</span></div>' +
       '<div class="content">' + esc(m.text || '') + '</div>' +
-      userRefsHtml(m);
+      userRefsHtml(m) +
+      userFilesHtml(m);
     return el;
   }
 
@@ -2443,16 +2495,387 @@ async function onAction(act, id) {
   }
 }
 
+/* --------- 文件附件(H 组 6)---------
+ * 服务端 prompt 的 files[].uri 必须是 **file: URI**(裸路径 / https 都会被拒),
+ * 而文件内容是服务端【自己】读的(读回消息时才带上 data(base64) 与 mime)。
+ * 于是两条路都归结成「一个 file: URI」:
+ *   A) 正文里的 @路径 —— 补全数据来自 GET /api/fs/find(与 TUI 同源,给的是相对工程目录的路径),
+ *      选中后把「相对路径 → 绝对路径」记进 mentionHits;发送时把仍在正文里的 @路径 变成
+ *      files[] + mention(start/end/text 锚在提示词里的位置)。
+ *   B) 选择 / 拖放 / 粘贴的文件 —— 浏览器手里没有服务端路径,先 POST /api/experimental/fs/write
+ *      把字节落到暂存目录(路径由 /__health 告知),再把返回的绝对路径当 uri。
+ *      这样代理层不用新增任何上传端点,写盘交给 OpenCode 自己。
+ * 只在发送成功后才清空待发送附件 —— 失败还能原样重发。
+ */
+
+const UPLOAD_MAX = 32 * 1024 * 1024; // 单个附件上限
+const MENTION_LIMIT = 12; // @ 补全一次最多列几条
+
+function fileURI(abs) {
+  return 'file://' + String(abs == null ? '' : abs);
+}
+
+function baseName(p) {
+  const s = String(p == null ? '' : p);
+  const i = s.lastIndexOf('/');
+  return i < 0 ? s : s.slice(i + 1);
+}
+
+function joinDir(dir, rel) {
+  return String(dir == null ? '' : dir).replace(/\/+$/, '') + '/' + String(rel == null ? '' : rel).replace(/^\/+/, '');
+}
+
+function humanSize(n) {
+  const b = Math.max(0, Number(n) || 0);
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// 上传文件名:去掉路径分隔与控制字符(前缀还有时间戳+随机串,不会撞名)。
+// 刻意不复用导出用的 safeName —— 那个会把 `.txt` 的扩展名点也换成 '-',附件名就认不出来了。
+function uploadName(name) {
+  const s = String(name == null ? '' : name)
+    .replace(/[/\\\u0000-\u001f\u007f]+/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  return (s || 'file').slice(0, 120);
+}
+
+function uploadPathFor(name, now, rand) {
+  const dir = String(store.uploadDir || '').replace(/\/+$/, '');
+  const stamp = now || Date.now();
+  const r = rand || Math.random().toString(36).slice(2, 10);
+  return dir + '/' + stamp + '-' + r + '-' + uploadName(name);
+}
+
+function sessionDir(sid) {
+  const s = sid ? store.sessions.get(sid) : null;
+  return (s && s.location && s.location.directory) || '';
+}
+
+/* 发送前解析正文里的 @ 引用。只认「补全里确认过」的条目:
+ * 好处是永远不会发出一个不存在的文件(那会让 prompt 直接 400 整条失败);
+ * 代价是手打一个没走过补全的 @路径 不会变成附件 —— 与 TUI 里「@ 是补全入口」是一致的。
+ * 匹配方式:拿已确认的路径去正文里找(长路径优先),这样中文正文里紧跟标点也能认出来
+ * (不能简单地按空格切:',再改' 这种没有空格)。 */
+const MENTION_TAIL = /[\s，。,.、;:!?()[\]{}<>"'`*]/; // 路径后面允许紧跟的收尾字符
+
+function resolveMentions(text) {
+  const out = [];
+  if (!text || !store.mentionHits.size) return out;
+  const keys = Array.from(store.mentionHits.keys()).sort((a, b) => b.length - a.length);
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '@') continue;
+    for (const k of keys) {
+      if (!text.startsWith(k, i + 1)) continue;
+      const after = text[i + 1 + k.length];
+      if (after !== undefined && !MENTION_TAIL.test(after)) continue;
+      out.push({
+        uri: fileURI(store.mentionHits.get(k)),
+        name: baseName(k),
+        mention: { start: i, end: i + 1 + k.length, text: '@' + k },
+      });
+      break;
+    }
+  }
+  return out;
+}
+
+/* ---- 待发送附件列表(输入框上方那排 chip)---- */
+
+function renderAttachments() {
+  const box = $('#attach');
+  if (!box) return;
+  const inp = $('#input');
+  const refs = resolveMentions(inp ? inp.value : '');
+  const files = store.attachments;
+  box.hidden = !refs.length && !files.length;
+  if (box.hidden) {
+    box.innerHTML = '';
+    return;
+  }
+  let html = '';
+  for (const r of refs) {
+    html +=
+      '<span class="achip ref" title="正文里的 @ 引用,发送时会作为文件一起带上(删掉正文里的那个 @ 即取消)">' +
+      '<span class="achip-name">' + esc(r.name) + '</span>' +
+      '<span class="achip-size">@ 引用</span></span>';
+  }
+  for (const a of files) {
+    html +=
+      '<span class="achip' + (a.busy ? ' busy' : '') + '" data-id="' + esc(a.id) + '" title="' +
+      esc(a.path || a.name) + '">' +
+      '<span class="achip-name">' + esc(a.name) + '</span>' +
+      '<span class="achip-size">' + esc(a.busy ? '上传中…' : humanSize(a.size)) + '</span>' +
+      '<button type="button" class="achip-x" data-remove="' + esc(a.id) + '" title="移除">×</button></span>';
+  }
+  box.innerHTML = html;
+}
+
+function clearAttachments() {
+  store.attachments = [];
+  renderAttachments();
+}
+
+function removeAttachment(id) {
+  store.attachments = store.attachments.filter((a) => a.id !== id);
+  renderAttachments();
+}
+
+// 暂存目录来自 /__health;没拿到就问一次(不然刚打开页面就拖文件会失败)
+async function ensureUploadDir() {
+  if (store.uploadDir) return store.uploadDir;
+  const j = await api('/__health');
+  if (j && j.uploadDir) store.uploadDir = j.uploadDir;
+  if (!store.uploadDir) throw new Error('服务端没有给出附件暂存目录');
+  return store.uploadDir;
+}
+
+async function uploadFile(file) {
+  await ensureUploadDir();
+  const want = uploadPathFor(file.name);
+  const r = await fetch('/api/experimental/fs/write?' + new URLSearchParams({ path: want }).toString(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: file,
+  });
+  const txt = await r.text();
+  let j = null;
+  try {
+    j = JSON.parse(txt);
+  } catch (_) {}
+  if (!r.ok) throw new Error((j && (j.message || j.error)) || 'HTTP ' + r.status);
+  const abs = (j && j.data && j.data.path) || want;
+  return { path: abs, uri: fileURI(abs) };
+}
+
+async function queueFiles(list) {
+  const picked = Array.prototype.slice.call(list || []);
+  if (!picked.length || !store.selected) return;
+  let failed = 0;
+  for (const f of picked) {
+    if ((f.size || 0) > UPLOAD_MAX) {
+      flash('「' + (f.name || '文件') + '」太大(' + humanSize(f.size) + '),单个上限 ' + humanSize(UPLOAD_MAX), 'bad');
+      failed++;
+      continue;
+    }
+    const item = {
+      id: 'att' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      name: f.name || 'file',
+      size: f.size || 0,
+      mime: f.type || '',
+      path: '',
+      uri: '',
+      busy: true,
+    };
+    store.attachments.push(item);
+    renderAttachments();
+    try {
+      const up = await uploadFile(f);
+      item.path = up.path;
+      item.uri = up.uri;
+      item.busy = false;
+    } catch (e) {
+      store.attachments = store.attachments.filter((a) => a !== item);
+      flash('上传「' + item.name + '」失败:' + e.message, 'bad');
+      failed++;
+    }
+    renderAttachments();
+  }
+  if (failed) updateComposerControls();
+}
+
+/* ---- @ 文件补全(GET /api/fs/find,与 TUI 同源)---- */
+
+// 光标前最后一个 @token → 它在输入框里的 [start, end) 与查询词
+function mentionQuery() {
+  const el = $('#input');
+  if (!el) return null;
+  const caret = el.selectionStart == null ? el.value.length : el.selectionStart;
+  const before = el.value.slice(0, caret);
+  const m = /@([^\s@]{0,200})$/.exec(before);
+  if (!m) return null;
+  return { start: caret - m[0].length, end: caret, query: m[1] };
+}
+
+function closeMentions() {
+  const box = $('#mentions');
+  if (box) {
+    box.hidden = true;
+    box.innerHTML = '';
+  }
+  store.mentionItems = [];
+  store.mentionAt = -1;
+  store.mentionRange = null;
+}
+
+function renderMentions() {
+  const box = $('#mentions');
+  if (!box) return;
+  if (!store.mentionItems.length) {
+    box.innerHTML = '<div class="mention-empty">没有匹配的文件</div>';
+    box.hidden = false;
+    return;
+  }
+  box.innerHTML = store.mentionItems
+    .map((it, i) => {
+      const cut = it.path.lastIndexOf('/');
+      const dir = cut < 0 ? '' : it.path.slice(0, cut + 1);
+      const name = cut < 0 ? it.path : it.path.slice(cut + 1);
+      return (
+        '<div class="mention-item' + (i === store.mentionAt ? ' active' : '') + '" role="option" data-i="' + i + '">' +
+        '<span class="mi-path"><span class="mi-dir">' + esc(dir) + '</span><span class="mi-name">' + esc(name) + '</span></span>' +
+        (it.type === 'directory' ? '<span class="mi-dir">目录</span>' : '') +
+        '</div>'
+      );
+    })
+    .join('');
+  box.hidden = false;
+  const act = box.querySelector('.mention-item.active');
+  if (act && act.scrollIntoView) {
+    try {
+      act.scrollIntoView({ block: 'nearest' });
+    } catch (_) {}
+  }
+}
+
+let mentionTimer = null;
+
+async function openMentions() {
+  const tok = mentionQuery();
+  if (!tok || !store.selected) return closeMentions();
+  const params = new URLSearchParams({ query: tok.query, type: 'file', limit: String(MENTION_LIMIT) });
+  const dir = sessionDir(store.selected);
+  if (dir) params.set('location[directory]', dir);
+  let j;
+  try {
+    j = await api('/api/fs/find?' + params.toString());
+  } catch (_) {
+    return closeMentions();
+  }
+  if (!j || !Array.isArray(j.data)) return closeMentions();
+  const now = mentionQuery();
+  if (!now || now.start !== tok.start) return; // 期间又敲了键,等下一次
+  const at = (j.location && j.location.directory) || dir || '';
+  // 绝对路径用【服务端返回的 location】拼 —— 它才是这一批相对路径的基准
+  store.mentionItems = j.data.map((e) => ({ path: e.path, type: e.type, abs: joinDir(at, e.path) }));
+  store.mentionRange = { start: tok.start, end: tok.end };
+  store.mentionAt = store.mentionItems.length ? 0 : -1;
+  renderMentions();
+}
+
+function acceptMention(i) {
+  const idx = i == null ? store.mentionAt : i;
+  const it = store.mentionItems[idx];
+  const range = store.mentionRange;
+  const el = $('#input');
+  if (!it || !range || !el) return;
+  const inserted = '@' + it.path + ' ';
+  el.value = el.value.slice(0, range.start) + inserted + el.value.slice(range.end);
+  const caret = range.start + inserted.length;
+  if (el.setSelectionRange) el.setSelectionRange(caret, caret);
+  store.mentionHits.set(it.path, it.abs); // 记住「补全确认过」的绝对路径
+  closeMentions();
+  el.focus();
+  renderAttachments();
+}
+
+// 补全列表开着时,把方向键/Enter/Tab/Esc 抢过来;返回 true 表示已消费
+function mentionKey(e) {
+  const box = $('#mentions');
+  if (!box || box.hidden || !store.mentionItems.length) return false;
+  const n = store.mentionItems.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    store.mentionAt = (store.mentionAt + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    renderMentions();
+    return true;
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    acceptMention();
+    return true;
+  }
+  if (e.key === 'Escape') {
+    closeMentions();
+    return true;
+  }
+  return false;
+}
+
+function setupAttachments() {
+  const pick = $('#filePick');
+  const btn = $('#btnAttach');
+  const box = $('#attach');
+  const inp = $('#input');
+  const set = $('#mentions');
+  const comp = $('#composer');
+
+  if (btn && pick) {
+    btn.addEventListener('click', () => pick.click());
+  }
+  if (pick) {
+    pick.addEventListener('change', () => {
+      queueFiles(pick.files);
+      pick.value = ''; // 允许连续选同一个文件
+    });
+  }
+  if (box) {
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-remove]');
+      if (b) removeAttachment(b.dataset.remove);
+    });
+  }
+  if (set) {
+    set.addEventListener('click', (e) => {
+      const it = e.target.closest('.mention-item');
+      if (it) acceptMention(Number(it.dataset.i));
+    });
+  }
+  if (inp) {
+    inp.addEventListener('input', () => {
+      renderAttachments();
+      clearTimeout(mentionTimer);
+      mentionTimer = setTimeout(openMentions, 120);
+    });
+    // 粘贴:截图 / 复制的文件直接进待发送列表(普通文本照旧)
+    inp.addEventListener('paste', (e) => {
+      const f = e.clipboardData && e.clipboardData.files;
+      if (f && f.length) queueFiles(f);
+    });
+  }
+  if (comp) {
+    // 拖放:必须拦 dragover 才有 drop
+    comp.addEventListener('dragover', (e) => {
+      if (!store.selected) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    comp.addEventListener('drop', (e) => {
+      if (!store.selected) return;
+      e.preventDefault();
+      queueFiles(e.dataTransfer && e.dataTransfer.files);
+    });
+  }
+}
+
 async function send() {
   const text = $('#input').value.trim();
   if (!text || !store.selected) return;
   const sid = store.selected;
   const busy = isRunning(sid) || store.running;
   const willQueue = busy && store.delivery === 'queue';
+  // 附件 = 已上传的文件 + 正文里确认过的 @ 引用
+  const files = store.attachments
+    .filter((a) => a.uri)
+    .map((a) => ({ uri: a.uri, name: a.name }))
+    .concat(resolveMentions(text));
   const body = { text };
+  if (files.length) body.files = files;
   if (busy) body.delivery = store.delivery;
 
   $('#input').value = '';
+  closeMentions();
+  renderAttachments(); // 正文清了,@ 引用的 chip 也一起消失
   store.pending = !willQueue;
   updateChatStatus();
   updateComposerControls();
@@ -2466,6 +2889,8 @@ async function send() {
       flash('已排队,当前回合结束后执行', 'ok');
       store.pending = false;
     }
+    clearAttachments(); // 发送成功才清空(失败还能原样重发)
+    store.mentionHits.clear();
   } catch (e) {
     alert('发送失败:' + e.message);
     store.pending = false;
@@ -3052,6 +3477,7 @@ function init() {
   setupListToggle();
   setupHistoryNav();
   setupScrollMemory();
+  setupAttachments();
   paintDelivery();
 
   $('#refresh').addEventListener('click', () => {
@@ -3062,6 +3488,7 @@ function init() {
   $('#older').addEventListener('click', () => loadMessages({ older: true }));
   $('#send').addEventListener('click', send);
   $('#input').addEventListener('keydown', (e) => {
+    if (mentionKey(e)) return; // 补全列表开着时,方向键/Enter/Tab/Esc 先给补全
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -3079,10 +3506,6 @@ function init() {
   // ---- v2 D 组:新建 / 导入导出 / 归档 / 深链 ----
   $('#btnNew').addEventListener('click', openNew);
   $('#btnImport').addEventListener('click', openImport);
-  $('#showArchived').addEventListener('change', () => {
-    store.showArchived = $('#showArchived').checked;
-    renderSessions();
-  });
   $('#opExport').addEventListener('click', openExport);
   $('#opTui').addEventListener('click', openTui);
   $('#opArchive').addEventListener('click', () => toggleArchive(store.selected));

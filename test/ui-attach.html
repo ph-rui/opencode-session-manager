@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>attach unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"></select></label>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
+    <label class="chk"><input type="checkbox" id="showArchived"></label>
+    <span id="count"></span><span id="archivedCount"></span>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div id="attach" hidden></div>
+        <div class="cinput">
+          <button type="button" id="btnAttach">📎</button>
+          <textarea id="input"></textarea>
+          <button id="send"></button>
+        </div>
+        <div id="mentions" hidden></div>
+        <input type="file" id="filePick" multiple hidden>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '附件会话', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+    ];
+    var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+
+    /* fs/find 的返回值照抄真实服务:path 是相对 location.directory 的 */
+    window.FIND = {
+      location: { directory: '/proj/a' },
+      data: [
+        { path: 'Makefile', type: 'file' },
+        { path: 'drivers/media/i2c/Makefile', type: 'file' },
+        { path: 'src/lcd_wayland.c', type: 'file' },
+      ],
+    };
+
+    window.SERVER = { 'ses_a': [
+      { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '看下这两个文件',
+        agents: [{ name: 'build' }],
+        files: [
+          { data: 'aGVsbG8gZnJvbSBwYW5lbAo=', mime: 'text/plain',
+            source: { type: 'uri', uri: 'file:///tmp/up/1-a.txt' }, name: 'a.txt' },
+          { data: 'aGVsbG8=', mime: 'text/plain', source: { type: 'inline' }, name: 'b.txt' },
+        ] },
+    ] };
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    window.UPLOAD_FAIL = false;
+    window.PROMPT_FAIL = false;
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    var bad = function (obj) { return { ok: false, status: 400, text: async function () { return JSON.stringify(obj); } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      if (u === '/__health') return json({ ok: true, base: 'http://127.0.0.1:1', uploadDir: '/tmp/oc-up' });
+      if (u.indexOf('/api/fs/find') === 0) return json(window.FIND);
+      if (u.indexOf('/api/experimental/fs/write') === 0) {
+        if (window.UPLOAD_FAIL) return bad({ message: '磁盘满了' });
+        var q = u.split('?')[1] || '';
+        var want = decodeURIComponent(q.replace(/^path=/, '').replace(/\+/g, ' '));
+        return json({ location: { directory: '/tmp' }, data: { path: want } });
+      }
+      if (/\/prompt$/.test(u)) {
+        if (window.PROMPT_FAIL) return bad({ message: '提示词非法' });
+        return json({ data: { id: 'msg_new' } });
+      }
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+    window.confirm = function () { return true; };
+    window.__alerts = [];
+    window.alert = function (m) { window.__alerts.push(String(m)); };
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    /* 纯微任务轮转,不用定时器(本页把 setTimeout 打桩了) */
+    var settle = async function (pred, tries) {
+      for (var i = 0; i < (tries || 300); i++) {
+        if (pred()) return true;
+        await Promise.resolve();
+      }
+      return pred();
+    };
+    var file = function (name, content, type) { return new File([content == null ? 'abc' : content], name, { type: type || 'text/plain' }); };
+    var pickFiles = function (arr) { Object.defineProperty(q('#filePick'), 'files', { value: arr, configurable: true }); };
+    var dropFiles = function (arr, target) {
+      var e = new Event('drop', { bubbles: true, cancelable: true });
+      e.dataTransfer = { files: arr, dropEffect: '' };
+      (target || q('#composer')).dispatchEvent(e);
+      return e;
+    };
+
+    try {
+      /* ================= 纯函数:路径与大小 ================= */
+      T('fileURI:绝对路径 → file: URI', fileURI('/tmp/a b.txt') === 'file:///tmp/a b.txt', fileURI('/tmp/a b.txt'));
+      T('fileURI:空值不炸', fileURI(null) === 'file://' && fileURI(undefined) === 'file://');
+      T('baseName:取最后一段', baseName('/a/b/c.txt') === 'c.txt', baseName('/a/b/c.txt'));
+      T('baseName:没有斜杠就原样', baseName('c.txt') === 'c.txt');
+      T('baseName:结尾斜杠 → 空', baseName('/a/b/') === '');
+      T('baseName:空 → 空', baseName(null) === '');
+      T('joinDir:去掉多余斜杠', joinDir('/a/b/', '/c') === '/a/b/c', joinDir('/a/b/', '/c'));
+      T('joinDir:没有斜杠也接得上', joinDir('/a/b', 'c') === '/a/b/c');
+      T('humanSize:B / KB / MB', humanSize(0) === '0 B' && humanSize(512) === '512 B' &&
+        humanSize(2048) === '2.0 KB' && humanSize(5 * 1024 * 1024) === '5.0 MB',
+        [humanSize(0), humanSize(512), humanSize(2048), humanSize(5 * 1024 * 1024)]);
+      T('humanSize:非法值当 0', humanSize(null) === '0 B' && humanSize('x') === '0 B');
+
+      /* ================= 纯函数:safeName 与落盘路径 ================= */
+      T('uploadName:斜杠与反斜杠换成下划线', uploadName('a/b\\c.txt') === 'a_b_c.txt', uploadName('a/b\\c.txt'));
+      T('uploadName:路径穿越的斜杠一个不剩', uploadName('../../etc/passwd').indexOf('/') < 0, uploadName('../../etc/passwd'));
+      T('uploadName:开头点号(隐藏文件)去掉', uploadName('.ssh') === 'ssh' && uploadName('.bashrc') === 'bashrc');
+      T('uploadName:纯点号退回 file', uploadName('..') === 'file', uploadName('..'));
+      T('uploadName:空 → file', uploadName('') === 'file' && uploadName(null) === 'file');
+      T('uploadName:超长截到 120', uploadName(new Array(400).join('a')).length === 120);
+      T('uploadName:中文名保留', uploadName('报告.txt') === '报告.txt', uploadName('报告.txt'));
+      store.uploadDir = '/tmp/oc-up';
+      T('uploadPathFor:时间戳+随机串+安全名', uploadPathFor('x.txt', 1234, 'abc') === '/tmp/oc-up/1234-abc-x.txt',
+        uploadPathFor('x.txt', 1234, 'abc'));
+      T('uploadPathFor:名字里的斜杠不会跑出目录',
+        uploadPathFor('../../x', 1, 'r').indexOf('/') === 0 &&
+        uploadPathFor('../../x', 1, 'r').slice(0, 15) === '/tmp/oc-up/1-r-' &&
+        uploadPathFor('../../x', 1, 'r').indexOf('/tmp/oc-up/') === uploadPathFor('../../x', 1, 'r').lastIndexOf('/tmp/oc-up/'),
+        uploadPathFor('../../x', 1, 'r'));
+      store.uploadDir = '/tmp/oc-up/';
+      T('uploadPathFor:uploadDir 结尾多余斜杠被吃掉', uploadPathFor('x', 1, 'r') === '/tmp/oc-up/1-r-x',
+        uploadPathFor('x', 1, 'r'));
+
+      /* ================= 纯函数:base64 字节数 ================= */
+      T('b64Size:带一个 = 的 5 字节', b64Size('aGVsbG8=') === 5, b64Size('aGVsbG8='));
+      T('b64Size:带两个 = 的 1 字节', b64Size('YQ==') === 1, b64Size('YQ=='));
+      T('b64Size:三的倍数不用补', b64Size('aGVsbG8g') === 6, b64Size('aGVsbG8g'));
+      T('b64Size:空 → 0', b64Size('') === 0 && b64Size(null) === 0);
+
+      /* ================= 消息里的附件渲染(userFilesHtml) ================= */
+      T('userFilesHtml:没有 files → 空', userFilesHtml({ type: 'user' }) === '');
+      T('userFilesHtml:files 不是数组 → 空', userFilesHtml({ files: 'x' }) === '');
+      var two = window.SERVER['ses_a'][0].files;
+      var h = userFilesHtml({ files: two });
+      T('userFilesHtml:两条都渲染', (h.match(/class="att"/g) || []).length === 2, h);
+      T('userFilesHtml:显示文件名', h.indexOf('📎 a.txt') >= 0 && h.indexOf('📎 b.txt') >= 0, h);
+      T('userFilesHtml:显示 mime 与按 base64 算的大小(17 字节)', h.indexOf('text/plain · 17 B') >= 0, h);
+      T('userFilesHtml:uri 来源显示路径', h.indexOf('file:///tmp/up/1-a.txt') >= 0, h);
+      T('userFilesHtml:inline 来源不显示路径(没有路径可显示)', h.indexOf('file:///tmp/up/1-a.txt') === h.lastIndexOf('file:///tmp/up/1-a.txt'), h);
+      T('userFilesHtml:非图片不给缩略图', h.indexOf('<img') < 0, h);
+      var imgH = userFilesHtml({ files: [{ data: 'aGVsbG8=', mime: 'image/png', name: 'p.png', source: { type: 'inline' } }] });
+      T('userFilesHtml:image/* 内联缩略图', imgH.indexOf('src="data:image/png;base64,aGVsbG8="') >= 0, imgH);
+      T('userFilesHtml:图片也带上文件名', imgH.indexOf('📎 p.png') >= 0 && imgH.indexOf('alt="p.png"') >= 0, imgH);
+      var noName = userFilesHtml({ files: [{ data: 'YQ==', mime: 'text/plain', source: { type: 'uri', uri: 'file:///tmp/x/y.md' } }] });
+      T('userFilesHtml:没有 name 时用路径末段兜底', noName.indexOf('📎 y.md') >= 0, noName);
+      var noMime = userFilesHtml({ files: [{ data: '', source: { type: 'inline' } }] });
+      T('userFilesHtml:文件名与 mime 都缺也不炸', noMime.indexOf('📎 附件') >= 0, noMime);
+      T('userFilesHtml:名字里的 HTML 被转义',
+        userFilesHtml({ files: [{ data: 'YQ==', mime: 'text/plain', name: '<img src=x>' }] }).indexOf('&lt;img') >= 0);
+      /* 落进消息:正文 / 提及 / 附件 三段都在 */
+      var um = renderMessage(window.SERVER['ses_a'][0]);
+      T('renderMessage:用户消息里有附件块', !!um.querySelector('.atts .att-name'));
+      T('renderMessage:附件排在提及之后', (function () {
+        var kids = um.querySelectorAll(':scope > div');
+        return kids.length === 4 && kids[1].className === 'content' && kids[2].className === 'refs' && kids[3].className === 'atts';
+      })(), um.outerHTML);
+      T('renderMessage:没有附件时不产生空的 atts 行',
+        renderMessage({ id: 'x', type: 'user', text: 'hi' }).querySelector('.atts') === null);
+
+      /* ================= @ 引用解析(resolveMentions) ================= */
+      store.mentionHits.clear();
+      T('resolveMentions:空文本 → 空', resolveMentions('') .length === 0 && resolveMentions(null).length === 0);
+      T('resolveMentions:没确认过的 @ 不生成附件', resolveMentions('看 @Makefile').length === 0);
+      store.mentionHits.set('Makefile', '/proj/a/Makefile');
+      var one = resolveMentions('看 @Makefile 这个');
+      T('resolveMentions:确认过的 @ 生成一个附件', one.length === 1, one);
+      T('resolveMentions:uri 是 file: URI', one[0].uri === 'file:///proj/a/Makefile', one[0]);
+      T('resolveMentions:name 取末段', one[0].name === 'Makefile', one[0]);
+      T('resolveMentions:mention 锚在正文里的位置',
+        one[0].mention.start === 2 && one[0].mention.end === 11 && one[0].mention.text === '@Makefile',
+        one[0].mention);
+      T('resolveMentions:锚点切出来的正是那一小段',
+        '看 @Makefile 这个'.slice(one[0].mention.start, one[0].mention.end) === '@Makefile');
+      store.mentionHits.set('src/lcd_wayland.c', '/proj/a/src/lcd_wayland.c');
+      var twoM = resolveMentions('@Makefile 和 @src/lcd_wayland.c');
+      T('resolveMentions:多个引用都解析', twoM.length === 2, twoM);
+      T('resolveMentions:第二个的锚点也对',
+        '@Makefile 和 @src/lcd_wayland.c'.slice(twoM[1].mention.start, twoM[1].mention.end) === '@src/lcd_wayland.c',
+        twoM[1].mention);
+      T('resolveMentions:末尾标点不算进引用',
+        (function () {
+          var r = resolveMentions('看 @Makefile,再改');
+          return r.length === 1 && r[0].name === 'Makefile' && r[0].mention.end === 11;
+        })(), resolveMentions('看 @Makefile,再改'));
+      T('resolveMentions:邮箱里的 @ 不会被当成路径', resolveMentions('发给 a@b.com 吧').length === 0);
+
+      /* ================= @ 补全:光标前 token ================= */
+      var inp = q('#input');
+      var setCaret = function (v, caret) {
+        inp.value = v;
+        inp.selectionStart = inp.selectionEnd = caret == null ? v.length : caret;
+      };
+      T('mentionQuery:没有 @ → null', (setCaret('hello'), mentionQuery() === null));
+      setCaret('hello @Mak');
+      var tq = mentionQuery();
+      T('mentionQuery:拿到 @ 的位置与查询词',
+        tq && tq.start === 6 && tq.end === 10 && tq.query === 'Mak', tq);
+      setCaret('@');
+      T('mentionQuery:刚打一个 @ 时查询词为空', (function () { var t = mentionQuery(); return !!t && t.query === ''; })(), mentionQuery());
+      setCaret('@a @b');
+      T('mentionQuery:取最后一个 @', (function () { var t = mentionQuery(); return !!t && t.start === 3 && t.query === 'b'; })(), mentionQuery());
+      setCaret('@a b');
+      T('mentionQuery:@ 后面有空格就不再补全', mentionQuery() === null);
+      setCaret('看@Makefile');
+      T('mentionQuery:紧贴着中文也能触发', (function () { var t = mentionQuery(); return !!t && t.start === 1 && t.query === 'Makefile'; })(), mentionQuery());
+      setCaret('hello @Mak', 8);
+      T('mentionQuery:光标在中间时按光标前的内容算', (function () { var t = mentionQuery(); return !!t && t.end === 8; })(), mentionQuery());
+
+      /* ================= @ 补全:拉列表与选择 ================= */
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); });
+      store.selected = 'ses_a';
+      renderSessions();
+      setupAttachments(); // 补全下拉的点击、上传、拖放的接线都在这(只接一次)
+      window.calls.length = 0;
+      setCaret('看 @Mak');
+      await openMentions();
+      var findCall = window.calls.filter(function (c) { return c.url.indexOf('/api/fs/find') === 0; })[0];
+      T('openMentions:请求 /api/fs/find', !!findCall, window.calls.map(function (c) { return c.url; }));
+      T('openMentions:带上查询词', !!findCall && findCall.url.indexOf('query=Mak') > 0, findCall && findCall.url);
+      T('openMentions:带上工程目录(deepObject 风格)',
+        !!findCall && findCall.url.indexOf('location%5Bdirectory%5D=%2Fproj%2Fa') > 0, findCall && findCall.url);
+      T('openMentions:只要文件', !!findCall && findCall.url.indexOf('type=file') > 0);
+      T('openMentions:列出来了', store.mentionItems.length === 3, store.mentionItems);
+      T('openMentions:补全项带上了绝对路径(用服务端回的 location 拼)',
+        store.mentionItems[1].abs === '/proj/a/drivers/media/i2c/Makefile', store.mentionItems[1]);
+      T('openMentions:下拉显示出来', q('#mentions').hidden === false && qa('.mention-item').length === 3);
+      T('openMentions:第一条默认高亮', qa('.mention-item')[0].className.indexOf('active') >= 0);
+      T('openMentions:目录名与文件名分开显示(便于扫)',
+        qa('.mention-item')[1].querySelector('.mi-dir').textContent === 'drivers/media/i2c/' &&
+        qa('.mention-item')[1].querySelector('.mi-name').textContent === 'Makefile');
+      T('openMentions:HTML 被转义', userFilesHtml({ files: [] }) === '');
+      T('openMentions:补全范围记下来了',
+        store.mentionRange.start === 2 && store.mentionRange.end === 6, store.mentionRange);
+
+      /* 键盘上下移动(环绕) */
+      var kd = function (key) { var e = new KeyboardEvent('keydown', { key: key, cancelable: true }); return mentionKey(e); };
+      T('mentionKey:ArrowDown 往下', kd('ArrowDown') && store.mentionAt === 1, store.mentionAt);
+      T('mentionKey:ArrowUp 往上', kd('ArrowUp') && store.mentionAt === 0, store.mentionAt);
+      T('mentionKey:在第一条上按上键环绕到最后', kd('ArrowUp') && store.mentionAt === 2, store.mentionAt);
+      kd('ArrowDown');
+      T('mentionKey:最后一条按下键回到第一条', store.mentionAt === 0, store.mentionAt);
+      T('mentionKey:高亮跟着重绘', qa('.mention-item')[0].className.indexOf('active') >= 0);
+
+      /* Enter 选中:替换 token 并记住绝对路径 */
+      var handled = mentionKey(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
+      T('mentionKey:Enter 被补全消费(不会顺手把消息发出去)', handled === true);
+      T('acceptMention:正文里插入了相对路径', inp.value === '看 @Makefile ', inp.value);
+      T('acceptMention:光标落在插入内容之后', inp.selectionStart === 12, inp.selectionStart);
+      T('acceptMention:记下绝对路径', store.mentionHits.get('Makefile') === '/proj/a/Makefile', store.mentionHits.get('Makefile'));
+      T('acceptMention:下拉关掉', q('#mentions').hidden === true && store.mentionItems.length === 0);
+      T('接受后正文能解析出附件', resolveMentions(inp.value).length === 1);
+
+      /* Esc 关闭 */
+      setCaret('看 @Make');
+      await openMentions();
+      T('Esc 前下拉是开的', q('#mentions').hidden === false);
+      T('mentionKey:Escape 关掉下拉', kd('Escape') === true && q('#mentions').hidden === true);
+      T('mentionKey:下拉关着时不吃按键', mentionKey(new KeyboardEvent('keydown', { key: 'Enter' })) === false);
+      T('mentionKey:有补全项时空列表不吃按键', (function () {
+        store.mentionItems = [];
+        return mentionKey(new KeyboardEvent('keydown', { key: 'ArrowDown' })) === false;
+      })());
+
+      /* 点选也用同一条路 */
+      setCaret('@src/lcd');
+      await openMentions();
+      T('点选前列表就绪', store.mentionItems.length === 3);
+      store.mentionItems = [{ path: 'src/lcd_wayland.c', type: 'file', abs: '/proj/a/src/lcd_wayland.c' }];
+      renderMentions();
+      q('.mention-item').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('点选补全项也能插入', inp.value === '@src/lcd_wayland.c ', inp.value);
+      T('点选也记住了绝对路径',
+        store.mentionHits.get('src/lcd_wayland.c') === '/proj/a/src/lcd_wayland.c');
+
+      /* 没有匹配时给个空状态,不炸 */
+      window.FIND = { location: { directory: '/proj/a' }, data: [] };
+      setCaret('@zzz');
+      await openMentions();
+      T('没有匹配时显示空提示', q('#mentions').hidden === false && qa('.mention-empty').length === 1,
+        q('#mentions').innerHTML);
+      T('没有匹配时补全列表为空', store.mentionItems.length === 0 && store.mentionAt === -1, store.mentionItems);
+      window.FIND = { location: { directory: '/proj/a' }, data: [
+        { path: 'Makefile', type: 'file' },
+        { path: 'drivers/media/i2c/Makefile', type: 'file' },
+        { path: 'src/lcd_wayland.c', type: 'file' },
+      ] };
+
+      /* ================= 待发送附件:上传 ================= */
+      store.uploadDir = '/tmp/oc-up';
+      store.attachments = [];
+      inp.value = '';
+      renderAttachments();
+      T('没有附件时那一行是隐藏的', q('#attach').hidden === true);
+
+      window.calls.length = 0;
+      await queueFiles([file('a.txt', 'hello', 'text/plain')]);
+      var upCall = window.calls.filter(function (c) { return c.url.indexOf('/api/experimental/fs/write') === 0; })[0];
+      T('上传走 OpenCode 自己的 fs/write(代理不用加端点)', !!upCall, window.calls.map(function (c) { return c.url; }));
+      T('上传用 POST', !!upCall && upCall.method === 'POST', upCall && upCall.method);
+      T('上传带上目标绝对路径', !!upCall && upCall.url.indexOf('path=%2Ftmp%2Foc-up%2F') > 0, upCall && upCall.url);
+      T('上传体就是文件本身', !!upCall && upCall.body && upCall.body.name === 'a.txt', upCall && upCall.body);
+      T('上传后进了待发送列表', store.attachments.length === 1 && store.attachments[0].name === 'a.txt', store.attachments);
+      T('上传后拿到 file: URI', store.attachments[0].uri.indexOf('file:///tmp/oc-up/') === 0, store.attachments[0].uri);
+      T('上传完成不再是 busy', store.attachments[0].busy === false);
+      T('那一行显示出来了', q('#attach').hidden === false && qa('.achip').length === 1);
+      T('chip 上有文件名与大小', q('.achip-name').textContent === 'a.txt' && q('.achip-size').textContent === '5 B',
+        q('.achip').textContent);
+      T('chip 的 title 是服务端路径', q('.achip').title.indexOf('/tmp/oc-up/') === 0, q('.achip').title);
+      T('chip 上有移除按钮', !!q('.achip-x'));
+
+      /* 移除 */
+      q('.achip-x').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('点 × 能移除', store.attachments.length === 0 && q('#attach').hidden === true);
+
+      /* 拖放:在输入区里丢文件 */
+      window.calls.length = 0;
+      dropFiles([file('shot.png', 'pngbytes', 'image/png')]);
+      await settle(function () { return store.attachments.length === 1; });
+      T('拖放进输入区就上传', store.attachments.length === 1 && store.attachments[0].name === 'shot.png', store.attachments);
+      T('拖放也算在输入区里处理(不是整页)',
+        window.calls.some(function (c) { return c.url.indexOf('/api/experimental/fs/write') === 0; }));
+      T('dragover 被拦下(否则浏览器会直接打开文件)',
+        (function () { var e = new Event('dragover', { bubbles: true, cancelable: true }); e.dataTransfer = { dropEffect: '' };
+          q('#composer').dispatchEvent(e); return e.defaultPrevented; })());
+      store.attachments = [];
+      renderAttachments();
+
+      /* 粘贴:剪贴板里的文件 */
+      var pe = new Event('paste', { bubbles: true, cancelable: true });
+      pe.clipboardData = { files: [file('clip.png', 'x', 'image/png')] };
+      inp.dispatchEvent(pe);
+      await settle(function () { return store.attachments.length === 1; });
+      T('粘贴文件也能进待发送列表', store.attachments.length === 1 && store.attachments[0].name === 'clip.png', store.attachments);
+      store.attachments = [];
+      renderAttachments();
+
+      /* 文件选择框 */
+      pickFiles([file('picked.txt', 'ok')]);
+      q('#filePick').dispatchEvent(new Event('change', { bubbles: true }));
+      await settle(function () { return store.attachments.length === 1; });
+      T('文件选择框选中的文件会上传', store.attachments.length === 1 && store.attachments[0].name === 'picked.txt');
+      store.attachments = [];
+      renderAttachments();
+
+      /* 太大直接拒,不浪费一次上传 */
+      window.calls.length = 0;
+      var big = file('huge.bin', 'x');
+      Object.defineProperty(big, 'size', { value: 40 * 1024 * 1024 });
+      await queueFiles([big]);
+      T('超过上限的文件被拒', store.attachments.length === 0 && window.calls.length === 0, window.calls.length);
+      T('拒的时候给出提示', q('#toast').textContent.indexOf('太大') >= 0, q('#toast').textContent);
+
+      /* 上传失败:不进列表,并提示 */
+      window.UPLOAD_FAIL = true;
+      await queueFiles([file('bad.txt', 'x')]);
+      T('上传失败的文件不进列表', store.attachments.length === 0, store.attachments);
+      T('上传失败给出提示', q('#toast').textContent.indexOf('上传') >= 0 && q('#toast').className === 'bad',
+        [q('#toast').textContent, q('#toast').className]);
+      window.UPLOAD_FAIL = false;
+
+      /* ================= 发送:body 里带 files ================= */
+      store.mentionHits.clear();
+      store.attachments = [];
+      setCaret('看这两个 @Makefile');
+      await openMentions();
+      acceptMention(0); // → '看这两个 @Makefile '
+      await queueFiles([file('note.txt', 'note')]);
+      T('发送前:一个上传 + 一个 @ 引用',
+        store.attachments.length === 1 && resolveMentions(inp.value).length === 1, store.attachments);
+      T('待发送行里两种 chip 都在', qa('.achip').length === 2 && qa('.achip.ref').length === 1, qa('.achip').map(function (c) { return c.className; }));
+
+      window.calls.length = 0;
+      await send();
+      var promptCall = window.calls.filter(function (c) { return /\/prompt$/.test(c.url); })[0];
+      T('send:发了 prompt', !!promptCall, window.calls.map(function (c) { return c.url; }));
+      var body = JSON.parse(promptCall.body);
+      T('send:正文原样带上(含 @ 引用文字,首尾空白被 trim)', body.text === '看这两个 @Makefile', body.text);
+      T('send:files 里有上传的文件与 @ 引用共两个', body.files.length === 2, body.files);
+      T('send:上传文件的 uri 是 file: URI', body.files[0].uri.indexOf('file:///tmp/oc-up/') === 0, body.files[0]);
+      T('send:上传文件带 name', body.files[0].name === 'note.txt', body.files[0]);
+      T('send:@ 引用的 uri 指向工程目录里的那个文件',
+        body.files[1].uri === 'file:///proj/a/Makefile', body.files[1]);
+      T('send:@ 引用带 mention 锚点', 
+        body.files[1].mention.start === 5 && body.files[1].mention.end === 14 && body.files[1].mention.text === '@Makefile',
+        body.files[1].mention);
+      T('send:都在正文里,没有多余字段', body.delivery === undefined, body);
+      T('send:发送成功后清空待发送附件', store.attachments.length === 0 && q('#attach').hidden === true, store.attachments);
+      T('send:输入框被清空', inp.value === '');
+
+      /* 发送失败:附件留着,方便重发 */
+      await queueFiles([file('keep.txt', 'keep')]);
+      var refRange = resolveMentions('看 @Makefile');
+      setCaret('看 @Makefile');
+      store.mentionHits.set('Makefile', '/proj/a/Makefile');
+      window.PROMPT_FAIL = true;
+      window.__alerts.length = 0;
+      await send();
+      T('send:失败时弹提示', window.__alerts.length === 1 && window.__alerts[0].indexOf('发送失败') >= 0, window.__alerts);
+      T('send:失败时保留待发送附件(可重发)', store.attachments.length === 1 && store.attachments[0].name === 'keep.txt',
+        store.attachments);
+      window.PROMPT_FAIL = false;
+
+      /* ================= 与选中会话联动 ================= */
+      store.attachments = [];
+      await queueFiles([file('z.txt', 'z')]);
+      T('切会话前有附件', store.attachments.length === 1);
+      await selectSession('ses_a');
+      T('切会话会清空待发送附件(不带到另一个会话)', store.attachments.length === 0, store.attachments);
+      T('切会话也关掉补全', q('#mentions').hidden === true);
+      store.selected = null;
+      updateComposerControls();
+      T('没有选中会话时附件按钮是禁用的', q('#btnAttach').disabled === true);
+      store.selected = 'ses_a';
+      updateComposerControls();
+      T('选中会话后附件按钮可用', q('#btnAttach').disabled === false);
+
+      /* 没有暂存目录时,问了 /__health 再传 */
+      store.uploadDir = '';
+      await queueFiles([file('retry.txt', 'r')]);
+      T('暂存目录未知时先问 /__health', window.calls.some(function (c) { return c.url === '/__health'; }));
+      T('问到之后照样能上传', store.attachments.length === 1 && store.attachments[0].uri.indexOf('file://') === 0,
+        store.attachments);
+      store.attachments = [];
+      renderAttachments();
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

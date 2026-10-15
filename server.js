@@ -9,7 +9,8 @@
  *   3. 静态托管 public/
  *   4. 反向代理 /api/* 到 OpenCode 服务,并注入 Authorization: Basic
  *   5. 流式透传 SSE(text/event-stream)
- *   6. 提供 GET /__health 供前端显示连接状态
+ *   6. 提供 GET /__health 供前端显示连接状态(并告知附件的暂存目录)
+ *   7. 维护附件暂存目录(建目录 + 定期清理旧文件)
  *
  * 仅使用 Node 标准库,零依赖。
  */
@@ -29,6 +30,14 @@ const CONFIG_DIR =
   process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), '.config', 'opencode');
 const SERVICE_FILE = path.join(CONFIG_DIR, 'service.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// 面板的「附件粘贴区」:浏览器里选的文件没有服务端路径,而 prompt 的 files[].uri 只认
+// file: URI(服务端自己去读文件),所以先把字节挪到磁盘上。落盘这一步用的是 OpenCode 自带的
+// POST /api/experimental/fs/write,前端直接把绝对路径给它 —— 于是代理层不用再写任何上传端点。
+// 代理这边只负责:① 建目录 ② 把 /__health 的 uploadDir 告诉前端 ③ 定期清理旧文件。
+const UPLOAD_DIR =
+  process.env.OCS_UPLOAD_DIR || path.join(os.tmpdir(), 'opencode-session-manager-uploads');
+const UPLOAD_TTL_MS = 6 * 60 * 60 * 1000; // 超过 6 小时的上传文件清掉
+const UPLOAD_PRUNE_EVERY_MS = 60 * 60 * 1000; // 最多每小时清一次
 
 const state = {
   base: null, // OpenCode 服务 base URL
@@ -233,8 +242,43 @@ function serveStatic(req, res) {
 
 /* ------------------------------- 健康检查 ------------------------------- */
 
+// 建上传目录 + 清理旧文件。清理是「顺手做」:失败只记日志,绝不影响健康检查与附件功能。
+let lastPrune = 0;
+function ensureUploadDir() {
+  try {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+  } catch (e) {
+    console.warn('上传目录不可用:', UPLOAD_DIR, String((e && e.message) || e));
+  }
+}
+
+function pruneUploads(force) {
+  const now = Date.now();
+  if (!force && now - lastPrune < UPLOAD_PRUNE_EVERY_MS) return;
+  lastPrune = now;
+  let names;
+  try {
+    names = fs.readdirSync(UPLOAD_DIR);
+  } catch (_) {
+    return;
+  }
+  let removed = 0;
+  for (const name of names) {
+    const file = path.join(UPLOAD_DIR, name);
+    try {
+      const st = fs.statSync(file);
+      if (!st.isFile() || now - st.mtimeMs < UPLOAD_TTL_MS) continue;
+      fs.unlinkSync(file);
+      removed++;
+    } catch (_) {}
+  }
+  if (removed) console.log(`  清理上传附件: ${removed} 个`);
+}
+
 async function health(res) {
   await ensureDiscovered(true);
+  ensureUploadDir();
+  pruneUploads(false);
   let ok = false;
   let detail = null;
   if (state.base && state.password) {
@@ -255,6 +299,7 @@ async function health(res) {
     base: state.base,
     hasPassword: !!state.password,
     configDir: CONFIG_DIR,
+    uploadDir: UPLOAD_DIR,
     detail,
   });
 }
@@ -304,6 +349,7 @@ function listen(port) {
     console.log(`  服务发现: ${state.base || '(未发现)'}`);
     console.log(`  鉴权密码: ${state.password ? '已加载' : '缺失(检查 ' + SERVICE_FILE + ')'}`);
     console.log(`  面板访问: ${PANEL_AUTH ? '需要登录(Basic)' : '无密码'}`);
+    console.log(`  附件暂存: ${UPLOAD_DIR}`);
     console.log('');
   });
 }
@@ -312,5 +358,7 @@ process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e))
 
 (async () => {
   await ensureDiscovered(true);
+  ensureUploadDir();
+  pruneUploads(true);
   listen(PORT);
 })();
