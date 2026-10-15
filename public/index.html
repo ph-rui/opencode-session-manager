@@ -88,7 +88,12 @@
         </div>
         <button id="older" hidden>加载更旧消息</button>
       </div>
-      <div id="messages"></div>
+      <div id="messages">
+        <!-- 一键回底:照 TUI 那条 "Jump to latest ↓" 做的(键位是 session.last / End)。
+             做成贴在消息区右下角的小片(sticky),只在「你没停在最底部」时露出来。
+             它必须是 #messages 的子元素 —— 只有滚动容器【内部】的 sticky 才钉得住。 -->
+        <button type="button" id="jumpLatest" class="chip" hidden>跳到最新 ↓</button>
+      </div>
       <div id="asks" hidden></div>
       <div id="inbox" hidden></div>
       <div id="composer">

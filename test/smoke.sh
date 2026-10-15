@@ -825,6 +825,80 @@ else
   echo "FAIL: 完成或出错的状态标记丢了"; fail=$((fail + 1))
 fi
 
+# ---- O 组:一键回底(TUI 的 "Jump to latest ↓") ----
+# 往上翻走之后给一个一键回到最新的入口。它与「自动跟随」共用同一个「在不在底部」判定,
+# 所以两处必须同源(否则会出现「明明跟着跳到底了,按钮还杵在那儿」)。
+MSG_HTML=$(printf '%s' "$HOME_HTML" | awk '/<div id="messages">/{f=1} f{print} f&&/<\/div>/{exit}')
+if has "$MSG_HTML" 'id="jumpLatest"' && has "$MSG_HTML" 'class="chip"'; then
+  echo "PASS: 「跳到最新」是 #messages 里的 .chip 按钮"; pass=$((pass + 1))
+else
+  echo "FAIL: #jumpLatest 不在 #messages 里(或在里面但不是 .chip)"; fail=$((fail + 1))
+fi
+if has "$MSG_HTML" 'hidden' && has "$MSG_HTML" '跳到最新 ↓'; then
+  echo "PASS: 它默认收起,文案是「跳到最新 ↓」"; pass=$((pass + 1))
+else
+  echo "FAIL: 默认没收起,或者文案不对"; fail=$((fail + 1))
+fi
+JUMP_CSS=$(printf '%s' "$CSS" | awk '/^#jumpLatest \{/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$JUMP_CSS" 'position: sticky' && has "$JUMP_CSS" 'bottom: 8px'; then
+  echo "PASS: 它 sticky 在滚动口下沿(absolute 会跟着内容一起滚走)"; pass=$((pass + 1))
+else
+  echo "FAIL: #jumpLatest 不是 sticky 在底部"; fail=$((fail + 1))
+fi
+if has "$CSS" '#jumpLatest[hidden] { display: none; }'; then
+  echo "PASS: 显式写了 #jumpLatest[hidden](id 选择器压得住 .chip[hidden],不写就藏不住)"; pass=$((pass + 1))
+else
+  echo "FAIL: 少了 #jumpLatest[hidden] 的兜底"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const BOTTOM_SLACK = 80;' && has "$APPJS" 'function atBottom(box)'; then
+  echo "PASS: 「在不在底部」的口径只有一处(BOTTOM_SLACK + atBottom)"; pass=$((pass + 1))
+else
+  echo "FAIL: 没有统一的底部判定"; fail=$((fail + 1))
+fi
+RENDER_FN_O=$(printf '%s' "$APPJS" | awk '/^function renderMessages\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+DELTA_FN_O=$(printf '%s' "$APPJS" | awk '/^function paintLiveDelta\(/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$RENDER_FN_O" 'atBottom(box)' && has "$DELTA_FN_O" 'atBottom(box)'; then
+  echo "PASS: 自动跟随与按钮共用 atBottom()(不再各写一个 80)"; pass=$((pass + 1))
+else
+  echo "FAIL: 自动跟随或按钮没走 atBottom()"; fail=$((fail + 1))
+fi
+if has "$RENDER_FN_O" 'updateJumpLatest();' && has "$DELTA_FN_O" 'updateJumpLatest();'; then
+  echo "PASS: 内容变长之后按钮的显隐会跟着重算"; pass=$((pass + 1))
+else
+  echo "FAIL: 渲染之后没重算按钮"; fail=$((fail + 1))
+fi
+UPD_FN_O=$(printf '%s' "$APPJS" | awk '/^function updateJumpLatest\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$UPD_FN_O" 'jumpBtn.parentElement !== box'; then
+  echo "PASS: #messages 被清空(切会话/取消选中)后按钮自己搬回来"; pass=$((pass + 1))
+else
+  echo "FAIL: 按钮被 innerHTML 抹掉后没人搬回来"; fail=$((fail + 1))
+fi
+KEY_FN_O=$(printf '%s' "$APPJS" | awk '/^function setupTuiKeys\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$KEY_FN_O" "e.key === 'End'" && has "$KEY_FN_O" 'inField'; then
+  echo "PASS: End = 跳回最新(对应 TUI session.last),焦点在输入框里不抢"; pass=$((pass + 1))
+else
+  echo "FAIL: 没接 End 键,或者没挡输入框"; fail=$((fail + 1))
+fi
+if has "$APPJS" "'End', d: '跳回最新消息(对应 TUI session.last)"; then
+  echo "PASS: 快捷键清单里写了 End"; pass=$((pass + 1))
+else
+  echo "FAIL: 快捷键清单里没有 End"; fail=$((fail + 1))
+fi
+INIT_FN_O=$(printf '%s' "$APPJS" | awk '/^function init\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$INIT_FN_O" 'setupJumpLatest()' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setupJumpLatest' | wc -l)" = 2 ]; then
+  echo "PASS: setupJumpLatest() 接进了 init() 且只有这一处接线"; pass=$((pass + 1))
+else
+  echo "FAIL: setupJumpLatest 的接线不对(应为 定义 1 次 + init 里 1 次)"; fail=$((fail + 1))
+fi
+for f in test/ui-jump.html test/ui-jump-run.js; do
+  if [ -f "$(dirname "$0")/$(basename "$f")" ]; then
+    echo "PASS: 有 O 组的测试文件 $f"; pass=$((pass + 1))
+  else
+    echo "FAIL: 缺测试文件 $f"; fail=$((fail + 1))
+  fi
+done
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

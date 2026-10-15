@@ -979,7 +979,8 @@ function clearSelection() {
   store.messages.clear();
   msgEls.clear();
   if (id) dropAsksFor(id);
-  $('#messages').innerHTML = '';
+  $('#messages').innerHTML = ''; // 里面的「跳到最新」按钮由 updateJumpLatest() 自己搬回来
+  updateJumpLatest(); // 没选中会话了 → 收起来
   $('#chatTitle').textContent = '未选择会话';
   $('#chatMeta').textContent = '';
   clearAttachments();
@@ -1082,6 +1083,55 @@ function setupScrollMemory() {
     saveScrollAnchor();
   });
   window.addEventListener('pagehide', saveScrollAnchor); // 关页/刷新前兜一次,避免节流丢掉最后一个位置
+}
+
+/* ---------------- 一键回底(TUI 的 "Jump to latest ↓") ----------------
+ * TUI 那边是消息区下沿一行右对齐的 "Jump to latest ↓",只在「你没停在最底部」时出现,
+ * 键位是 session.last(End / ctrl+alt+g)。这里做成贴在消息区右下角的小片(sticky)。
+ *
+ * 「在不在底部」只有这一个口径:BOTTOM_SLACK。下面 renderMessages() 与 paintLiveDelta()
+ * 的自动跟随也用它 —— 两处各写一个数(80 / 100)迟早会漂移,表现就是「明明跟着跳了,
+ * 按钮却还杵在那儿」。往上翻着的时候新内容进来,自动跟随会让路,按钮则露出来。
+ */
+const BOTTOM_SLACK = 80;
+
+/* 「跳到最新」按钮的引用。#messages 在切会话(selectSession)与取消选中(clearSelection)时会被
+ * innerHTML 清空,按钮作为它的子元素会被一起抹掉 —— 所以引用得留在外面,
+ * 清空之后由 updateJumpLatest() 自己搬回滚口末尾(别去每个清空点各补一行,那种补法迟早漏一个)。 */
+let jumpBtn = null;
+
+function atBottom(box) {
+  return box.scrollHeight - box.scrollTop - box.clientHeight < BOTTOM_SLACK;
+}
+
+function updateJumpLatest() {
+  const box = $('#messages');
+  if (!jumpBtn || !box) return; // 老测试页没有这个按钮 —— 什么都不做
+  if (jumpBtn.parentElement !== box) box.appendChild(jumpBtn); // 被清空过 → 搬回末尾
+  // 没选中会话、或者已经停在底部 → 收起来(它正是「不在底部」时才该出现的东西)
+  jumpBtn.hidden = !store.selected || atBottom(box);
+}
+
+function jumpToLatest() {
+  const box = $('#messages');
+  if (box) box.scrollTop = box.scrollHeight;
+  updateJumpLatest();
+}
+
+function setupJumpLatest() {
+  const btn = $('#jumpLatest');
+  const box = $('#messages');
+  if (!btn || !box) return;
+  jumpBtn = btn;
+  if (btn.dataset.wired === '1') {
+    updateJumpLatest();
+    return;
+  }
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', jumpToLatest);
+  // 手滚 / 惯性 / 拖滚动条都走这一条。不节流:一次减法加一次 hidden 赋值
+  box.addEventListener('scroll', updateJumpLatest, { passive: true });
+  updateJumpLatest();
 }
 
 /* --------- 顶栏筛选/排序/搜索的持久化(H 组 4)---------
@@ -1822,7 +1872,7 @@ function renderMessages() {
   const force = store.forceBottom;
   store.forceBottom = false;
   const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底
-  const nearBottom = !pending && (force || box.scrollHeight - box.scrollTop - box.clientHeight < 80);
+  const nearBottom = !pending && (force || atBottom(box));
 
   // 删除已不存在的消息(live 缓冲里的消息不算「不存在」)
   for (const [id, rec] of msgEls) {
@@ -1870,6 +1920,8 @@ function renderMessages() {
     box.scrollTop = box.scrollHeight;
   }
   $('#older').hidden = !store.msgOlderCursor;
+  // 内容高度刚变过,底部判定跟着变 —— 往上翻着的时候新内容进来,这里就把按钮露出来
+  updateJumpLatest();
 
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
@@ -3028,6 +3080,7 @@ const HELP_KEYS = [
   { k: 'Enter / Tab', d: '选中面板项' },
   { sec: '会话' },
   { k: 'Esc', d: '关命令面板 → 关 @ 补全 → 中断当前回合(对应 TUI session.interrupt)' },
+  { k: 'End', d: '跳回最新消息(对应 TUI session.last);往上翻过头了也能一键回来' },
   { k: 'Shift+Tab', d: '切换到下一个智能体(对应 TUI agent.cycle)' },
   { k: 'Enter', d: '发送(Shift+Enter 换行)' },
   { k: '@', d: '补全工程内的文件' },
@@ -3678,6 +3731,16 @@ function setupTuiKeys() {
       openCommands({ force: true });
       return;
     }
+    // End = 跳回最新(TUI 的 session.last)。焦点在输入框里时不抢 —— 那儿 End 是「光标到行尾」
+    if (e.key === 'End' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      const t = e.target;
+      const inField = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable === true);
+      if (!inField && !anyDialogOpen() && store.selected) {
+        e.preventDefault();
+        jumpToLatest();
+      }
+      return;
+    }
     if (e.key === 'Tab' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
       if (anyDialogOpen() || commandsOpen() || mentionsOpen()) return;
       e.preventDefault();
@@ -4054,7 +4117,7 @@ function paintLiveDelta() {
   const sid = store.selected;
   if (!sid) return;
   const box = $('#messages');
-  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const nearBottom = atBottom(box);
   let changed = false;
   let needFull = false;
   for (const [id, L] of store.live) {
@@ -4072,6 +4135,7 @@ function paintLiveDelta() {
   }
   if (changed) {
     if (nearBottom) box.scrollTop = box.scrollHeight;
+    updateJumpLatest(); // 增量把内容顶长了,按钮的显隐要跟着重算
     updateChatStatus();
   }
 }
@@ -4504,6 +4568,7 @@ function init() {
   setupComposerToggle(); // 底板收起/展开(手机默认收起,见上面那一节)
   setupHistoryNav();
   setupScrollMemory();
+  setupJumpLatest(); // 一键回底(TUI 的 Jump to latest / End)
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)

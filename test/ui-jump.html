@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>jump-to-latest unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"><option value="desc">最近更新</option><option value="asc">最早更新</option></select></label>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
+    <label class="chk"><input type="checkbox" id="showArchived"></label>
+    <span id="count"></span><span id="archivedCount"></span>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid">
+      <button id="btnList" class="handle" type="button" aria-expanded="true" aria-label="收起会话列表">
+        <span class="ao" aria-hidden="true">‹</span><span class="ac" aria-hidden="true">›</span>
+      </button>
+    </div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"><button type="button" id="jumpLatest" class="chip" hidden>跳到最新 ↓</button></div>
+      <div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init(本页自己控制接线时机) */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '会话 A', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+    ];
+    var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+
+    window.SERVER = {
+      'ses_a': [
+        { id: 'msg_a1', type: 'user', time: { created: 100 }, text: '会话 A 的第一问' },
+      ],
+    };
+
+    /* 撑出滚动条:不然「在不在底部」这个判定根本无从谈起 */
+    window.SERVER['ses_long'] = (function () {
+      var arr = [];
+      for (var i = 0; i < 60; i++) {
+        arr.push({ id: 'msg_l' + i, type: 'user', time: { created: 1000 + i },
+          text: '第 ' + i + ' 条消息:用来把对话区撑到能滚动。' });
+      }
+      return arr;
+    })();
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var method = (opts && opts.method) || 'GET';
+      window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    /* 本页要跑「浏览器真的派发了 scroll 事件」那条路径:把真定时器留一份出来 */
+    window.__realSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var box = q('#messages');
+    var btn = q('#jumpLatest');
+    /* 等真定时器一小会儿:scroll 事件是异步派发的,要给它落地的时间 */
+    var tick = function () { return new Promise(function (r) { window.__realSetTimeout(r, 40); }); };
+    var maxTop = function () { return box.scrollHeight - box.clientHeight; };
+    var settle = async function (pred, tries) {
+      for (var i = 0; i < (tries || 300); i++) {
+        if (pred()) return true;
+        await Promise.resolve();
+      }
+      return pred();
+    };
+
+    try {
+      /* ============ 1. 形状 ============ */
+      T('#jumpLatest 在页面里', !!btn);
+      T('它是 #messages 的子元素(只有滚动容器【内部】的 sticky 才钉得住)',
+        btn.parentElement === box);
+      T('带 .chip(窄屏自动拿到 44px 命中区)', btn.classList.contains('chip'));
+      T('是 button[type=button]', btn.tagName === 'BUTTON' && btn.getAttribute('type') === 'button');
+      T('默认就是收起来的', btn.hidden === true);
+      T('文案是「跳到最新 ↓」', btn.textContent.trim() === '跳到最新 ↓', btn.textContent);
+
+      /* ============ 2. 接线 ============ */
+      setupJumpLatest();
+      T('接线后打了标记(wired)', btn.dataset.wired === '1');
+      T('没选中会话时是收起的', btn.hidden === true);
+      var addCalls = 0;
+      var origAdd = btn.addEventListener.bind(btn);
+      btn.addEventListener = function () { addCalls++; return origAdd.apply(null, arguments); };
+      setupJumpLatest();
+      btn.addEventListener = origAdd;
+      T('重复接线不再挂监听(setup 会被反复调用)', addCalls === 0, addCalls);
+      btn.hidden = false;
+      setupJumpLatest();
+      T('重复接线只按当前状态重画(没选中 → 又收起来)', btn.hidden === true);
+
+      /* ============ 3. 判定:在不在底部 ============ */
+      await selectSession('ses_long');
+      T('长会话渲染出来了', box.textContent.indexOf('第 59 条消息') >= 0);
+      T('长会话确实能滚动(否则这组测试没意义)', maxTop() > 100, maxTop());
+      T('刚选中(落到底部)时按钮收起', btn.hidden === true);
+
+      /* 往上翻 → 按钮露出来。不手动派发 scroll:走浏览器真派发的那条路 */
+      box.scrollTop = Math.round(maxTop() / 2);
+      await tick();
+      T('往上翻 → 按钮露出来', btn.hidden === false);
+      // 入口只有 #messages 的 scroll 监听:手工把 hidden 改错,派发一次就该被纠正回来
+      btn.hidden = true;
+      box.dispatchEvent(new Event('scroll'));
+      T('滚动监听挂在 #messages 上(派发一次 scroll 就重算)', btn.hidden === false);
+
+      /* 露出来的时候得真贴在消息区右下角(sticky 生效的证据) */
+      var br = btn.getBoundingClientRect();
+      var mr = box.getBoundingClientRect();
+      T('浮在消息区下沿之内(没被内容顶出去)', br.bottom <= mr.bottom + 1 && br.bottom >= mr.bottom - 24,
+        br.bottom + ' vs ' + mr.bottom);
+      T('贴在右侧', br.right > mr.left + mr.width / 2 && br.right <= mr.right + 1,
+        br.right + ' in ' + mr.left + '..' + mr.right);
+      T('右沿贴住消息区内边距(<40px 缝)', mr.right - br.right < 40, mr.right - br.right);
+      T('浮在消息上面(有自己的阴影,不是普通行内文本)', getComputedStyle(btn).boxShadow !== 'none');
+
+      box.scrollTop = box.scrollHeight;
+      await tick();
+      T('滚回底部 → 又收起来', btn.hidden === true);
+
+      await selectSession('ses_a');
+      T('短会话(压根不需要滚动)→ 收起', btn.hidden === true);
+
+      clearSelection();
+      T('没选中会话 → 收起', btn.hidden === true);
+      T('清空后按钮还在 DOM 里(没被 innerHTML 一起抹掉)', btn.isConnected && btn.parentElement === box);
+      T('清空后对话区没有残留消息', box.querySelectorAll('.msg').length === 0,
+        box.querySelectorAll('.msg').length);
+
+      T('在底部的口径:离底 79px 算在底部', atBottom({ scrollHeight: 1000, scrollTop: 921, clientHeight: 0 }) === true);
+      T('离底 80px 就不算了(留一点余量给人往回看)', atBottom({ scrollHeight: 1000, scrollTop: 920, clientHeight: 0 }) === false);
+      T('口径只有一处:自动跟随与按钮共用 BOTTOM_SLACK', BOTTOM_SLACK === 80, BOTTOM_SLACK);
+
+      /* ============ 4. 新内容到达 ============ */
+      await selectSession('ses_long');
+      box.scrollTop = Math.round(maxTop() / 2);
+      await tick();
+      T('(前置)此刻按钮露着', btn.hidden === false);
+      var before = box.scrollTop;
+      window.SERVER['ses_long'].push({ id: 'msg_lnew', type: 'user', time: { created: 9999 }, text: '新来的一条' });
+      await loadMessages();
+      T('往上翻着时新内容进来 → 按钮仍露着', btn.hidden === false);
+      T('而且没把人拽到底部(自动跟随让路)', box.scrollTop === before, box.scrollTop + ' vs ' + before);
+      T('新内容也真的渲染出来了', box.textContent.indexOf('新来的一条') >= 0);
+
+      box.scrollTop = box.scrollHeight;
+      await tick();
+      before = box.scrollTop;
+      window.SERVER['ses_long'].push({ id: 'msg_lnew2', type: 'user', time: { created: 10000 }, text: '又新来的一条' });
+      await loadMessages();
+      await tick();
+      T('就在底部时新内容进来 → 自动跟随(仍在底部)', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
+      T('自动跟随时按钮不冒出来', btn.hidden === true);
+
+      /* ============ 5. 点它 / End 键 ============ */
+      box.scrollTop = Math.round(maxTop() / 2);
+      await tick();
+      var selBefore = store.selected;
+      var callsBefore = window.calls.length;
+      btn.click();
+      T('点按钮 → 回到底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
+      T('点完之后按钮自己收起来', btn.hidden === true);
+      T('点按钮不会换会话、也不发请求', store.selected === selBefore && window.calls.length === callsBefore,
+        store.selected + '/' + window.calls.length);
+
+      setupTuiKeys();
+      box.scrollTop = Math.round(maxTop() / 2);
+      await tick();
+      T('(前置)此刻按钮露着,准备按 End', btn.hidden === false);
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+      T('End(焦点不在输入框)= 跳回最新(TUI 的 session.last)', maxTop() - box.scrollTop < 2,
+        box.scrollTop + '/' + maxTop());
+
+      box.scrollTop = Math.round(maxTop() / 2);
+      await tick();
+      before = box.scrollTop;
+      q('#input').focus();
+      var inFieldEv = new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true });
+      q('#input').dispatchEvent(inFieldEv);
+      T('End 在输入框里不抢(那儿是「光标到行尾」)', box.scrollTop === before, box.scrollTop + ' vs ' + before);
+      T('End 在输入框里也不拦默认行为', inFieldEv.defaultPrevented === false);
+      q('#input').blur();
+
+      var dlg = document.createElement('dialog');
+      dlg.setAttribute('open', '');
+      document.body.appendChild(dlg);
+      T('(前置)有对话框开着', anyDialogOpen() === true);
+      box.scrollTop = Math.round(maxTop() / 2);
+      await tick();
+      before = box.scrollTop;
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+      T('对话框开着时 End 不抢', box.scrollTop === before, box.scrollTop + ' vs ' + before);
+      dlg.remove();
+
+      /* ============ 6. 老页面没有这个按钮 ============ */
+      btn.remove();
+      var threw = null;
+      try { setupJumpLatest(); updateJumpLatest(); jumpToLatest(); } catch (e) { threw = e && e.message; }
+      T('按钮不在 DOM 里时什么都不做、不报错(老测试页就是这种)', threw === null, threw);
+      box.appendChild(btn);
+      setupJumpLatest();
+      box.scrollTop = 0;
+      await tick();
+      T('补回按钮后照常工作', btn.hidden === false);
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

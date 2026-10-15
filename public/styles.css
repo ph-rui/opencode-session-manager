@@ -224,6 +224,21 @@ table#list { width: 100%; border-collapse: collapse; }
   line-height: var(--chat-lh);
 }
 
+/* 一键回底(照 TUI 的 "Jump to latest ↓")。sticky 而不是 absolute:#messages 本身就是
+   滚动容器,absolute 会跟着内容滚走;sticky 让它钉在滚动口的下沿,同时留在文档流里。
+   它只在「不在底部」时露出来,所以文档流里那点占位平时看不见。 */
+#jumpLatest {
+  display: block;
+  width: fit-content;
+  margin: 0 0 0 auto; /* 靠右 */
+  position: sticky;
+  bottom: 8px;
+  z-index: 3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); /* 说明它是浮在消息上的一层 */
+}
+/* 必须显式写:#jumpLatest 是 id 选择器,优先级高于 .chip[hidden] 的 display:none */
+#jumpLatest[hidden] { display: none; }
+
 .msg {
   border-left: 3px solid var(--border);
   padding: 1px 0 1px 12px;
