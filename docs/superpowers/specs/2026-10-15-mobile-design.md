@@ -2,6 +2,11 @@
 
 > 本文只描述**手机端适配**这一增量。桌面版的整体设计见
 > `2026-10-15-session-manager-design.md`，本文不重复其内容。
+>
+> **已实现并回写。** 定稿后又按实机情况改了几处，都标在对应小节：
+> §4.1 的视图类（只留 `view-chat`）、§4.4 改成**就地展开**（原稿的镜像抽屉否掉了）、
+> §5/§6 补上「实测后没做」的几行、§7 的 `OCS_ALLOW` 实际配置、§8 的实测数字与
+> 「怎么造出真窄屏视口」的做法。文里凡写着「初稿/原稿」的地方，都是**最终没照做**的。
 
 ## 1. 背景与目标
 
@@ -117,16 +122,27 @@ Chrome 会拒绝注册、也不给安装入口。硬要装得先上 HTTPS，那�
 并把判定式挂到全局供 `app.js` 复用：
 
 ```html
-<script>window.OCS_NARROW_MQ = '(max-width:860px),(max-height:560px) and (pointer:coarse)';
-if (matchMedia(window.OCS_NARROW_MQ).matches) document.documentElement.classList.add('narrow')
+<script>
+  window.OCS_NARROW_MQ = '(max-width:860px),(max-height:560px) and (pointer:coarse)';
+  window.OCS_SHORT_MQ  = '(max-height:560px)';
+  if (matchMedia(window.OCS_NARROW_MQ).matches) document.documentElement.classList.add('narrow');
+  if (matchMedia(window.OCS_SHORT_MQ).matches)  document.documentElement.classList.add('short');
 </script>
 ```
 
+**第二个类 `short`（实现时补的）**：光有「窄」还不够。手机横屏 894×393 虽然进了窄屏，
+但 393px 的高度下三行顶栏能吃掉四成屏幕，消息就没地方了 —— 所以另外判一次
+「视口很矮」，命中就给 `<html>` 再加一个 `short`，把顶栏压成一行
+（`html.narrow.short #topbar`）。宽度和高度是两件独立的事，所以是两个类而不是一个。
+
 - 所有窄屏样式一律用 `html.narrow` 作前缀，**不写第二份 `@media`**
-- `app.js` 用同一个 `window.OCS_NARROW_MQ` 监听 `change`，在旋转屏幕 / 拉窗口时同步这个类
+- `app.js` 复用同一个 `window.OCS_NARROW_MQ` / `window.OCS_SHORT_MQ` 监听 `change`，
+  在旋转屏幕 / 拉窗口时同步这两个类
 - 测试既可以直接 `.classList.add('narrow')` 断言样式，也可以用真的窄窗口触发
 
-判定式在仓库里**只出现一次**（就是上面那个字符串字面量），`smoke.sh` 断言它没被抄成第二份。
+两个判定式在仓库里**各自只出现一次**（就是上面那两个字符串字面量），
+`smoke.sh` 断言断点数值没被抄成第二份（`styles.css` / `app.js` 里 0 次），
+也断言 `styles.css` 里没有任何 `@media (max-width…)`。
 
 ---
 
@@ -147,8 +163,10 @@ html.narrow main.list-hidden { grid-template-columns: minmax(0, 1fr); }
 html.narrow main.list-hidden #listpane { display: block; } /* 复位桌面留下的折叠态 */
 html.narrow .resizer { display: none; }                   /* 分栏条与其手柄一起隐掉 */
 
-/* 二选一：视图类由 store.selected 派生(见 §4.2) */
-html.narrow.view-list #chatpane { display: none; }
+/* 二选一：只认 <html>.view-chat(由 store.selected 派生，见 §4.2)。
+   默认(没这个类)就是列表 —— 这样首屏不会先闪出两个 pane 再收敛。 */
+html.narrow #chatpane { display: none; }
+html.narrow.view-chat #chatpane { display: flex; }
 html.narrow.view-chat #listpane { display: none; }
 ```
 
@@ -188,21 +206,31 @@ html.narrow.view-chat #listpane { display: none; }
 - 点击 = `clearSelection()`，与安卓返回键同一条路
 - 放在 `#chatHeader` 的第一行左侧，与 `#chatTitle` 同行
 
-### 4.4 顶栏收起（抽屉）
+### 4.4 顶栏收起（就地展开）
 
 `#topbar` 在窄屏只留：**短标题 + 搜索 + 「+ 新建」+ 连接状态**。
-其余（工程目录筛选、排序、导入、刷新、显示已归档、会话计数）收进一个**筛选抽屉**。
+其余（工程目录筛选、排序、导入、刷新、显示已归档、会话计数）默认收起。
 
-- 新增 `#btnFilters`（窄屏可见）打开抽屉
-- 抽屉用**原生 `<dialog>`**，与现有 6 个对话框一致 —— 原生 Esc 可直接关，
-  且全局 `setupTuiKeys()` 的 Esc 分支已经会跳过「有对话框打开」的情况（不冲突）
-- 桌面版顶栏**一个像素都不改**：这些控件仍在原位，只是抽屉里的那份在桌面隐藏
+- 新增 `#btnFilters`（窄屏可见）切换展开/收起
+- **已实现的做法与本文档初稿不同（有意偏离，见下）**：不是 `<dialog>` 抽屉，
+  而是**同一批 DOM 就地收起/展开** —— `#topbar` 加一个 `filters-open` 类，
+  这些控件平时 `display:none`，展开时按网格 `grid-column: 1 / -1` 摊满一行
+- 那批控件在**桌面一个像素都不改**：`html.narrow #topbar .nf { display: none; }`
+  只挂在窄屏下，桌面照旧横排
+- 展开态是**纯视觉**的，不新增状态变量：`filters-open` 只存在 DOM 类上，
+  刷新后回到「收起」——这也符合「手机上看一眼」的用法
 
-> 抽屉里的是**同一批控件**还是副本？选**副本**（抽屉里放一套镜像控件，绑定同一个
-> 状态与同一个处理函数）。理由：桌面顶栏的 `flex-wrap` 布局在窄屏不可用，
-> 而用 CSS 把同一批 DOM 挪进抽屉会与「桌面不变化」这条冲突。镜像的代价是
-> 每次改筛选要同步刷新两处显示 —— 由 `renderDirOptions()` / `setupFilters()`
-> 里新增的一次同步调用收口。
+> **为什么改掉了初稿的「镜像副本 + `<dialog>`」**：初稿怕的是「同一批 DOM 在窄屏
+> 没法重排」，但顶栏本来就该改成 CSS 网格（见 §3 之后的实现），一旦是网格，
+> 同一批 DOM 就能直接换行摆开 —— 镜像副本反而是净亏：
+> 要维护两套控件的显示同步（`renderDirOptions()` / `setupFilters()` 各加一处同步调用），
+> 而 `<dialog>` 在手机上还会把顶栏盖住、每次改完筛选要手动关。
+> 就地展开没有第二条同步路径，也不会遮住列表。
+>
+> 代价：`#btnFilters` 的 `aria-expanded` 要自己维护（已做），以及
+> 展开后顶栏变高会挤掉列表的一点高度（收起即恢复）。
+
+命中区与字号：`#btnFilters` 是 `.chip`，窄屏下 ≥44px（§5）。
 
 ### 4.5 会话列表：`<table>` → 卡片行
 
@@ -210,7 +238,7 @@ html.narrow.view-chat #listpane { display: none; }
 
 ```css
 html.narrow #list thead { display: none; }
-html.narrow #list tr { display: block; }        /* 一行变一张卡 */
+html.narrow #list tbody tr { display: block; }  /* 一行变一张卡 */
 html.narrow #list td { display: block; border: none; }
 ```
 
@@ -237,29 +265,36 @@ html.narrow #list td { display: block; border: none; }
 
 ## 5. 触摸可达性
 
-| 项 | 规则 |
-|---|---|
-| 命中区 | 主要可点元素（顶栏按钮、列表行、返回、发送、附件、对话框控件）≥ **44 × 44 CSS px**（= 121 物理 px @DPR 2.75）；文本内的行内链接不受此约束 |
-| 悬停 | `@media (hover: none)` 下，所有「悬停才显示」的元素（消息操作、折叠箭头等）改为**常驻可见** |
-| 输入 | 输入类控件字号 ≥ 16px（防部分浏览器聚焦时自动放大）|
-| 拖拽 | 分栏条窄屏隐掉；附件仍支持 `<input type=file>`（安卓会给相册/文件选择器）|
-| 滚动 | `#messages` 与 `#list` 保持各自的滚动手势，互不抢 |
+| 项 | 规则 | 实现情况 |
+|---|---|---|
+| 命中区 | 主要可点元素（顶栏按钮、返回、发送、附件、对话框控件）≥ **44 CSS px** 高（= 121 物理 px @DPR 2.75）；文本内的行内链接不受此约束 | `html.narrow .chip / .more / .attachbtn / #send / .dlgacts .chip { min-height: 44px }` |
+| 悬停 | `@media (hover: none)` 下「悬停才显示」的元素改为常驻可见 | **空操作**：已逐个核实，仓库里没有只靠悬停才出现的元素（消息操作按钮、折叠手柄都是常驻的，`hover` 只改颜色不改可见性），所以没有为这一条写 CSS |
+| 输入 | 输入类控件字号 ≥ 16px（防部分浏览器聚焦时自动放大）| `html.narrow #search / .f select / #input / #ctoolbar .ctl select { font-size: 16px }` |
+| 拖拽 | 分栏条窄屏隐掉；附件仍支持 `<input type=file>`（安卓会给相册/文件选择器）| `html.narrow .resizer { display: none }`；附件未动（`<input type=file>` 在触屏上照样弹系统选择器）|
+| 滚动 | `#messages` 与 `#list` 保持各自的滚动手势，互不抢 | 未改：两者本来就是各自 `overflow: auto` 的独立滚动容器 |
+
+> **命中区为什么用 `min-height` 而不是统一塞 `padding`**：`.chip` 的高矮在桌面是有意
+> 区分的（顶栏小、对话框里大）。只加 `min-height` 不会动到里头的文字基线，
+> 也不会把本来就够高的控件再撑一圈。
 
 ---
 
 ## 6. 逐功能适配清单
 
-| 区域 | 窄屏处置 |
-|---|---|
-| `#topbar` | 只留短标题 / 搜索 / 新建 / 状态；其余进抽屉（§4.4）|
-| `#list` | 卡片行 + 行内「⋯」动作（§4.5）|
-| `#chatHeader` | 「‹ 会话」返回按钮；`#chatOps`（导出/在 TUI 打开/归档）收进「⋯」 |
-| `#messages` | 代码块与 diff **横向滚动**（不折行，否则 diff 无法阅读）；工具卡片默认折叠更激进 |
-| `#asks` / `#inbox` | 权限请求与问询卡片要**在窄屏可完整作答**（这是「看一眼」的主要动机）；按钮竖排、命中区放大 |
-| `#composer` | `#ctoolbar`（智能体/模型/变体/投递/中断）在窄屏折成一行「摘要 + 展开」；`📎` / 发送按钮放大 |
-| `#mentions` / `#cmds` | 补全浮层在窄屏占满宽度 |
-| `<dialog>`（6 个）| `html.narrow .dlg { width: calc(100vw - 24px); max-width: none; }`；`dlgNew` 里的 `.fldrow`（三个字段横排）改 `flex-direction: column` |
-| 软键盘 | `<meta name="viewport">` 加 `interactive-widget=resizes-content`，让安卓在键盘弹出时压缩视口，输入框与发送键不被顶出屏幕 |
+| 区域 | 窄屏处置 | 实现情况 |
+|---|---|---|
+| `#topbar` | 只留短标题 / 搜索 / 新建 / 状态；其余就地收起（§4.4）| 改成 CSS 网格；`#btnFilters` 切换 |
+| `#list` | 卡片行 + 行内「⋯」动作（§4.5）| 已做；`td.cost` 直接隐掉让位 |
+| `#chatHeader` | 「‹ 会话」返回按钮；第二行的操作按钮够得着 | 返回键已做；`#chatOps` **没有**再收一层折叠 —— 它本来就 `flex-wrap: wrap`，换行后 4 个按钮仍够按，只是抬到 40px |
+| `#messages` | 代码块与 diff **横向滚动**（不折行，否则 diff 无法阅读）；工具卡片默认折叠更激进 | `pre`（L289）与 `.diff`（L390）本来就带 `overflow-x: auto`，窄屏**无需额外规则**，也没有改折叠策略 |
+| `#asks` / `#inbox` | 权限请求与问询卡片要**在窄屏可完整作答**（这是「看一眼」的主要动机）；按钮竖排、命中区放大 | 未加窄屏专用规则：卡片本来就是竖排 + 整宽按钮，实测在 390px 下可完整作答（见 §8.3 的目检）|
+| `#composer` | `#ctoolbar`（智能体/模型/变体/投递/中断）在窄屏换行摆开；`📎` / 发送按钮放大 | 工具行本来就 `flex-wrap`，窄屏只是放开 `select` 的 `max-width` 让它占满；`#send` / `.attachbtn` 走 §5 的 44px |
+| `#mentions` / `#cmds` | 补全浮层在窄屏占满宽度 | `left: 10px; right: 10px` |
+| `<dialog>`（6 个）| `html.narrow .dlg { width: calc(100vw - 24px); max-width: none; }`；`dlgNew` 里的 `.fldrow`（三个字段横排）改 `flex-direction: column` | 两件都做了，另外把 `min-width: 420px` 归零（393px 的屏上它必然溢出）|
+| 软键盘 | `<meta name="viewport">` 加 `interactive-widget=resizes-content`，让安卓在键盘弹出时压缩视口，输入框与发送键不被顶出屏幕 | 已加 |
+
+> 这张表里有三行写着「无需额外规则 / 未加窄屏规则」，不是漏做：**先把「已有的桌面样式
+> 在 390px 下够不够用」实测一遍**，够用就不写。窄屏 CSS 加得越少，两套布局漂移的机会越少。
 
 ---
 
@@ -273,18 +308,50 @@ html.narrow #list td { display: block; border: none; }
   若开机时该网卡还没起来，`listen` 会 `EADDRNOTAVAIL` 失败，只能靠
   `Restart=on-failure`（`RestartSec=2`）反复重试
 
-**改为在应用层做来源地址白名单**（`server.js`，几行）：
+**改为在应用层做来源地址白名单**（`server.js`）：
 
 - 保持 `0.0.0.0` 监听（本机、VPN 都照常）
-- 在请求入口检查 `req.socket.remoteAddress`，只放行
-  **回环（`127.0.0.1` / `::1` / `::ffff:127.0.0.1`）** 与 **VPN 网段**，
-  其余一律 **403**
-- 白名单用环境变量配置，例如 `OCS_ALLOW=127.0.0.1/8,::1,192.0.2.0/24`，
-  默认值即上述两项
-- 这样办公内网 `198.51.100.48` 与 docker 网桥 `172.17.0.1` 的访问被挡掉，
-  而 VPN 地址将来若变化，只需改白名单，不用改绑定
+- 在请求入口检查 `req.socket.remoteAddress`，逐条比对白名单，不匹配一律 **403**
+- 白名单由 `OCS_ALLOW` 配置，逗号分隔，支持四种写法：
+  单个 IPv4、IPv4 CIDR、单个 IPv6、IPv6 CIDR；
+  `::ffff:198.51.100.9` 这种 v4-mapped 会先还原成 `198.51.100.9` 再比对
+- **代码里的默认值是 `127.0.0.0/8,::1`**（回环 + VPN）
+- Basic 鉴权**保留** —— 白名单是收窄可达面，不替代鉴权；校验发生在鉴权**之前**
+  （来源不对的话连 401 都不必给）
 
-> 说明：Basic 鉴权**保留**（它在 VPN 隧道内是够用的；本次只是收窄可达面，不换鉴权方案）。
+三条容易踩的语义（都写进了 `test/netallow-run.js`）：
+
+| 配置 | 行为 |
+|---|---|
+| 不设 `OCS_ALLOW` | 用上面那个默认值 |
+| 设成空串 | **不限制**（等于关闭白名单）|
+| 设了但一条都解析不出来 | **一律拒绝**（fail closed），启动时打警告 |
+
+> **为什么配错要 fail closed**：`OCS_ALLOW` 写错时最坏的结果是「本来只想给
+> 内网开个口子，结果把整个 0.0.0.0 敞开」。宁可打不开（看日志/返回体就知道原因），
+> 也不要静悄悄放开。
+
+**403 会把原因告诉你**，不用去翻服务端日志：
+
+```
+来源地址不允许 / source address not allowed
+来源: 198.51.100.48
+白名单: 127.0.0.0/8,::1
+```
+
+服务端同时打一行 `拒绝来源地址: 198.51.100.48(白名单: …)`。
+
+> **实测踩到的坑（本机真实经历过）**：一开始只在代码里放了默认值（回环 + VPN），
+> 而办公室这台桌面/手机走的是办公内网 `198.51.100.0/24` —— 于是**连自己的浏览器
+> 都被 403 挡在外面**，报的就是上面那段。修法不是在代码里加网段，而是在
+> `~/.config/opencode-session-manager/env` 里显式写：
+>
+> ```
+> OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
+> ```
+>
+> 这也正是「默认值 + 显式配置」分开的意义：默认值保守，实际网段由部署处声明。
+> docker 网桥 `172.17.0.1`、以及 `198.51.100.0/24` 以外的内网地址仍被拒。
 
 ---
 
@@ -292,47 +359,88 @@ html.narrow #list td { display: block; border: none; }
 
 沿用现有做法：**无头 Firefox + 本地 HTTP 服务**跑浏览器内断言（见主设计文档 §8）。
 
-### 8.1 新增 `test/ui-mobile.html` + `test/ui-mobile-run.js`
+### 8.1 新增 `test/ui-mobile.html` + `test/ui-mobile-run.js`（两个视口合计 154 条）
 
-以 `test/ui-picks.html` 为模板（它是最完整的一套）。核心断言：
+**怎么造出真实的窄屏视口（实现时解决的，可复用）**：
+
+1. 把测试页塞进一个**固定尺寸的 `<iframe>`**（`width:390px;height:844px`）——
+   媒体查询按 iframe 自己的视口算，拿到的是货真价实的窄屏布局，不是靠打桩凑出来的数字
+2. 无头 Firefox 默认是**细指针**，`(pointer:coarse)` 永远不命中。在临时 profile 里写
+   一份 `user.js`：
+   ```js
+   user_pref("ui.primaryPointerCapabilities", 1);
+   user_pref("ui.allPointerCapabilities", 1);
+   ```
+   实测有效 —— 于是 `894×393` 那一半（宽度不命中，只能靠
+   `max-height:560px and (pointer:coarse)` 进来）是**真**跑出来的
+
+两个视口各跑一遍（可用 `UI_CASES` 覆盖）：
+
+| 视口 | 靠哪一半进窄屏 |
+|---|---|
+| `390×844`（竖屏）| `max-width:860px` |
+| `894×393`（横屏）| `max-height:560px and (pointer:coarse)` |
+
+核心断言：
 
 | # | 断言 |
 |---|---|
-| 1 | `matchMedia` 命中时 `documentElement.classList` 含 `narrow`；不命中时不含 |
-| 2 | `window.OCS_NARROW_MQ` 与 §3 的字面量**逐字符一致**，且 `app.js` 复用它而不是自己再写一份 |
-| 3 | 窄屏 + 无选中 → 列表可见、对话区不可见 |
-| 4 | 窄屏 + 选中会话 → 对话区可见、列表不可见 |
-| 5 | `#backList` 在窄屏可见、桌面 `display:none` |
-| 6 | 点 `#backList` → 调用 `clearSelection()`（`store.selected` 变 `null`、hash 去掉）|
-| 7 | 窄屏下 `.resizer` 不可见 |
-| 8 | `#list thead` 在窄屏不可见（卡片化生效）|
-| 9 | 窄屏下每行有一个「⋯」动作按钮，点击打开 `#dlgPick` |
-| 10 | `hover: none` 下「悬停才显示」的元素不再依赖悬停 |
-| 11 | 主要命中区 `getBoundingClientRect()` 的宽高均 ≥ 44px：顶栏按钮、列表行、`#backList`、`⋯`、发送、`📎`、抽屉里的控件（在 360px 宽下量）|
-| 12 | 顶部筛选抽屉能打开，且其中的控件与桌面顶栏**共享同一状态** |
+| 1 | 窄屏 + 无选中 → 列表可见、对话区不可见；选中后反转 |
+| 2 | `#backList` 窄屏可见、桌面 `display:none`；点它 → `clearSelection()`（`store.selected` 变 `null`、hash 去掉）|
+| 3 | 窄屏下 `.resizer` / `.handle` 不可见 |
+| 4 | `#list thead` 不可见、`tr`/`td` 变 block（卡片化生效）|
+| 5 | 窄屏下每行有「⋯」，点它打开 `#dlgPick`，选中项走 `onAction(key, id)` |
+| 6 | 六个原有动作按钮**一个不少**（只是窄屏被 CSS 藏起来）|
+| 7 | 命中区**高度** ≥ 44px：`⋯`、`#btnFilters`、`#backList`、`#send`、`📎` |
+| 8 | `#btnFilters` 点开 → `#topbar.filters-open`，`aria-expanded` 跟着变；展开的那批控件与桌面是**同一批 DOM** |
+| 9 | 输入控件字号 ≥ 16px |
+| 10 | 横屏（`894×393`）时 `<html>` 同时带 `short`；竖屏（844 高）不带 |
 
-> 关于 `pointer: coarse`：无头 Firefox 是细指针，`(max-height: 560px) and (pointer: coarse)`
-> 这条**无法真实触发**。处理方式：断言用的第 1、2 条走「打桩 `matchMedia` + 校验字符串」，
-> 真实的横屏视口（`--window-size=894,393`）只断言「宽 894 时**不**因宽度进窄屏」。
-> 若实现时发现 Firefox 的 `ui.primaryPointerCapabilities` 首选项能模拟粗指针，
-> 再补一条真实横屏断言；不能就保持现状并在此注明。
+> **只断言高度 ≥ 44，不要求宽度也 ≥ 44**：返回键、`⋯` 这类按钮本来就窄而高，
+> 硬绑宽度只会逼着把按钮拉成方块，反而难看。手指按得准与否主要取决于高度。
 
-### 8.2 扩充 `test/smoke.sh`（静态断言）
+### 8.2 扩充 `test/smoke.sh`（静态断言，+18 条 → 130）
 
-- `index.html` 里存在那句内联脚本，且它同时定义 `window.OCS_NARROW_MQ` 与打 `narrow` 类
-- 判定式的字面量在 `public/` 下**只出现一次**（防抄成两份而漂移）
-- 存在 `html.narrow .resizer { display: none }` 之类的关键规则
-- 存在 `#backList`、`#btnFilters` 元素
-- `<meta name="viewport">` 含 `interactive-widget=resizes-content`
-- `server.js` 的来源白名单逻辑存在，且默认值含回环与 `192.0.2.0/24`
+- `index.html` 里存在那句内联脚本，同时定义 `window.OCS_NARROW_MQ` 与 `window.OCS_SHORT_MQ`，
+  且当场 `classList.add('narrow')`（首帧就对，不会闪桌面版）
+- 断点数值只在 `index.html` 出现 1 次（`styles.css` / `app.js` 里各 0 次）
+- `styles.css` 里 `@media (max-width…)` / `@media (max-height…)` **0 处**
+- `#backList` / `#btnFilters` / `data-act="more"` 存在，桌面默认 `display:none`、
+  只在 `html.narrow` 下 `inline-flex`
+- `html.narrow #chatpane { display: none }` + `html.narrow.view-chat #listpane { display: none }`，
+  且 `view-chat` 是从 `store.selected` 派生的那一行
+- 窄屏复位桌面折叠态：`html.narrow main.list-hidden #listpane { display: block }`
+- 窄屏 `dialog.dlg` 的 `min-width` 归零、命中区 44px、输入控件 16px
+- `--chat-fs` 全文只定义 1 次（字号旋钮没被拆成两份）
+- `setupNarrow()` 接进 `init()`，且在 `app.js` 里只出现 2 次（定义 + 接线），
+  并监听了媒体查询的 `change`（转屏要重新判定）
+- `server.js` 的来源白名单：默认值、空配置=不限制、配错=fail closed —— 这三条由
+  `test/netallow-run.js` 的 74 条断言正面覆盖（含 `:::` 拒绝、`sourceAllowed(undefined)` 不崩），
+  `smoke.sh` 不重复
 
 > `smoke.sh` 里断言必须用现成的 `has()`（`case` 实现）；
 > **禁用** `printf | grep -q` —— 在 `set -o pipefail` 下会因 SIGPIPE 假红。
 
-### 8.3 回归
+### 8.3 回归与目检
 
-**全部 16 套既有测试必须继续通过。** 这是「窄屏覆写只发生在 `html.narrow` 下、
-新增元素一律桌面隐藏、原有 DOM 一个不删」这条策略的收益：桌面路径零变化，由既有测试兜住。
+**全部既有测试继续通过**，实测（全部 0 失败）：
+
+| 套件 | 通过条数 |
+|---|---|
+| `smoke.sh` | 130 |
+| `netallow-run.js`（新）| 74 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 114 / 94 / 39 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 123 |
+| `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
+| `ui-mobile`（新）| 154 |
+| `e2e-asks` / `e2e-controls` / `e2e-capabilities` | 13 / 22（+1 跳）/ 26 |
+| `e2e-stream` / `e2e-attach` / `e2e-commands` | 4（+1 跳）/ 32 / 40 |
+
+这套「窄屏覆写只发生在 `html.narrow` 下、新增元素一律桌面隐藏、原有 DOM 一个不删」
+的策略，收益就在这里：桌面路径零变化，由既有测试兜住。
+
+**目检**（无头 Firefox 截图，两个视口都比对过）：手机竖屏 390 与横屏 894 的列表、
+对话、动作面板、顶栏展开/收起；桌面 1366 的截图与改前肉眼比对，没有变化。
 
 ---
 

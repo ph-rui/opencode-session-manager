@@ -31,6 +31,7 @@ node server.js
 | `OCS_PORT` | `49450` | 本地代理端口(被占用时自动改用随机端口) |
 | `OCS_HOST` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 可开放局域网访问 |
 | `OCS_AUTH` | (空) | 面板访问密码,格式 `用户名:密码`。设置后需 HTTP Basic 登录 |
+| `OCS_ALLOW` | `127.0.0.0/8,::1` | 来源地址白名单,逗号分隔。支持 `IPv4` / `IPv4/掩码` / `IPv6` / `IPv6/掩码`;`::ffff:1.2.3.4` 会先还原成 `1.2.3.4` 再比对。**空值 = 不限制**;**配了却一条都解析不出来 = 一律拒绝**(见下) |
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | 用于读取 `service.json` 中的密码 |
 | `OCS_UPLOAD_DIR` | `$TMPDIR/opencode-session-manager-uploads` | 附件的临时落盘目录(代理启动时建好,并定期清理 6 小时前的旧文件) |
 
@@ -59,6 +60,67 @@ chmod 600 ~/.config/opencode-session-manager/env
 > 都能读取/删除你的会话、发送消息。因此开放局域网时**务必设置 `OCS_AUTH`**。
 > OpenCode 服务本身仍只监听本机,不会因本面板而暴露。
 
+## 来源地址白名单(`OCS_ALLOW`)
+
+`OCS_HOST=0.0.0.0` 是「全网卡监听」,收不回来 —— 绑到某个具体网卡会让本机
+`127.0.0.1` 一起断掉(日常桌面使用就没了),而且网卡没起来时会 `EADDRNOTAVAIL`
+起不来。所以**收窄可达面这一步放在应用层**:请求入口先看来源地址,不在白名单里直接 `403`。
+
+```bash
+# env 文件里(推荐)
+OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
+```
+
+- **默认值**是 `127.0.0.0/8,::1`(回环 + VPN 网段);办公室/家里走内网的,
+  照上面那样把你实际用的网段**显式写进 env**
+- **不设** = 用默认值;**设成空串** = 不限制;**设了但一条都解析不出来** = **一律拒绝**
+  (fail closed),启动时会打一行警告。宁可打不开(报错里会写清楚原因),也不要静悄悄全放开
+- 校验发生在**鉴权之前** —— 来源不对连 `401` 都不给
+- 被挡下来时会直接告诉你原因,不用去翻服务端日志:
+
+  ```
+  来源地址不允许 / source address not allowed
+  来源: 198.51.100.48
+  白名单: 127.0.0.0/8,::1
+  ```
+
+  服务端同时打一行 `拒绝来源地址: 198.51.100.48(白名单: …)`。
+
+> 踩过的坑:`OCS_HOST=0.0.0.0` 开着、`OCS_ALLOW` 没写,于是走办公内网
+> (`198.51.100.0/24`)的浏览器全被默认值挡在 `403` 外。修法不是改代码默认值,
+> 而是在 env 里显式声明你实际用的网段 —— 默认值保守,实际网段由部署处说了算。
+
+## 手机端(窄屏)
+
+**在手机上打开 `http://<本机IP>:49450` 就能用**,同一份页面自动切成手机布局,
+不需要装 App、不需要 PWA。判定条件是
+`(max-width:860px)` 或 `(max-height:560px) and (pointer:coarse)` ——
+两条是**或**关系,后者专治「手机横屏时布局宽 894px、宽度断点根本不命中」的情况。
+另外视口很矮(≤560px)时会给 `<html>` 再加一个 `short`,把顶栏压成一行。
+
+布局变化:
+
+| 桌面 | 手机 |
+|---|---|
+| 左列表 + 右对话(可拖动分栏) | **一屏一个**:列表 ↔ 对话,对话左上角「‹ 会话」返回 |
+| 表格 6 列 | **卡片行**:标题 + 状态徽章一行,`目录 · 时间 · tokens` 一行 |
+| 每行 6 个动作按钮 | 收进右上角「**⋯**」,点开复用现成的选择框 |
+| 顶栏所有筛选控件 | 只留短标题 / 搜索 / `+ 新建` / 状态,其余点「**筛选**」就地展开 |
+| 分栏条 + 折叠手柄 | 隐掉(单栏了,不需要) |
+
+- **手机上没 Esc 键**:中断走输入框边上的「**■ 中断**」按钮;命令面板 / `@` 补全 / 中断的
+  Esc 优先级是桌面才有的东西
+- **返回列表会取消选中该会话**(和桌面「选中一直留着」不同)。换来的是**安卓返回手势
+  免费可用**:返回 = 回到列表,再返回 = 退出页面,不用自己接历史栈
+- 深链可用:直接打开 `http://<IP>:49450/#ses_xxx` 就落在该会话的对话区
+- 手指按得准:可点控件高度 ≥ 44px,输入类控件字号 ≥ 16px(防浏览器聚焦时自动放大整页)
+- 键盘:视口加了 `interactive-widget=resizes-content`,安卓弹键盘时压缩视口,
+  输入框和发送键不会被顶出屏幕
+- 附件照旧:📎 会弹安卓的文件/相册选择器
+
+> 窄屏样式全部挂在 `html.narrow` 前缀下,**没有第二份 `@media` 断点** ——
+> 判定源只有 `<head>` 里那一句内联脚本,桌面渲染结果因此一个像素不变。
+
 ## 功能
 
 - **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
@@ -80,7 +142,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
 - **会话控制**(输入框上方的工具栏):
-  - **运行状态**:列表与标题栏显示 `● 运行中` / `◌ 重试中`,数据来自 `GET /api/session/active` 与 `session.status` / `session.idle` 事件
+  - **运行状态**:列表与标题栏显示 `● 运行中` / `◌ 重试中`,数据来自 `GET /api/session/active` 与 `session.status` / `session.idle` 事件;标题行里还有一条**跟 TUI 同款的 8 格字符进度条**(`■⬝⬝⬝⬝⬝⬝⬝ esc interrupt`)—— 8 格、14 帧一循环(从左边长到 6 格 → 整段往右滑出 → 空一拍),重试中换琥珀色;手机上只留那 8 格,藏掉 `esc interrupt`(手机上没这个键)
   - **中断**:运行中才出现 `■ 中断`,调用 `POST /api/session/:id/interrupt`
   - **投递方式**:运行中发送消息可选「排队」(当前回合结束后执行)或「插话」(立即并入当前回合),对应 `prompt` 的 `delivery: queue|steer`
   - **待发送队列**:展示已入队但尚未执行的消息,可「改为排队/改为插话」(`PATCH .../inbox/:id`)或「取消」(`DELETE .../inbox/:id`)
@@ -335,6 +397,11 @@ chmod 600 ~/.config/opencode-session-manager/env
 键位上明确不做的:浏览器自己保留的 `Ctrl+T` / `Ctrl+N` / `Ctrl+W` / `Ctrl+L`(`preventDefault` 无效)、
 以及 `Ctrl+C` 清空输入(会把网页里的复制弄坏)。
 
+手机端上明确不做的:PWA / service worker / 图标 / 全屏(`http://` + 私有 IP 拿不到安全上下文,
+做了也装不上,必要时以后套 APK 再补)、横屏的精调(「能用即可」)、拍照直接上传(附件走安卓
+系统的文件/相册选择器)、以及给「只靠悬停才显示」的元素补常驻样式(核实过:仓库里没有这类元素,
+`hover` 只改颜色不改可见性)。
+
 ## 测试
 
 前置:OpenCode 服务已运行,且本代理已启动。凭据从 `~/.config/opencode-session-manager/env` 读取(可用 `OCS_AUTH` 覆盖)。
@@ -358,9 +425,12 @@ node test/ui-layout-run.js    # 列表折叠 + 刷新后的恢复(会话 / 滚�
 node test/ui-attach-run.js    # 文件附件与 @ 补全的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-commands-run.js  # / 命令面板、Esc 中断、输入历史、Shift+Tab 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessions 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
+node test/netallow-run.js     # 来源地址白名单的纯函数(不起浏览器;含「空配置=不限制」「配错=fail closed」)
+node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(390×844 竖屏、894×393 横屏;无头 Firefox)
+UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:101 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:130 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -370,6 +440,19 @@ node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessio
    选择框那块(+9:对话框四个节点、`.picklist`/`.pick-item`/`.pick-group` 样式、14 个函数齐全、
    **`focusEl` 这个旧做法已经不在了**、三条命令都接到选择框(用 python 在 `PANEL_COMMANDS` 切片里逐条对)、
    `init()` 里接上了 `setupPick()`、两个新测试文件都在),以及「完整命令名 + `Enter` 直接执行」的 `exactCommand`。
+   - J 组的 11 项(运行状态条):`#progress` 存在且默认 `hidden`、`title` 提示、正好 8 格、
+     带着 TUI 那句 `esc interrupt`、`■`/`⬝` 两种字符的规则、重试换色、手机上藏掉那句提示、
+     **旧的平滑扫动(`ocs-sweep`)已经清干净**、`PBAR_CELLS=8` + `PBAR_FRAMES=14`、
+     切在 `updateChatStatus()` 里、`paintProgressBar` 全文件只出现 2 次(定义 + 调用);
+     14 帧逐帧对表在 `ui-stream-run.js` 里做
+   - K 组的 18 项(手机端):内联判定脚本同时定义 `OCS_NARROW_MQ`/`OCS_SHORT_MQ` 并当场加类、
+     **断点数值只在 `index.html` 出现 1 次**(`styles.css`/`app.js` 里 0 次)、
+     `styles.css` 里 `@media (max-width…)`/`@media (max-height…)` **0 处**、
+     `#backList`/`#btnFilters`/`data-act="more"` 存在且桌面默认 `display:none`、
+     窄屏两屏二选一的规则 + `view-chat` 由 `store.selected` 派生、
+     窄屏复位桌面折叠态、`dialog.dlg` 的 `min-width` 归零、命中区 44px、输入控件 16px、
+     `--chat-fs` 全文只定义 1 次、`setupNarrow()` 接进 `init()` 且只出现 2 次、监听了 `change`。
+     来源白名单那三条语义(默认值 / 空=不限制 / 配错=全拒)由 `netallow-run.js` 正面覆盖,这里不重复。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
@@ -378,7 +461,9 @@ node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessio
 - `ui-asks-run.js`:39 项浏览器内断言(真实 `public/app.js`),覆盖字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装、本地校验分支、非 http(s) 链接不可点击。
 - `ui-controls-run.js`:83 项浏览器内断言,覆盖 agent/model 选择器的过滤与分组、切换请求体、变体显隐、中断/投递控件的显隐、运行状态文案与列表标记、待发送队列渲染与操作请求、发送时的 `delivery` 选择、事件到运行状态的映射。
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
-- `ui-stream-run.js`:102 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
+- `ui-stream-run.js`:123 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
+  另有 21 项给**运行状态条**:元素与 8 格骨架、`progressCells()` **14 帧逐帧**与 TUI 实测序列一致(写错一格就红)、第 15 帧绕回第 0 帧、负数帧也当循环内、按 90ms 挂表、推一帧后格子跟着变、`prefers-reduced-motion` 下不挂表且钉在中途一帧、复位后又能推,以及空闲/重试/未选中三种收展。
+  这套测试页把 `setInterval` 换成**记录下来但不真跑**(`__tick()` 手动驱动),所以帧序是确定的,不靠等。
 - `ui-tools-run.js`:94 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平)、`toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」,以及 `userRefsHtml`(agent `@` / skill `#` 标记、缺 `name` 用 `id` 兜底、都缺则跳过、名字转义、在 `renderMessage` 里的顺序与「没有提及时不产生空行」)。
 - `ui-layout-run.js`:114 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
   hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)、
@@ -392,6 +477,8 @@ node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessio
 - `ui-commands-run.js`:155 项浏览器内断言,覆盖①`cmdQuery`(行首判定、词中间的 `/` 不弹、换行后的行首照弹、嵌套命令名 `team/review`、只看光标之前、没有 `/` 或只剩空白时为 `null`),②`mergedCommands`(服务端命令排前、面板项带标记、同名时服务端优先、没有服务端命令时面板动作照旧),③`parseCommand`(带参数 / 无参数 / 多个空格后的参数整体保留 / 大小写不敏感但取表里的写法 / 非行首不当命令 / 未命中不静默失败 / 嵌套命令),④`loadCommands`(按目录缓存、换目录重新请求、目录为空直接返回),⑤`openCommands`(非 `/` 开头不开、按查询词过滤、前缀命中排前面、面板项渲染「面板」标签、无匹配的空态而不是不显示、`force` 供 `Ctrl+P`、条目数受 `CMD_LIMIT` 截断、没选中会话不开),⑥`commandKey`/`acceptCommand`(上下键环绕、`Tab`/`Enter` 选中且 `preventDefault`、补全成 `/名字 ` 并留出参数位、保留光标之后已有的正文、`Esc` 关掉并标记已消费、面板关着或没有条目时不吃按键),⑦`send()` 的命令分流(命中服务端命令走 `POST /command` 而不是 `/prompt`、`name`/`text` 分开、不忙时不带 `delivery`、忙时带上、能带 `@` 引用附件且成功后才清空、失败弹 toast 不当普通消息补发、未命中的 `/foo` 照旧当普通消息),⑧面板动作(`/compact` 的 `{}`、`/undo` 取最后一条用户消息并带 `files:true`、会话在跑时先拦住不请求、`/redo` 的 `DELETE` 与 `409` 的「没有可重做的撤销」、`/rename` 的 `PATCH`、`/archive` 的 metadata 读-改-写、`/clear` 不发请求、`/help` 的小节标题跨满两列不错位、`/sessions`/`/models`/`/agents` 从「只聚焦」改成弹出选择框),⑨输入历史(`pushHistory` 连续重复只记一次、`↑` 进最新再往上、到头吞键不动、`↓` 退回草稿、不在历史里 `↓` 不接管、没有历史 `↑` 不接管、多行时按首行/末行判定接管与否、切会话归位、普通消息也记历史),⑩全局键位(`Esc` 优先关命令面板、其次关 `@` 补全、都不开且在跑才中断、没在跑不动、`<dialog>` 打开时不抢键、已被别人 `preventDefault` 的 Esc 跳过;`Ctrl+P` 打开且不动输入内容、带 `Shift`/`Alt` 或对话框打开时不算;`Shift+Tab` 切智能体、跳过空值的「默认」、到头绕回、命令面板开着或对话框打开时不抢键),以及⑪输入框内的按键优先级(面板开着时方向键给面板而不落到历史、面板没开时给历史、`Enter` 仍然发送),⑫`exactCommand`「完整命令名 + `Enter` 直接执行」(`/models` 一下就到选择框、面板已关、输入框被清空而不是停在 `/models `;只敲 `/mod` 时 `Enter` 仍然只是补全成 `/models ` 且不执行;高亮用 `↓` 移到 `/re` 列表里的别的命令时,`Enter` 补全成**那个**命令而不是执行输入框里的名字)。
 - `ui-picks-run.js`:87 项浏览器内断言,覆盖①通用选择框 `openPick`/`renderPick`(标题、`current` 默认高亮、`current` 不在列表里时停在第一条、`filter=false` 藏过滤框 / `filter=true` 露出来并清空、分组标题每组只出现一次、`sub` 写进 `.pi-sub`、无匹配给空态且不崩高亮),②过滤 `pickVisible`(没查询词=全部、按 label、按 sub、大小写不敏感、纯空白等于没过滤、无匹配返回空),③键位 `pickKey`(↑/↓ 环绕、方向键与 Enter 都 `preventDefault`、不认识的键不管、框关着时不管、空列表不吞键、点「关闭」按钮的 Enter 不抢),④选中 `pickChoose`(回调拿到 key、关框后才回调、`disabled` 项点不动),⑤接线 `setupPick`(过滤框输入即过滤、换查询词把高亮归位、过滤框里 ↓ 交给选择框、点条目选中、关掉后焦点回输入框),⑥`/sessions`(标题、列的就是左栏那批且同序、标题作 label、副文案含目录名、当前会话高亮、打开「显示已归档」后也在、按顶部排序走、选中即切过去),⑦`/models`(按 provider 分组、key/label/sub 的来源、`enabled=false` 的与工具栏一致地不出现、当前模型高亮、当前模型不在列表里时补一条「当前」、有变体就追问且当前档位高亮、选档位带 `variant`、选「默认」不带 `variant`、没有变体就直接切、换模型后追问的是新模型的变体、空 key 只提示不发请求、列表里没有的 key 也能按 `providerID/modelID` 拆开),⑧`/agents`(`hidden` 与 `subagent` 被滤掉、label/sub 来源、当前智能体高亮、不提供「默认」空选项、选中即切、当前智能体不在列表里时补一条),⑨没选中会话时三条都不开,以及⑩三条面板命令仍在、说明已不再写「跳到…」、`focusEl` 这个旧做法已经不存在。
   真实目检(`/tmp/ocsm-probe/picks-build.js` 用真实 `index.html`/`styles.css`/`app.js` + 真实形状的模型数据)看三张图:`/models` 的按 provider 分组与当前项高亮、选完模型后追问变体、`/sessions` 与左栏同源的列表。
+- `netallow-run.js`:74 项纯函数断言(不起浏览器,毫秒级)。覆盖 `parseIPv4Bytes`/`unmapIPv4`/`parseAllowRule`/`matchAllowRule`/`sourceAllowed` 的边界:CIDR 的边界地址(网段首尾、多一位)、`::1` 与 `:::`、来源为 `undefined` 时不崩、空配置 = 不限制、配了却一条都解析不出 = 一律拒绝。真实 `403` 也在这一套里:起一个只放行回环的临时实例(`OCS_ALLOW='127.0.0.0/8,::1'`),用非回环来源请求应得 `403`,且**返回体里写明来源地址与白名单**(那条「网页版访问不了」就是靠这个一眼定位的)。
+- `ui-mobile-run.js`:154 项浏览器内断言(**两个视口各跑一遍**)。做法是把测试页塞进一个**固定尺寸的 `<iframe>`**(媒体查询按 iframe 自己的视口算,拿到的是真布局),并在临时 profile 的 `user.js` 里把 `ui.primaryPointerCapabilities` / `ui.allPointerCapabilities` 设成粗指针 —— 于是横屏 `894×393` 那一半(宽度 894 不命中,只能靠 `max-height:560px and (pointer:coarse)` 进来)是**真的**跑出来的,不是打桩。覆盖:窄屏 + 无选中 → 列表可见;选中 → 对话可见;`#backList` 的可见性与点击(等于 `clearSelection()`,hash 一起清掉);`.resizer`/`.handle` 不可见;`thead` 不可见且 `tr`/`td` 变 block;每行的 `⋯` 点开 `#dlgPick` 且选中项走 `onAction(key, id)`、**原有 6 个动作按钮一个不少**;命中区高度 ≥44px(`⋯` / `#btnFilters` / `#backList` / `#send` / `📎`);`#btnFilters` 展开与 `aria-expanded` 同步,且展开的是**同一批 DOM**(没有镜像副本);输入控件字号 ≥16px;横屏带 `short` 类而竖屏(844 高)不带。
 
 ## 开机自启(systemd 用户服务)
 
@@ -466,3 +553,14 @@ journalctl --user -u opencode-session-manager.service -f
 - **`GET /api/fs/find` 的 `location` 必须写成 deepObject 的 `location[directory]=<绝对目录>`**;传 JSON 字符串(如 `location={...}`)会报 `Expected object | undefined at ["location"]`。返回的 `data[].path` 是**相对该目录**的路径,响应里带的 `location.directory` 才是唯一可靠的基准 —— 面板拿它拼绝对路径,不去猜。
 - **`POST /api/experimental/fs/write?path=<urlencoded 绝对路径>`**:body 就是原始字节,`content-type: application/octet-stream`;返回 `{"location":{...},"data":{"path":"<绝对路径>"}}`。有两个坑:①**绝对路径要 URL 编码**(浏览器用 `URLSearchParams` 正好把 `/` 编成 `%2F`);②用 curl 手测时**不要**把 `--get` 和 `-X POST --data-binary` 混在一起(会退化成 GET)。由于这个端点走的是已有的 `/api/*` 透传,代理层不必新增任何上传路由 —— 代理只建目录、告知路径、定期清理。
 - **上传的文件只是「中转」**:消息里已存了 base64,所以暂存目录里的文件被清理或 `/tmp` 被重启清空,都不影响历史消息的回看。
+- **无头 Firefox 造不出粗指针**,所以 `(pointer:coarse)` 那半边断点默认永远不命中:`--window-size` 对非截图会话无效(视口恒为 1366×768),
+  指针能力也永远是细。两个办法合用才测得动 —— ①把测试页塞进**固定尺寸的 `<iframe>`**(媒体查询按 iframe 自己的视口算);
+  ②在临时 profile 里写 `user.js` 设 `ui.primaryPointerCapabilities=1` / `ui.allPointerCapabilities=1`。
+  顺带一个反例:`--screenshot` 时 `--window-size` **是**有效的(和上面的会话不是一回事),所以截图脚本里能靠它定视口。
+- **`curl --interface` 不能用来验证来源白名单**:`curl --interface 172.17.0.1 http://127.0.0.1:49450` 时服务端看到的来源**仍是 `127.0.0.1`**,
+  看着像「放行」,其实规则根本没参与判定。可靠做法是起一个只放行回环的临时实例
+  (`OCS_PORT=49451 OCS_HOST=127.0.0.1 OCS_ALLOW='127.0.0.0/8,::1' node server.js`),再从别的地址去请求;或直接用 `netallow-run.js` 里的纯函数判。
+- **窄屏判定不止「窄」一件事**:手机横屏的布局宽 894px,宽度断点不命中,只能靠 `max-height:560px and (pointer:coarse)` 进来;
+  而「矮」本身还会影响排版(顶栏得压成一行),所以除了 `narrow` 还有第二个类 `short`。宽度和高度是两件独立的事,别合在一个断点里。
+- **`<head>` 里那句内联脚本不能挪进 `app.js`**:等脚本跑起来再加 `narrow` 类的话,手机上会先闪一下桌面三栏再收敛。
+  判定必须在首次绘制之前完成,所以它只能待在 `index.html` 里,`app.js` 只复用它的字符串(见 `syncNarrowClass()`)。
