@@ -63,11 +63,16 @@ chmod 600 ~/.config/opencode-session-manager/env
 - **顶栏集中所有控件**:搜索 / 工程目录过滤 / 排序 / `+ 新建` / 导入 / 刷新 / 显示已归档 / 会话计数都在顶部栏,窄屏自动折行;左栏整栏已移除,会话表独占腾出的宽度
 - **会话列表整列可收起**:分栏条顶部的小手柄一键收起,收起后对话区占满整宽;状态记在本地,刷新后保持
 - **刷新后回到刚才的会话**:选中的会话写进 URL hash(`#ses_xxx`),刷新 / 复制链接 / 书签 / 换标签打开都会落到同一会话
+- **浏览器前进 / 后退能在会话之间走**:点会话进历史栈(后退回上一个,前进回下一个);退到打开面板那一格则回到「未选择会话」的空态
+- **刷新后回到会话里读到的位置**:滚动位置按「顶部可见的消息 + 偏移」记在 `sessionStorage`,刷新回到原处,而不是一律跳到最新
+- **顶栏的搜索 / 工程目录 / 排序 / 显示已归档刷新后还在**;与 hash 分工明确:hash 管「选中哪个会话」,localStorage 管「列表怎么筛」
+- **会话区字号可调**:会话界面(消息 / 工具卡片 / diff / 问询卡 / 输入区)整体由一个变量 `--chat-fs` 统管,区内字号全是相对 `em`,改一个数就整块等比缩放
 - 跨工程列出会话,按更新时间排序,游标翻页
 - 按标题搜索(服务端 `search`)
 - 按工程目录过滤(服务端 `directory`)
 - 管理动作:重命名、删除、移动到其它工程目录、分叉
 - 点击会话打开对话:加载历史消息、发送消息、`/api/event` SSE 实时刷新
+- **用户消息上的提及标记**:`agents[]` 显示成 `@名字`,`skills[]` 显示成 `#名字`(缺 `name` 用 `id` 兜底)
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
 - **会话控制**(输入框上方的工具栏):
@@ -86,7 +91,7 @@ chmod 600 ~/.config/opencode-session-manager/env
   - **导出 / 导入**:导出会话为 JSON(可选脱敏),或从 JSON 导入为新会话并指定目标工程目录
   - **深链跳回 TUI**:给出 `opencode --session <id> <目录>`,可直接粘到终端继续同一会话
 
-## 列表折叠与「刷新后还在这个会话」
+## 列表折叠与刷新后的恢复
 
 - **收起列表**:列表与对话区之间那条分栏条的顶部有个小手柄(`‹`),点它把整个会话表收起,再点(`›`)展开。
   - 手柄**就长在分栏条上**,所以「这条能收起」一眼可见;拖动分栏条改宽度、双击复位宽度都照旧(点手柄不会误触发拖动)。
@@ -96,11 +101,21 @@ chmod 600 ~/.config/opencode-session-manager/env
   - 两条实现注意:①三个面板都写了显式 `grid-column`,布局不再依赖自动排布(否则隐藏一个子元素会把后面的往前顶);
     ②收起后的窄槽刻意保持 16px,所以手柄的位置在展开/收起两态**完全一致**。
 - **刷新后回到刚才的会话**:选中的 id 写进 URL hash(`#ses_xxx`),刷新 / 复制链接 / 书签 / 另一个标签打开都会落到同一会话。
-  - 用 `history.replaceState` 而不是 `pushState`:点会话不该把浏览器后退键灌满。
+  - 点会话用 `history.pushState`,所以浏览器**前进 / 后退能在会话之间来回走**;刷新恢复与「清空选择」用 `replaceState`,不新增历史项。
+  - 两种情形共用一句守卫——「`location.hash` 已经等于目标就直接返回」:浏览器后退/前进是**先**改好 hash **再**派发事件,进到 `selectSession` 时 hash 已等于目标,于是不会把同一格反复压进历史(重复点同一个会话也不会)。
+  - 只监听 `popstate`(不监听 `hashchange`):面板自己的写入全走 `pushState`/`replaceState`,两者都不派发事件,不会自己触发自己。退到「打开面板那一格」(无 hash)时走 `clearSelection()`,回到空态。
   - 恢复时机是**首次会话列表加载完成之后**(这样会话标题/工程目录能取到,不会先闪一个 id);
     恢复**不要求该会话出现在列表里**(可能落在第二页),`selectSession` 只要 id 就能拉消息。
   - 会话已被删除 / hash 指向不存在的 id → 走已有的兜底,不炸也不白屏;删除会话时顺手清掉 hash。
-  - 刻意不做:顶栏筛选/排序/搜索的持久化(刷新后仍重置)、`hashchange` 前后退同步、会话内滚动位置的恢复(刷新后停在最新消息)。
+  - 刻意不做:为每次点会话之外的操作 push 历史、`hashchange` 与 URL 手动编辑的同步。
+- **刷新后回到会话里读到的位置**:滚动位置记在 `sessionStorage['ocs.scroll']`。
+  - 存的是**锚点**(「顶部可见的是哪条消息 + 它距对话区顶部多少像素」),不是纯 `scrollTop` —— 加载更早的消息、或字号/宽度变了,绝对像素都会错位;锚点消息不在了(被删 / 掉出这一页)才退回像素值,并由浏览器自然夹取范围。
+  - 用 `sessionStorage` 而不是 `localStorage`:这是「本标签页刚才读到哪」,不该跨标签串味,关掉标签就丢;最多留 20 个会话,超额淘汰最久没用过的。
+  - **只有刷新恢复才还原**;从列表点进某个会话仍然跳到底部看最新消息。滚动时按时间戳节流记录,离开会话前与 `pagehide` 时各兜底存一次。
+- **顶栏筛选 / 排序 / 搜索的持久化**:4 个键 `ocs.q.{search,dir,order,archived}`。
+  - 启动时**先回填 store 与控件,再拉列表** —— 否则会先按默认值拉一次、再按恢复出来的条件重拉一次,白费一次请求还会闪一下(`init()` 里有顺序锁,冒烟测试会盯着)。
+  - `store` 与存储跟着输入框立即更新,只对「取列表」防抖,存的值不会落后于界面。
+  - 记住的目录这次没出现在结果里(该目录下暂时没有会话)也照样出现在下拉中,免得选不回去。
 
 ## 问询应答(表单 / 权限)
 
@@ -225,7 +240,8 @@ chmod 600 ~/.config/opencode-session-manager/env
 工具卡片上明确不做的:并排 / split 视图、语法高亮(`config.diffs.view` / `filetype` / `syntaxStyle`)、
 字符级行内高亮(`diffHighlightAdded` / `Removed`)、会话级「变更」面板与 revert。
 
-布局/状态上明确不做的:顶栏筛选/排序/搜索的持久化(刷新后仍重置)、`hashchange` 的前后退同步、会话内滚动位置恢复。
+布局/状态上明确不做的:会话内滚动位置对不同入口一视同仁(只有刷新恢复才还原,点会话仍跳到底部)、
+为每次操作 push 历史、`hashchange` 与 URL 手动编辑的同步。
 
 ## 测试
 
@@ -244,11 +260,12 @@ node test/ui-controls-run.js  # 会话控制前端逻辑(无头 Firefox;缺 fire
 node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
-node test/ui-layout-run.js    # 列表折叠 + 刷新后恢复选中会话(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-layout-run.js    # 列表折叠 + 刷新后的恢复(会话 / 滚动位置 / 顶栏条件)(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
-- `smoke.sh`:59 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
-  工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化)。
+- `smoke.sh`:66 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+  工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
+   外加一条**顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
@@ -258,8 +275,12 @@ node test/ui-layout-run.js    # 列表折叠 + 刷新后恢复选中会话(无�
 - `ui-controls-run.js`:83 项浏览器内断言,覆盖 agent/model 选择器的过滤与分组、切换请求体、变体显隐、中断/投递控件的显隐、运行状态文案与列表标记、待发送队列渲染与操作请求、发送时的 `delivery` 选择、事件到运行状态的映射。
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
 - `ui-stream-run.js`:102 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
-- `ui-tools-run.js`:79 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平),以及 `toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」。
-- `ui-layout-run.js`:60 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)与 hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)。
+- `ui-tools-run.js`:94 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平)、`toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」,以及 `userRefsHtml`(agent `@` / skill `#` 标记、缺 `name` 用 `id` 兜底、都缺则跳过、名字转义、在 `renderMessage` 里的顺序与「没有提及时不产生空行」)。
+- `ui-layout-run.js`:114 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
+  hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)、
+  **前进 / 后退**(点会话入栈、重复点同一个不多压一格、收到 `popstate` 切到 URL 里的会话且不重复入栈、后退到无 hash 时取消选中并清空对话区、空操作不入栈)、
+  **会话内滚动位置**(跳到底部 / 存锚点 / 刷新后回到原处且确实不在底部 / 只还原一次 / 点会话进来仍跳底部 / 锚点消息不存在时退回像素值 / 无存档照旧 / 上限 20 与淘汰顺序 / 存的是 `sessionStorage`)、
+  **顶栏条件持久化**(空存档的默认值、四项恢复、记住的目录不在结果里也能选回、四类控件改动即时落盘、清空搜库存空串、存的是 `localStorage`)。
 
 ## 开机自启(systemd 用户服务)
 
