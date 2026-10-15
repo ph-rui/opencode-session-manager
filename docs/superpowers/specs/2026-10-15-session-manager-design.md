@@ -219,6 +219,43 @@ opencode-session-manager/
     删除 `#filters` 全套规则与 `#left-w`/`#mid-w` 变量。
   - `app.js`:**只改** `setupResizers()` —— 去掉左分栏条一半,`--mid-w` 更名 `--list-w`(localStorage 键 `ocs.midW` → `ocs.listW`,
     读取时兼容旧键并顺手清掉),双击复位的边界钳制随之简化。其余逻辑**一字未改**。
+- **F 工具卡片对齐 TUI(已实现)** — 把服务端已经算好的改动内容画出来。
+
+  **地基(实测)**:`edit` / `patch` 的 `state.metadata.files` 已经给出完整 unified diff 与统计,
+  **不需要新接口、不需要后端改动**,面板此前丢数据的唯一原因是 `toolHtml()` 没读 `metadata`:
+
+  ```jsonc
+  // session.tool.progress / session.tool.success 的 metadata(edit、patch)
+  { "files": [ { "file": "default.xml", "status": "added|modified|deleted",
+                 "additions": 10, "deletions": 10,
+                 "patch": "Index: default.xml\n===…\n--- default.xml\n+++ default.xml\n@@ -1,18 +1,18 @@\n…" } ],
+    "truncated": false }
+  // write:正文在 state.input.content,服务端不给 diff;metadata 只有 {filepath, exists, diagnostics}
+  // 诊断:metadata.diagnostics 按「文件绝对路径」索引 → [{range:{start:{line,character}}, message}]
+  ```
+
+  - 新增纯函数层(便于离线断言):`parsePatch(patch)` 把 unified diff 拆成带**双向行号**的行
+    (`hunk` / `add` / `del` / `ctx` / `meta`;丢弃 `Index:`、`===` 分隔行,hunk 之外的 `---`/`+++` 当文件头丢弃,
+    末尾因 `split` 多出的空串不算一行,而真正的空上下文行是「一个空格」不能被丢);
+    `diffHtml(files)` 每文件一块「状态徽标 + 路径 + `+N -M`」+ 统一视图正文;`codeHtml(text)` 给 `write` 按行号渲染;
+    `diagHtml(metadata, path)` 按路径(精确优先、相对/绝对宽松兜底)挑出本文件的诊断,输出 `错误 [行:列] 消息`;
+    `inputSummary(input)` 对齐服务端 TUI 的取值优先级 `command|id|pattern|url|query|path|description|code`,其余标量作补充并压平空白。
+  - `toolHtml(p)` 分派改写:
+    `edit` → `← 编辑 <路径>` + diff + 诊断,**默认展开**;**服务端还没给出 `files` 时只写 `← 编辑 <路径>`**(不再退化成通用摘要把 `oldString/newString` 铺出来);
+    `write` → `# 写入 <路径>` + 正文按行号渲染 + 诊断,**默认展开**;
+    `patch` → 单文件写 `← 补丁 <路径>`、多文件写 `← N 个文件`,逐文件一块,**默认展开**;
+    `question` → 已答时列「问题 → 答案」,未答写 `→ 提问中…`;`skill` → `→ Skill "名字"`;
+    其它工具保持「摘要行 + 点开展开入参/输出」的折叠卡片(不改变既有观感)。
+  - **修掉一个真实缺陷**:`liveSig()` 的工具项原先只记 `id:状态`,不含 metadata,
+    于是 `session.tool.progress` 送来 diff 时签名不变、**不重绘**(diff 要拖到下一次状态变化才出现)。
+    现在把 metadata 指纹(文件数 + 各文件 `status/additions/deletions/patch` 长度)并入签名;
+    同时 `handleEvent` 除了「结构变化」之外,还会比对**已渲染的指纹**(`msgEls` 上的 `fp`),
+    指纹变了就补一次整条重绘 —— 既修好了 progress 带 diff 的场景,又不改变 `handleEvent` 里
+    「progress 不是结构变化」的既有契约(不带可渲染 metadata 的 progress 依旧不重绘、不重取)。
+  - `styles.css`:新增 `--diff-{add,del}-bg/-ln/-fg`、`--diff-{ctx,ln,hunk}-*`、`--diff-rule` 变量与
+    `.toolbody`(整体限高内滚)/`.dfile`(文件头)/`.dbadge`/`.diff`(不折行、横向滚动)/`.dl`+`.ln`+`.sign`+`.src`/`.ddiag`/`.qalist`/`.tdesc`(摘要)/`.tadd`/`.tdel` 规则。
+  - **本轮明确不做**:并排 / split 视图、语法高亮(`config.diffs.view`/`filetype`/`syntaxStyle`)、
+    字符级行内高亮(`diffHighlightAdded/Removed`)、会话级「变更」面板与 revert、后端改动。
 
 ## 8. 测试
 
@@ -242,6 +279,10 @@ opencode-session-manager/
 - [ ] 输入并发送消息后,能逐字看到助手回复流出(Markdown 实时重排、末尾有闪烁光标、标题行有「输出中」徽标)。
 - [ ] 流式期间思考块自动展开并逐字增长;回合结束后回落成折叠态(`▸ 思考`)。
 - [ ] 助手调用工具时,工具卡片在参数流式阶段就出现,状态由「运行中」变为「已完成」并展示输出。
+- [ ] 助手编辑文件后,`edit` 卡片默认展开并直接显示彩色 diff(行号 + `+N -M`),不需要再点开。
+- [ ] `write` 卡片默认展开并显示写入的正文(带行号);`patch` 改多个文件时逐文件各显示一块。
+- [ ] 改动有语法/类型诊断时,诊断行(`错误 [行:列] 消息`)显示在 diff 下方。
+- [ ] `question` 已应答后,卡片里能看到「问题 → 答案」;`skill` 卡片显示 `→ Skill "名字"`。
 - [ ] 回复落地后与流式过程看到的内容一致,消息不重复、不闪回(本地缓冲被服务端权威版本替换)。
 - [ ] 停掉 OpenCode 服务时,页面给出清晰错误提示而非白屏。
 - [ ] 触发一次 `question` 工具问询:底部出现卡片,提交后助手继续;列表徽标消失。
@@ -301,14 +342,46 @@ opencode-session-manager/
 - 冒烟 `test/smoke.sh`:**50 项全部通过**(由 35 项增至 50 项,新增的 15 项即上面的顶部栏结构断言)。
 - 既有九套测试全部复跑且**断言一字未改仍然全绿** —— 证明「元素 id 不变 + 业务逻辑零改动」的前提成立:
   `e2e-asks` 13、`e2e-controls` 22(LLM 31)、`e2e-capabilities` 26、`e2e-stream` 4(LLM 27)、
-  浏览器内断言 `ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71、`ui-stream` 96。
+  浏览器内断言 `ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71、`ui-stream` 96(F 组后又往 `ui-stream` 追加 6 项 → 102,见下)。
   (四个 `test/ui-*.html` 骨架同步成「控件在 `#topbar` 内、无 `#filters`/`#resizer-left`」,测试断言本身未动。)
 - 离线渲染核对:`/tmp/ocsm-probe/top-preview.html`(真实 `index.html` + `styles.css` + `app.js` + 假数据,`?only=list|selected`)
   截图 `top-1500.png` / `top-1100.png` / `top-sel.png` —— 1500px 顶栏单行、1100px 自动折成两行且不遮挡列表与对话,
   两种情况底部输入框都稳在视口内(验证 `body` 纵向 flex + `main { flex:1; min-height:0 }` 的修法必要且有效)。
+
+### 工具卡片(diff / 代码 / 诊断)的自动化验证(本次已执行)
+- 冒烟 `test/smoke.sh`:**53 项全部通过**(由 50 项增至 53 项,新增 3 项断言 `styles.css` 含 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`)。
+- 新增浏览器内断言 `test/ui-tools-run.js`:**79 项全部通过**(真实 `public/app.js`,无头 Firefox):
+  - `parsePatch`:文件头与 `=====` 分隔行不进正文、hunk 保留原文、正文行数、删除行只有旧行号、新增行只有新行号、
+    上下文行双向行号同步、增删之后行号继续对齐、**空上下文行(单空格)不被丢**、末尾换行不产生幽灵行、没有 hunk 时返回空数组、空值不炸。
+  - `diffHtml`:状态徽标(新建/修改/删除)、路径、统计取自服务端 `additions/deletions`、增删行类名、多文件各一块、
+    没有 patch 的删除文件退化为 `- N 行`、空数组返回空串。
+  - `codeHtml`:去掉末尾换行带来的空行、行号从 1 起、整块 `diff code`(只有一列行号)、空内容不炸。
+  - `diagHtml`:精确路径命中、行列号 0 基转 1 基、相对路径宽松命中、无诊断返回空串、路径对不上不误报。
+  - `inputSummary`:command 优先、无主键时按出现顺序拼标量、字符串入参原样、压平换行、无标量为空、`null` 为空。
+  - `toolHtml`:`edit`/`write`/`patch` 的摘要文案、增删统计、**默认展开 `open`**、正文含 diff;
+    **`edit` 运行中(无 `files`)只写目标路径且不泄漏 `oldString`**;`write` 的 `# 写入` + 行号渲染;`patch` 的 `← N 个文件`;
+    `question` 已答列「问题 → 答案」、未答只写「提问中…」;`skill` 写 `→ Skill "名字"`;
+    通用工具仍折叠、入参仍在 `pre` 里、无入参时是单行。
+  - `toolMetaSig`:无 metadata / 无 files 为空、有 files 非空、内容变了指纹就变。
+  - 事件通道:`tool.progress` 直接调 `handleStreamEvent` 只改数据**不重绘**;走完整 `handleEvent` 时
+    **指纹变了就补一次重绘、diff 立刻上屏**;metadata 没变时**不重建 DOM**;`tool.success` 后状态变已完成且 diff 仍在。
+- 回归锁:`test/ui-stream.html` **由 96 项增至 102 项**(新增 6 项),用真实时序验证
+  「`edit` 卡片先出现(还没有 diff)→ `tool.progress` 带来 `metadata.files` → diff 立刻上屏」,
+  并锁住「metadata 没变的 progress 不重建 DOM」。既有 96 项断言**一字未改**。
+- 既有其余测试全部复跑且全绿:`e2e-asks` 13、`e2e-controls` 22(LLM 31)、`e2e-capabilities` 26、`e2e-stream` 4(LLM 27)、
+  浏览器内断言 `ui-asks` 39、`ui-controls` 83、`ui-capabilities` 71。
+- 离线渲染核对:`/tmp/ocsm-probe/tools-build.js` → `tools-preview.html`(真实 `index.html` + `styles.css` + `app.js`),
+  其中 `edit` 的两条用的是**从真实会话导出的 tool part**(`/tmp/ocsm-probe/real-diff-parts.json`,不是编的),
+  另加自造的 `write` / `patch`(两文件) / 带诊断的 `edit` / 已答 `question` / 通用 `bash` / `skill` / 运行中的 `edit`。
+  截图 `tools-{edit,write,patch,diag,stream,all}.png`(1400px)与 `narrow-{edit,patch,all}.png`(1100px):
+  diff 行号列对齐、配色正确、`+N -M` 靠右、诊断在 diff 下方、窄屏下 diff 横向滚动而不撑破对话栏、底部输入框稳在视口内。
+  这一轮核对实际抓出一个保真度问题(运行中的 `edit` 落进通用分支,把 `oldString: x newString: y` 铺了出来),已修。
 
 ## 9. 假设与待确认
 - 默认端口 `49450`、工程位置 `~/tools/opencode-session-manager/` 是否合适?
 - ~~事件流 v1 采用「事件触发重取」而非精细 delta,是否接受?~~ 已由 C 组升级为**增量驱动**(本地缓冲 + 权威版本对账);
   仍保留 150ms 防抖重取作为对账兜底,纯文本 delta 不再触发重取。
 - 局域网其它机器能否访问取决于主机防火墙(ufw 放行 `49450/tcp` 需要 sudo,尚未核实)。
+- **`metadata.diagnostics` 的精确形状是「从服务端 TUI 的用法反推」的假设**(`{<文件绝对路径>: [{range:{start:{line,character}}, message}]}`):
+  本机实测里 `write`/`edit` 的 `diagnostics` 一直是空对象 `{}`(没触发过真实诊断),所以前端按「精确路径优先、相对/绝对宽松兜底」取值,
+  取不到就不显示 —— 假设错了也不会报错,最多是不显示。若将来看到真实诊断,应补一条离线断言把它钉死。

@@ -155,6 +155,22 @@ if printf '%s' "$CSS" | grep -q 'calc(100vh - 43px)'; then
 else
   echo "PASS: styles.css 主区不再写死高度"; pass=$((pass + 1))
 fi
+# 工具卡片里的改动内容(diff / 代码):配色变量 + 行样式必须在
+if printf '%s' "$CSS" | grep -q -- '--diff-add-bg' && printf '%s' "$CSS" | grep -q -- '--diff-del-bg'; then
+  echo "PASS: styles.css 有 diff 增删配色变量"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 --diff-add-bg/--diff-del-bg(diff 会退化成无色)"; fail=$((fail + 1))
+fi
+if printf '%s' "$CSS" | grep -q '\.dl\.add' && printf '%s' "$CSS" | grep -q '\.dl\.del'; then
+  echo "PASS: styles.css 有 diff 行样式(.dl.add/.dl.del)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 .dl.add/.dl.del 行样式"; fail=$((fail + 1))
+fi
+if printf '%s' "$CSS" | grep -q '\.dfile' && printf '%s' "$CSS" | grep -q '\.diff '; then
+  echo "PASS: styles.css 有文件头与 diff 容器样式(.dfile/.diff)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 .dfile/.diff 样式"; fail=$((fail + 1))
+fi
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
 if printf '%s' "$sse" | grep -q 'server.connected'; then

@@ -1149,27 +1149,244 @@ function statusInfo(p) {
   return map[st] || { icon: '●', cls: 'run', label: String(st) };
 }
 
-function toolHead(p, s) {
+/* ---------- 工具调用:改动内容(diff / 代码 / 诊断),与 TUI 的卡片对齐 ----------
+ *
+ * 服务端在 state.metadata 里已经算好了改动内容,前端只负责排版:
+ *   edit / patch : {files:[{file, status:added|modified|deleted, additions, deletions, patch}], truncated}
+ *   write        : {filepath, exists, diagnostics, truncated},正文在 state.input.content
+ *   通用         : {diagnostics:{<绝对路径>: [{range:{start:{line,character}}, message}]}}
+ * 下面几个都是纯函数,便于离线断言(见 test/ui-tools-run.js)。
+ */
+
+const PATCH_HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const PATCH_META_RE = /^(Index: |diff --git |index [0-9a-f]+\.\.|={3,}$)/;
+const SUMMARY_KEYS = ['command', 'id', 'pattern', 'url', 'query', 'path', 'description', 'code'];
+
+// unified diff → 带双向行号的行。
+// 行形状:{k:'hunk'|'add'|'del'|'ctx'|'meta', text, oldNo, newNo}
+// hunk 之外的 --- / +++ 是文件头,丢掉(路径在卡片头已经显示了)。
+function parsePatch(patch) {
+  const out = [];
+  const lines = String(patch == null ? '' : patch).split(/\r?\n/);
+  let oldNo = 0;
+  let newNo = 0;
+  let inHunk = false;
+  const push = (k, text, o, n) => out.push({ k: k, text: text, oldNo: o, newNo: n });
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    // split 会在末尾多出空串(补丁以换行结尾);真正的空上下文行是 " "(一个空格)
+    if (raw === '' && i === lines.length - 1) continue;
+    if (PATCH_META_RE.test(raw)) {
+      inHunk = false; // 新的一段文件开始
+      continue;
+    }
+    if (!inHunk && /^(---|\+\+\+) /.test(raw)) continue; // 文件头
+    const m = PATCH_HUNK_RE.exec(raw);
+    if (m) {
+      inHunk = true;
+      oldNo = Number(m[1]);
+      newNo = Number(m[3]);
+      push('hunk', raw, null, null);
+      continue;
+    }
+    if (raw.charAt(0) === '\\') {
+      push('meta', raw, null, null); // \ No newline at end of file
+      continue;
+    }
+    if (!inHunk) continue;
+    if (raw.charAt(0) === '+') push('add', raw.slice(1), null, newNo++);
+    else if (raw.charAt(0) === '-') push('del', raw.slice(1), oldNo++, null);
+    else push('ctx', raw.charAt(0) === ' ' ? raw.slice(1) : raw, oldNo++, newNo++);
+  }
+  return out;
+}
+
+function diffRowHtml(r) {
+  const ln =
+    '<span class="ln o">' + (r.oldNo == null ? '' : r.oldNo) + '</span>' +
+    '<span class="ln n">' + (r.newNo == null ? '' : r.newNo) + '</span>';
+  const sign = r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' ';
+  return '<div class="dl ' + r.k + '">' + ln +
+    '<span class="sign">' + (r.k === 'hunk' || r.k === 'meta' ? '' : sign) + '</span>' +
+    '<span class="src">' + esc(r.text) + '</span></div>';
+}
+
+function diffBadge(status) {
+  const map = {
+    added: { label: '新建', cls: 'add' },
+    deleted: { label: '删除', cls: 'del' },
+    modified: { label: '修改', cls: 'mod' },
+  };
+  return map[status] || { label: '变更', cls: 'mod' };
+}
+
+function diffCounts(files) {
+  let additions = 0;
+  let deletions = 0;
+  for (const f of files || []) {
+    if (typeof (f && f.additions) === 'number') additions += f.additions;
+    if (typeof (f && f.deletions) === 'number') deletions += f.deletions;
+  }
+  return { additions: additions, deletions: deletions };
+}
+
+// 多文件 diff:每文件一块「状态徽标 + 路径 + 增删统计」,下面接统一视图正文。
+function diffHtml(files) {
+  let html = '';
+  for (const f of files || []) {
+    const b = diffBadge(f && f.status);
+    const rows = parsePatch(f && f.patch);
+    const adds = typeof (f && f.additions) === 'number' ? f.additions : rows.filter((r) => r.k === 'add').length;
+    const dels = typeof (f && f.deletions) === 'number' ? f.deletions : rows.filter((r) => r.k === 'del').length;
+    html +=
+      '<div class="dfile">' +
+      '<span class="dbadge ' + b.cls + '">' + b.label + '</span>' +
+      '<span class="dpath">' + esc((f && f.file) || '') + '</span>' +
+      (adds ? '<span class="tadd">+' + adds + '</span>' : '') +
+      (dels ? '<span class="tdel">-' + dels + '</span>' : '') +
+      '</div>';
+    if (!rows.length) {
+      html += '<div class="dnote">' + (dels ? '- ' + dels + ' 行' : '(无内容)') + '</div>';
+      continue;
+    }
+    html += '<div class="diff">' + rows.map(diffRowHtml).join('') + '</div>';
+  }
+  return html;
+}
+
+// write 工具的正文:按行号显示,不做增删着色(服务端没给 diff)。
+function codeHtml(text) {
+  const lines = String(text == null ? '' : text).split(/\r?\n/);
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return '<div class="diff code">' + lines.map((t, i) =>
+    '<div class="dl ctx"><span class="ln o"></span><span class="ln n">' + (i + 1) + '</span>' +
+    '<span class="sign"> </span><span class="src">' + esc(t) + '</span></div>'
+  ).join('') + '</div>';
+}
+
+// 诊断表按文件路径索引;路径可能是绝对或相对,做一次宽松匹配。
+function diagnosticsFor(all, path) {
+  if (Array.isArray(all[path])) return all[path];
+  const p = String(path || '');
+  if (!p) return [];
+  const key = Object.keys(all).find((k) => k === p || k.endsWith('/' + p) || p.endsWith('/' + k));
+  return key && Array.isArray(all[key]) ? all[key] : [];
+}
+
+function diagHtml(metadata, path) {
+  const all = metadata && metadata.diagnostics;
+  if (!all || typeof all !== 'object') return '';
+  const list = diagnosticsFor(all, path);
+  if (!list.length) return '';
+  return '<div class="ddiag">' + list.map((d) => {
+    const r = (d && d.range && d.range.start) || {};
+    const line = (typeof r.line === 'number' ? r.line : 0) + 1;
+    const col = (typeof r.character === 'number' ? r.character : 0) + 1;
+    return '<div class="dline">错误 [' + line + ':' + col + '] ' + esc((d && d.message) || '') + '</div>';
+  }).join('') + '</div>';
+}
+
+// 摘要行取哪个入参:与服务端 TUI 的优先级一致,其余标量作为补充。
+function inputSummary(input) {
+  if (input == null) return '';
+  if (typeof input === 'string') return input.replace(/\s+/g, ' ').trim();
+  if (typeof input !== 'object') return String(input);
+  const keys = Object.keys(input);
+  const primary = SUMMARY_KEYS.find((k) => keys.indexOf(k) >= 0);
+  const scalars = keys.filter((k) => ['string', 'number', 'boolean'].indexOf(typeof input[k]) >= 0);
+  const first = scalars.indexOf(primary) >= 0 ? input[primary] : undefined;
+  const rest = scalars.filter((k) => k !== primary).map((k) => k + ': ' + String(input[k]));
+  return [first === undefined ? '' : String(first)]
+    .concat(rest)
+    .filter(Boolean)
+    .join('  ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function toolHead(p, s, desc, counts) {
   return (
     '<span class="tmark">⏺</span>' +
     '<span class="tname">' + esc(p.name || 'tool') + '</span>' +
+    (desc ? '<span class="tdesc">' + esc(desc) + '</span>' : '') +
+    (counts && counts.additions ? '<span class="tadd">+' + counts.additions + '</span>' : '') +
+    (counts && counts.deletions ? '<span class="tdel">-' + counts.deletions + '</span>' : '') +
     '<span class="tstate ' + s.cls + '">' + s.icon + (s.label ? ' ' + esc(s.label) : '') + '</span>'
+  );
+}
+
+// open=true 的卡片默认展开(改动内容要一眼看到),与 TUI 的 edit / write / patch 一致。
+function toolCard(p, s, desc, counts, body, open) {
+  return (
+    '<details class="tool"' + (open ? ' open' : '') + '><summary>' +
+    toolHead(p, s, desc, counts) + '</summary>' +
+    '<div class="toolbody">' + body + '</div></details>'
   );
 }
 
 function toolHtml(p) {
   const s = statusInfo(p);
   const st = p.state || {};
+  const md = st.metadata || {};
+  const name = String(p.name || 'tool');
+  const input = st.input;
+  const files = Array.isArray(md.files) ? md.files : [];
+  const path = (input && input.path) || md.filepath || (files[0] && files[0].file) || '';
+
+  // edit / patch:服务端算好的多文件 unified diff
+  if (name === 'edit' || name === 'patch') {
+    const label = name === 'patch' ? '补丁' : '编辑';
+    if (files.length) {
+      const desc = files.length > 1 ? '← ' + files.length + ' 个文件' : '← ' + label + ' ' + path;
+      return toolCard(p, s, desc, diffCounts(files), diffHtml(files) + diagHtml(md, path), true);
+    }
+    // 还在跑:服务端尚未给出 files,只显示目标(与服务端 TUI 的「← Edit <path>」一致)
+    return '<div class="toolrow">' + toolHead(p, s, path ? '← ' + label + ' ' + path : '← 准备' + label + '…') + '</div>';
+  }
+
+  // write:正文在入参里(服务端不给 write 的 diff)
+  if (name === 'write') {
+    if (input && typeof input.content === 'string') {
+      return toolCard(p, s, '# 写入 ' + path, null, codeHtml(input.content) + diagHtml(md, path), true);
+    }
+    return '<div class="toolrow">' + toolHead(p, s, path ? '# 写入 ' + path : '# 准备写入…') + '</div>';
+  }
+
+  // question:已答时展示「问题 → 答案」
+  if (name === 'question') {
+    const qs = Array.isArray(input && input.questions) ? input.questions : [];
+    if (Array.isArray(md.answers)) {
+      let body = '<div class="qalist">';
+      for (let i = 0; i < qs.length; i++) {
+        const a = md.answers[i];
+        const ans = Array.isArray(a) && a.length ? a.join(', ') : '(未回答)';
+        body +=
+          '<div class="qa"><div class="qq">' + esc((qs[i] && qs[i].question) || '') + '</div>' +
+          '<div class="aa">' + esc(ans) + '</div></div>';
+      }
+      return toolCard(p, s, '→ 已提问 ' + qs.length + ' 个问题', null, body + '</div>', true);
+    }
+    return '<div class="toolrow">' + toolHead(p, s, '→ 提问中…') + '</div>';
+  }
+
+  if (name === 'skill') {
+    const sk = md.name || (input && input.id) || '';
+    return '<div class="toolrow">' + toolHead(p, s, sk ? '→ Skill "' + sk + '"' : '') + '</div>';
+  }
+
+  // 其它工具:摘要行 + 点开展开入参/输出(与 TUI 的通用卡片一致)
   let body = '';
-  if (st.input && Object.keys(st.input).length) {
-    body += '<pre>' + esc(JSON.stringify(st.input, null, 2)) + '</pre>';
+  if (input && (typeof input !== 'object' || Object.keys(input).length)) {
+    body += '<pre>' + esc(typeof input === 'string' ? input : JSON.stringify(input, null, 2)) + '</pre>';
   }
   if (Array.isArray(st.content)) {
     const txt = st.content.map((c) => (c && c.text) || '').join('\n').trim();
     if (txt) body += '<pre>' + esc(txt) + '</pre>';
   }
-  if (!body) return '<div class="toolrow">' + toolHead(p, s) + '</div>';
-  return '<details class="tool"><summary>' + toolHead(p, s) + '</summary>' + body + '</details>';
+  const sum = inputSummary(input);
+  const desc = sum ? '→ ' + sum : '';
+  if (!body) return '<div class="toolrow">' + toolHead(p, s, desc) + '</div>';
+  return toolCard(p, s, desc, null, body, false);
 }
 
 function renderMessage(m, opts) {
@@ -1279,18 +1496,21 @@ function renderMessages() {
       view.type === 'assistant' && !!(view.model && view.model.id) && view.model.id !== prevModel;
     if (view.type === 'assistant' && view.model && view.model.id) prevModel = view.model.id;
     // 流式消息用结构指纹做签名(不含文本长度),文本增量走 paintLiveText 局部重绘
-    const sig = (L ? 'live|' + liveSig(L) : JSON.stringify(view)) + '|' + (showModel ? '1' : '0');
+    const liveFp = L ? liveSig(L) : '';
+    const sig = (L ? 'live|' + liveFp : JSON.stringify(view)) + '|' + (showModel ? '1' : '0');
     let rec = msgEls.get(m.id);
     if (!rec) {
-      rec = { sig: sig, el: renderMessage(view, { showModel }) };
+      rec = { sig: sig, fp: liveFp, el: renderMessage(view, { showModel }) };
       msgEls.set(m.id, rec);
     } else if (rec.sig !== sig) {
       const el = renderMessage(view, { showModel });
       rec.el.replaceWith(el);
       rec.el = el;
       rec.sig = sig;
-    } else if (L) {
-      paintLiveText(rec.el, L);
+      rec.fp = liveFp;
+    } else {
+      rec.fp = liveFp;
+      if (L) paintLiveText(rec.el, L);
     }
     const anchor = prev ? prev.nextSibling : box.firstChild;
     if (rec.el !== anchor) box.insertBefore(rec.el, anchor);
@@ -2239,12 +2459,27 @@ function liveMessage(L) {
 }
 
 // 结构指纹:刻意不含文本长度,这样纯文本增量不会触发整条重建
+// 工具 metadata 的指纹:diff / 诊断会随 session.tool.progress 陆续到达,
+// 状态没变但内容变了也必须触发重绘(见 handleEvent 里的指纹比对)。
+function toolMetaSig(p) {
+  const md = p.state && p.state.metadata;
+  if (!md || typeof md !== 'object') return '';
+  const files = Array.isArray(md.files) ? md.files : null;
+  if (!files) return '';
+  return files
+    .map((f) =>
+      (f && f.status) + ':' + ((f && f.additions) | 0) + ':' + ((f && f.deletions) | 0) +
+      ':' + String((f && f.patch) || '').length
+    )
+    .join(',');
+}
+
 function liveSig(L) {
   return (
     L.parts
       .map((p) =>
         p.kind === 'tool'
-          ? 't:' + p.id + ':' + ((p.state && p.state.status) || '')
+          ? 't:' + p.id + ':' + ((p.state && p.state.status) || '') + ':' + toolMetaSig(p)
           : p.type + ':' + p.ordinal + ':' + (p.final ? 1 : 0)
       )
       .join(',') +
@@ -2422,11 +2657,17 @@ function handleEvent(e) {
   handleAskEvent(e);
   const structural = handleStreamEvent(e);
   handleControlEvent(e);
+  const d = e.data || {};
+  const L = d.assistantMessageID ? store.live.get(d.assistantMessageID) : null;
   // 有本地缓冲的文本事件才算「已经渲染过」;没有缓冲(例如中途接入时才收到 delta)
   // 就退回老的「事件触发重取」路径,不至于把内容漏掉。
-  const local = isStreamLocal(e.type) && !!store.live.get((e.data || {}).assistantMessageID || '');
-  // 结构变化(新 part / 工具状态)立刻重绘;纯文本变化只刷局部节点
-  if (structural && liveForSid(store.selected)) renderMessages();
+  const local = isStreamLocal(e.type) && !!L;
+  // 除了结构变化,「已渲染的指纹变了」也要整条重绘 —— session.tool.progress 会送来
+  // diff / 诊断,这时状态没变、parts 也没变,只有 metadata 变了。
+  const rec = L ? msgEls.get(L.id) : null;
+  const repaint = structural || (!!L && !!rec && rec.fp !== liveSig(L));
+  // 结构变化(新 part / 工具状态 / 元数据)立刻重绘;纯文本变化只刷局部节点
+  if (repaint && liveForSid(store.selected)) renderMessages();
   else if (local) paintLiveDelta();
   // 纯文本增量本地已经渲染,不需要再拉一次消息;*.ended 与其它事件保持防抖对账
   if (!(local && isStreamDelta(e.type))) {

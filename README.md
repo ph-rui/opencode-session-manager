@@ -67,6 +67,7 @@ chmod 600 ~/.config/opencode-session-manager/env
 - 管理动作:重命名、删除、移动到其它工程目录、分叉
 - 点击会话打开对话:加载历史消息、发送消息、`/api/event` SSE 实时刷新
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
+- **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
 - **会话控制**(输入框上方的工具栏):
   - **运行状态**:列表与标题栏显示 `● 运行中` / `◌ 重试中`,数据来自 `GET /api/session/active` 与 `session.status` / `session.idle` 事件
   - **中断**:运行中才出现 `■ 中断`,调用 `POST /api/session/:id/interrupt`
@@ -167,25 +168,51 @@ chmod 600 ~/.config/opencode-session-manager/env
 
 ### 增量重绘(不整条重建)
 
-- 消息签名分两种:非流式用 `JSON.stringify(消息)`,流式用**结构指纹**(part 类型 / 序号 / 工具状态 / 有无 tokens),
+- 消息签名分两种:非流式用 `JSON.stringify(消息)`,流式用**结构指纹**(part 类型 / 序号 / 工具状态 / **工具 metadata 指纹** / 有无 tokens),
   **刻意不含文本长度** —— 所以每次 delta 都不会触发整条消息重建。
 - 纯文本变化走 `paintLiveText()`:只把受影响的那个 block 节点重新渲染 Markdown,其它消息、同一条消息的其它块、
   标题行都不动(DOM 节点 identity 保持不变,已展开的 `<details>` 状态也不会丢)。
 - 纯文本增量事件(`session.text.delta` / `session.reasoning.delta`)**不再触发消息重取**,省掉每秒数次的无谓请求;
   其余事件仍保留 150ms 防抖对账。
+- `session.tool.progress` 会陆续送来工具的 `metadata`(例如 `edit` 的 diff),这时状态与 parts 都没变。
+  因此 `handleEvent` 除了看「结构变化」,还会比对**已渲染的指纹**(`msgEls` 上的 `fp`):指纹变了就补一次整条重绘。
+  metadata 没变的 progress 依旧不重绘、不重取(保持 C 组既有的「progress 不是结构变化」契约)。
 - 光标 `▌` 总是落在**最后一个文本/思考块**内部的行内末尾(直接拼在 Markdown 结果后面会掉到块级元素之外、单独占一行)。
 - 流式期间思考块自动展开(`▾ 思考`),回合结束后回落到折叠态(`▸ 思考`)—— 与服务端版本一致。
+
+## 工具卡片(diff / 代码 / 诊断)
+
+服务端在工具状态的 `metadata` 里**已经算好了改动内容**,面板只负责排版 —— 不需要额外接口,也不需要后端参与:
+
+| 工具 | `state.metadata` 里的关键字段 | 面板怎么画 |
+| --- | --- | --- |
+| `edit` / `patch` | `files: [{file, status, additions, deletions, patch}]`(`patch` 是标准 unified diff) | 摘要 `← 编辑 <路径>`(多文件写 `← N 个文件`)+ `+N -M`;正文每文件一块「状态徽标 + 路径 + 统计」+ 带**双向行号**的 diff,**默认展开** |
+| `write` | `filepath` / `exists`(正文在 `input.content`,服务端不给 diff) | 摘要 `# 写入 <路径>`;正文按行号渲染,**默认展开** |
+| 任意 | `diagnostics: {<文件绝对路径>: [{range:{start:{line,character}}, message}]}` | diff 下方逐条 `错误 [行:列] 消息` |
+| `question` | `answers`(已答时) | 列「问题 → 答案」;未答只写 `→ 提问中…` |
+| `skill` | `name` | `→ Skill "名字"` |
+
+- 摘要行的取值与 TUI 一致:按 `command|id|pattern|url|query|path|description|code` 的优先级取主键,其余标量作为补充并压平空白(`→ git log --oneline -5`)。
+- 工具名后面的标记沿用 TUI 约定:`→` 只读/查询、`←` 修改已有文件、`#` 新建(`# 写入`、`← 编辑`、`← 补丁`)。
+- 其它工具(如 `bash` / `read` / `glob`)保持原来的折叠卡片(摘要行 + 点开展开入参/输出),观感不变。
+- 工具卡片的正文整体限高内滚(`.toolbody`),diff 不折行、横向滚动,长改动不会把消息流撑爆。
+- 暂不支持(明确不做):并排 / split 视图、语法高亮、字符级行内高亮、会话级「变更」面板与 revert。
+- 一个前提假设:`metadata.diagnostics` 的形状是从服务端 TUI 的用法反推的,本机实测一直是空对象 `{}`;
+  面板按「精确路径优先、相对/绝对宽松兜底」取值,取不到就不显示(假设不成立也不会报错)。
 
 ## 尚未实现(v2+ 剩余项)
 
 文件附件。
+
+工具卡片上明确不做的:并排 / split 视图、语法高亮(`config.diffs.view` / `filetype` / `syntaxStyle`)、
+字符级行内高亮(`diffHighlightAdded` / `Removed`)、会话级「变更」面板与 revert。
 
 ## 测试
 
 前置:OpenCode 服务已运行,且本代理已启动。凭据从 `~/.config/opencode-session-manager/env` 读取(可用 `OCS_AUTH` 覆盖)。
 
 ```bash
-bash test/smoke.sh            # 代理层:健康检查/静态托管/鉴权注入/SSE/密码不外泄/顶栏结构/问询·控制·能力扩展端点与控件
+bash test/smoke.sh            # 代理层:健康检查/静态托管/鉴权注入/SSE/密码不外泄/顶栏结构/工具卡片样式/问询·控制·能力扩展端点与控件
 bash test/e2e-asks.sh         # 问询端到端(纯 curl):创建表单→应答/取消→状态核对→负例
 bash test/e2e-controls.sh     # 会话控制端到端(纯 curl):agent/model 切换、中断、inbox 改投递/取消
 OCS_E2E_LLM=1 bash test/e2e-controls.sh   # 追加真实运行中的 queue/steer/interrupt 用例(会消耗一次很小的模型调用)
@@ -196,9 +223,10 @@ node test/ui-asks-run.js      # 问询前端逻辑(无头 Firefox;缺 firefox �
 node test/ui-controls-run.js  # 会话控制前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 ```
 
-- `smoke.sh`:50 项。含顶部栏改造的 15 项结构断言:控件都在 `#topbar` 切片内,首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条,`styles.css` 主区为 `var(--list-w, 560px) 6px minmax(0, 1fr)` 且不再写死高度。
+- `smoke.sh`:53 项。含顶部栏改造的 15 项结构断言(控件都在 `#topbar` 切片内,首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条,`styles.css` 主区为 `var(--list-w, 560px) 6px minmax(0, 1fr)` 且不再写死高度)与工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`)。
 - `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
 - `e2e-capabilities.sh`:26 项。只用临时会话与 `/tmp` 临时目录,结束时全部删除;验证新建的字段落库、`PATCH metadata` 的整体替换语义、导出脱敏与否、导入的换 ID 与 `location` 重挂、以及 `409`/`400` 负例。
@@ -206,7 +234,8 @@ node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox �
 - `ui-asks-run.js`:39 项浏览器内断言(真实 `public/app.js`),覆盖字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装、本地校验分支、非 http(s) 链接不可点击。
 - `ui-controls-run.js`:83 项浏览器内断言,覆盖 agent/model 选择器的过滤与分组、切换请求体、变体显隐、中断/投递控件的显隐、运行状态文案与列表标记、待发送队列渲染与操作请求、发送时的 `delivery` 选择、事件到运行状态的映射。
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
-- `ui-stream-run.js`:96 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。
+- `ui-stream-run.js`:102 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
+- `ui-tools-run.js`:79 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平),以及 `toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」。
 
 ## 开机自启(systemd 用户服务)
 
@@ -262,3 +291,11 @@ journalctl --user -u opencode-session-manager.service -f
   `body` 纵向 flex + `main { flex:1; min-height:0 }`,顶栏一折行底部输入框就会被顶出视口。冒烟里专门断言 `calc(100vh - 43px)` 已消失。
 - 顶栏折行的临界宽度约 **1160px**:1500px 单行;1100px 会折成两行(第二行只有右侧的连接状态),此时 `main` 正确让出高度。
 - 分栏宽度存在 `localStorage`:`ocs.listW`(会话表宽度,默认 560px,双击 `#resizer-mid` 复位)。旧键 `ocs.midW` 仍会被读取一次以兼容,并在下次拖动时清掉。
+- **工具的改动内容服务端已经算好**,面板 `toolHtml()` 以前没读 `state.metadata` 才把 diff 丢了:
+  `edit` / `patch` 的 `metadata.files[] = {file, status: added|modified|deleted, additions, deletions, patch}`,`patch` 是标准 unified diff
+  (带 `Index:` 行与 `=====` 分隔行,hunk 之外有 `---`/`+++` 文件头,空上下文行是「一个空格」,末尾有换行)——解析时这四类都要照顾到。
+  `write` 只在 `state.input.content` 里有正文,`metadata` 里没有 diff。
+- `session.tool.progress` 会分多次把 `metadata` 补全(例如 `edit` 先只有参数、随后才有 `files`)。由于它同时被约定的「progress 不是结构变化」,前端靠
+  `handleEvent` 里对「已渲染指纹」的比对来补重绘,否则 diff 要等到下一次状态变化才出现。
+- `metadata.diagnostics` 的形状是按服务端 TUI 的用法反推的(`{<文件绝对路径>: [{range:{start:{line,character}}, message}]}`),
+  本机实测一直是空对象 `{}`;面板做了精确/相对宽松两种路径匹配,取不到就不显示。

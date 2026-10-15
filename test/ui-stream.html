@@ -226,6 +226,27 @@
       var rp2 = handleStreamEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_unknown', metadata: {} }));
       T('未知工具的 progress 不造卡片', rp2 === false && !view(AID).byKey['tool:call_unknown']);
 
+      /* ---------------- progress 带来 diff:状态没变也要重绘 ----------------
+         真实时序:edit 的参数先流式出来(卡片只有目标路径),服务端稍后才用
+         session.tool.progress 送来 metadata.files(diff)。这时 status / parts 都没变,
+         所以「结构指纹」必须把 metadata 也算进去,否则 diff 要拖到别的重绘才出现。 */
+      feed('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', name: 'edit' });
+      feed('session.tool.called', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', input: { path: 'default.xml' } });
+      T('edit 卡片先出现,此时还没有 diff',
+        !!el(AID) && el(AID).querySelector('.diff') === null && el(AID).textContent.indexOf('default.xml') >= 0);
+      var elBeforeDiff = el(AID);
+      var filesMeta = { files: [{ file: 'default.xml', status: 'modified', additions: 1, deletions: 1,
+        patch: '@@ -1,2 +1,2 @@\n-a\n+b\n' }], truncated: false };
+      var rpDiff = handleStreamEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: filesMeta }));
+      T('带 diff 的 progress 仍不算结构变化', rpDiff === false);
+      T('指纹把 metadata 算进去了', toolMetaSig(view(AID).byKey['tool:call_e']).length > 0);
+      handleEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: filesMeta }));
+      T('progress 送来的 diff 立刻上屏(消息被重绘)', el(AID) !== elBeforeDiff);
+      T('diff 行渲染进 DOM', !!el(AID).querySelector('.diff .dl.add') && !!el(AID).querySelector('.diff .dl.del'));
+      var elAfterDiff = el(AID);
+      handleEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: filesMeta }));
+      T('metadata 没变的 progress 不重建 DOM', el(AID) === elAfterDiff);
+
       /* ---------------- step.ended:用量 ---------------- */
       feed('session.step.ended', { sessionID: 'ses_a', assistantMessageID: AID, finish: 'stop', cost: 0.012,
         tokens: { input: 100, output: 42, reasoning: 7, cache: { read: 0, write: 0 } } });

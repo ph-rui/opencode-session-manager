@@ -10,6 +10,19 @@
   --ok: #388a34;
   --bad: #e51400;
   --danger: #d13438;
+  /* 工具卡片里的改动内容(diff);对应 TUI 的 diff.background.* / diff.highlight.* */
+  --diff-add-bg: #e6ffec;
+  --diff-add-ln: #ccffd8;
+  --diff-add-fg: #1a7f37;
+  --diff-del-bg: #ffebe9;
+  --diff-del-ln: #ffd7d5;
+  --diff-del-fg: #cf222e;
+  --diff-ctx-bg: #f6f8fa;
+  --diff-ln-bg: #f6f8fa;
+  --diff-ln-fg: #6e7781;
+  --diff-hunk-bg: #ddf4ff;
+  --diff-hunk-fg: #0550ae;
+  --diff-rule: #e3e3e3;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
 }
 
@@ -261,6 +274,105 @@ table#list { width: 100%; border-collapse: collapse; }
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ---------------- 工具卡片里的改动内容(diff / 代码 / 诊断) ---------------- */
+
+/* 摘要行:工具名后面的上下文摘要与增删统计 */
+.tool .tdesc, .toolrow .tdesc {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.tool .tadd, .toolrow .tadd { flex: none; color: var(--diff-add-fg); font-size: 11px; }
+.tool .tdel, .toolrow .tdel { flex: none; color: var(--diff-del-fg); font-size: 11px; }
+
+/* 正文整体限高内滚:长改动不会把消息流撑爆 */
+.toolbody { margin: 4px 0 2px; max-height: 420px; overflow: auto; }
+
+/* 文件头:状态徽标 + 路径 + 增删统计 */
+.dfile {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 2px 6px;
+  background: var(--diff-ctx-bg);
+  border: 1px solid var(--diff-rule);
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  font-size: 11.5px;
+}
+.toolbody > .dfile:first-child { margin-top: 0; }
+.dbadge { flex: none; padding: 0 5px; border-radius: 3px; font-size: 10.5px; color: #fff; }
+.dbadge.add { background: var(--diff-add-fg); }
+.dbadge.del { background: var(--diff-del-fg); }
+.dbadge.mod { background: #8250df; }
+.dpath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-family: var(--mono);
+}
+.dnote { padding: 3px 6px; font-size: 11px; color: var(--diff-del-fg); }
+
+/* 统一视图正文:行号列 + 符号列 + 源码列,不折行、横向滚动 */
+.diff {
+  background: #fff;
+  border: 1px solid var(--diff-rule);
+  border-radius: 0 0 5px 5px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.diff:first-child { border-radius: 5px; }
+.dl { display: flex; align-items: stretch; white-space: pre; }
+.dl .ln {
+  flex: none;
+  width: 3.4em;
+  padding: 0 4px;
+  text-align: right;
+  color: var(--diff-ln-fg);
+  background: var(--diff-ln-bg);
+  border-right: 1px solid var(--diff-rule);
+  user-select: none;
+}
+.dl .sign { flex: none; width: 1.2em; text-align: center; color: var(--diff-ln-fg); user-select: none; }
+.dl .src { flex: 1 1 auto; padding-right: 10px; color: var(--fg); }
+.dl.add { background: var(--diff-add-bg); }
+.dl.add .ln, .dl.add .sign { background: var(--diff-add-ln); color: var(--diff-add-fg); }
+.dl.del { background: var(--diff-del-bg); }
+.dl.del .ln, .dl.del .sign { background: var(--diff-del-ln); color: var(--diff-del-fg); }
+.dl.hunk { background: var(--diff-hunk-bg); }
+.dl.hunk .src { color: var(--diff-hunk-fg); }
+.dl.hunk .ln, .dl.hunk .sign { background: transparent; }
+.dl.meta .src { color: var(--muted); font-style: italic; }
+.dl.meta .ln, .dl.meta .sign { background: transparent; }
+/* write 的正文只有一列行号 */
+.diff.code .dl .ln.o { display: none; }
+
+/* 诊断(服务端按文件路径给出,这里只挑出本文件的) */
+.ddiag { margin-top: 4px; }
+.ddiag .dline {
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--bad);
+  white-space: pre-wrap;
+}
+
+/* question 工具:问题 → 答案 */
+.qalist { padding: 2px 0; }
+.qalist .qa { margin: 3px 0; }
+.qalist .qq { font-size: 11px; color: var(--muted); }
+.qalist .aa { font-size: 12px; color: var(--fg); }
 
 /* 思考 */
 .reasoning { margin: 6px 0; }

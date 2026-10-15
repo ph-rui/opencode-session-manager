@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>tools unit</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar"><div class="brand">t</div>
+    <label class="f"><span>搜索</span><input id="search"></label>
+    <label class="f"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f"><span>排序</span><select id="order"></select></label>
+    <div class="lbtools"><button id="btnNew">+ 新建</button><button id="btnImport">导入</button><button id="refresh">刷新</button></div>
+    <label class="chk"><input type="checkbox" id="showArchived"></label>
+    <span id="count"></span><span id="archivedCount"></span>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '工具卡片会话', projectID: 'pj1', time: { created: 1, updated: 5 },
+        tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+    ];
+    var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+
+    window.SERVER = { 'ses_a': [] };
+    window.__realFetch = window.fetch.bind(window);
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function (fn, ms) { window.__timeouts.push(ms); return 0; };
+    window.clearTimeout = function () {};
+    window.__timeouts = [];
+    window.__pending = function (ms) { return window.__timeouts.filter(function (m) { return m === ms; }).length; };
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var AID = 'msg_t1';
+    var ev = function (type, data) { return { id: 'evt_x', type: type, data: data }; };
+    var feed = function (type, data) { handleEvent(ev(type, data)); };
+    var view = function (id) { return liveView(id); };
+    var el = function (id) { var r = msgEls.get(id); return r && r.el; };
+
+    /* 一条真实的 edit patch(与面板在跑的 opencode 服务给的一模一样:
+       有 Index: / === 分隔行,空上下文行是「空格」,末尾换行) */
+    var REAL_PATCH =
+      'Index: default.xml\n' +
+      '===================================================================\n' +
+      '--- default.xml\n' +
+      '+++ default.xml\n' +
+      '@@ -1,18 +1,18 @@\n' +
+      ' <?xml version="1.0" encoding="UTF-8"?>\n' +
+      ' <manifest>\n' +
+      ' \n' +
+      '-\t<remote name="origin" fetch="." />\n' +
+      '+\t<remote name="origin" fetch="." review="gerrit" />\n' +
+      ' <default revision="refs/tags/v6.12.49" remote="origin" />\n' +
+      ' <project name="linux" path="linux" />\n';
+
+    var files = [{
+      file: 'default.xml', status: 'modified', additions: 1, deletions: 1, patch: REAL_PATCH,
+    }];
+
+    try {
+      /* ================= parsePatch ================= */
+      var rows = parsePatch(REAL_PATCH);
+      var kinds = rows.map(function (r) { return r.k; });
+      var dels = rows.filter(function (r) { return r.k === 'del'; });
+      var adds = rows.filter(function (r) { return r.k === 'add'; });
+      var ctxs = rows.filter(function (r) { return r.k === 'ctx'; });
+      T('parsePatch:文件头与分隔行不进正文', kinds.indexOf('file') < 0 && kinds.indexOf('meta') < 0, kinds);
+      T('parsePatch:第一条是 hunk', rows[0].k === 'hunk' && rows[0].text === '@@ -1,18 +1,18 @@', rows[0]);
+      T('parsePatch:正文 = hunk + 5 上下文 + 1 删 + 1 增', rows.length === 8, rows.length);
+      T('parsePatch:删除行只有旧行号', dels.length === 1 && dels[0].oldNo === 4 && dels[0].newNo === null, dels[0]);
+      T('parsePatch:新增行只有新行号', adds.length === 1 && adds[0].oldNo === null && adds[0].newNo === 4, adds[0]);
+      T('parsePatch:上下文行双向行号同步', ctxs[0].oldNo === 1 && ctxs[0].newNo === 1, ctxs[0]);
+      T('parsePatch:增删之后行号继续对齐',
+        ctxs[ctxs.length - 1].oldNo === 6 && ctxs[ctxs.length - 1].newNo === 6, ctxs[ctxs.length - 1]);
+      T('parsePatch:空上下文行(单空格)不被丢掉',
+        ctxs[2].text === '' && ctxs[2].oldNo === 3 && ctxs[2].newNo === 3, ctxs[2]);
+      T('parsePatch:末尾换行不产生幽灵行',
+        parsePatch('@@ -1,1 +1,1 @@\n-a\n+b\n').length === 3,
+        parsePatch('@@ -1,1 +1,1 @@\n-a\n+b\n'));
+      T('parsePatch:没有 hunk 的文件头返回空数组', parsePatch('Index: x\n===\n--- x\n+++ x\n').length === 0);
+      T('parsePatch:空值不炸', parsePatch(null).length === 0 && parsePatch(undefined).length === 0);
+
+      /* ================= diffHtml ================= */
+      var dh = diffHtml(files);
+      T('diffHtml:带状态徽标「修改」', dh.indexOf('dbadge mod') >= 0 && dh.indexOf('修改') >= 0);
+      T('diffHtml:显示文件路径', dh.indexOf('default.xml') >= 0);
+      T('diffHtml:统计用服务端的 additions', dh.indexOf('>+1<') >= 0, dh);
+      T('diffHtml:统计用服务端的 deletions', dh.indexOf('>-1<') >= 0, dh);
+      T('diffHtml:增删行各带类名',
+        dh.indexOf('dl add') >= 0 && dh.indexOf('dl del') >= 0 && dh.indexOf('dl hunk') >= 0);
+      var dh2 = diffHtml([
+        { file: 'a.json', status: 'added', additions: 4, deletions: 0, patch: 'Index: a.json\n===\n--- a.json\n+++ a.json\n@@ -0,0 +1,1 @@\n+{}\n' },
+        { file: 'b.json', status: 'deleted', additions: 0, deletions: 3, patch: '' },
+      ]);
+      T('diffHtml:多文件各有一块文件头', qaOf(dh2, 'dfile') === 2, qaOf(dh2, 'dfile'));
+      T('diffHtml:added 徽标是「新建」', dh2.indexOf('dbadge add') >= 0);
+      T('diffHtml:deleted 徽标是「删除」', dh2.indexOf('dbadge del') >= 0);
+      T('diffHtml:没有 patch 的删除文件退化为「- N 行」', dh2.indexOf('dnote') >= 0 && dh2.indexOf('- 3 行') >= 0, dh2);
+      T('diffHtml:空数组返回空串', diffHtml([]) === '' && diffHtml(null) === '');
+
+      /* ================= codeHtml(write 正文) ================= */
+      var ch = codeHtml('a\nb\nc\n');
+      T('codeHtml:去掉末尾换行带来的空行', qaOf(ch, 'dl') === 3, qaOf(ch, 'dl'));
+      T('codeHtml:行号从 1 开始', ch.indexOf('>1</span>') >= 0);
+      T('codeHtml:整块带 code 类(只有一列行号)', ch.indexOf('diff code') >= 0);
+      T('codeHtml:空内容不炸', codeHtml('') === '<div class="diff code"></div>', codeHtml(''));
+
+      /* ================= diagHtml ================= */
+      var diag = { '/work/src/lcd.c': [{ range: { start: { line: 13, character: 8 } }, message: 'implicit declaration' }] };
+      var dgh = diagHtml({ diagnostics: diag }, '/work/src/lcd.c');
+      T('diagHtml:精确路径命中', dgh.indexOf('implicit declaration') >= 0, dgh);
+      T('diagHtml:行列号从 0 基转 1 基', dgh.indexOf('[14:9]') >= 0, dgh);
+      T('diagHtml:相对路径也能宽松命中',
+        diagHtml({ diagnostics: diag }, 'src/lcd.c').indexOf('implicit declaration') >= 0);
+      T('diagHtml:没有诊断时返回空串', diagHtml({ diagnostics: {} }, 'x') === '' && diagHtml({}, 'x') === '');
+      T('diagHtml:路径对不上时不误报', diagHtml({ diagnostics: diag }, '/work/other.c') === '');
+
+      /* ================= inputSummary ================= */
+      /* 与服务端 TUI 的取值方式一致:主键值在前,其余标量作为补充;最后压平空白 */
+      T('inputSummary:command 优先',
+        inputSummary({ command: 'ls -l', description: '列目录' }) === 'ls -l description: 列目录',
+        inputSummary({ command: 'ls -l', description: '列目录' }));
+      T('inputSummary:没有主键时按出现顺序拼标量',
+        inputSummary({ foo: 1, bar: true }) === 'foo: 1 bar: true', inputSummary({ foo: 1, bar: true }));
+      T('inputSummary:字符串入参原样返回', inputSummary('echo hello') === 'echo hello');
+      T('inputSummary:压平换行',
+        inputSummary({ command: 'a\n  b' }) === 'a b', inputSummary({ command: 'a\n  b' }));
+      T('inputSummary:无标量时为空', inputSummary({ a: { b: 1 } }) === '');
+      T('inputSummary:null 为空', inputSummary(null) === '' && inputSummary(undefined) === '');
+
+      /* ================= toolHtml:edit ================= */
+      var editPart = { type: 'tool', id: 'c1', name: 'edit',
+        state: { status: 'completed', input: { path: 'default.xml', oldString: 'a', newString: 'b' },
+          content: [{ type: 'text', text: 'ok' }], metadata: { files: files, truncated: false } } };
+      var eh = toolHtml(editPart);
+      T('toolHtml(edit):摘要写「← 编辑 <路径>」', eh.indexOf('← 编辑 default.xml') >= 0, eh.slice(0, 300));
+      T('toolHtml(edit):摘要带增删统计', eh.indexOf('tadd">+1') >= 0 && eh.indexOf('tdel">-1') >= 0);
+      T('toolHtml(edit):默认展开', eh.indexOf('<details class="tool" open>') === 0, eh.slice(0, 60));
+      T('toolHtml(edit):正文有 diff', eh.indexOf('<div class="diff">') >= 0 && eh.indexOf('dl add') >= 0);
+      T('toolHtml(edit):不再把原始入参 JSON 铺开', eh.indexOf('oldString') < 0, eh);
+
+      row('edit', eh);
+
+      /* edit 运行中:服务端还没给出 files,只显示目标(不能退化成通用摘要) */
+      var editRun = { type: 'tool', id: 'c2', name: 'edit',
+        state: { status: 'running', input: { path: 'src/main.c', oldString: 'x', newString: 'y' }, metadata: {} } };
+      var erh = toolHtml(editRun);
+      T('toolHtml(edit 运行中):只写目标路径', erh.indexOf('← 编辑 src/main.c') >= 0, erh);
+      T('toolHtml(edit 运行中):不泄漏 oldString/newString', erh.indexOf('oldString') < 0, erh);
+      T('toolHtml(edit 运行中):没有正文因此不是 details',
+        erh.indexOf('class="toolrow"') >= 0 && erh.indexOf('<details') < 0, erh);
+
+      /* edit 带诊断 */
+      var editDiag = { type: 'tool', id: 'c3', name: 'edit',
+        state: { status: 'completed', input: { path: '/work/src/lcd.c' },
+          metadata: { files: [{ file: '/work/src/lcd.c', status: 'modified', additions: 1, deletions: 1,
+            patch: '@@ -1,2 +1,2 @@\n-a\n+b\n' }],
+            diagnostics: diag } } };
+      T('toolHtml(edit):诊断跟在 diff 后面上屏',
+        toolHtml(editDiag).indexOf('implicit declaration') >= 0);
+
+      /* ================= toolHtml:write ================= */
+      var writePart = { type: 'tool', id: 'c4', name: 'write',
+        state: { status: 'completed', input: { path: 'docs/a.md', content: '# 标题\n\n正文\n' },
+          content: [{ type: 'text', text: 'Wrote' }],
+          metadata: { filepath: 'docs/a.md', exists: false, diagnostics: {} } } };
+      var wh = toolHtml(writePart);
+      T('toolHtml(write):摘要写「# 写入 <路径>」', wh.indexOf('# 写入 docs/a.md') >= 0, wh);
+      T('toolHtml(write):默认展开', wh.indexOf('<details class="tool" open>') === 0);
+      T('toolHtml(write):写进正文的内容带行号', wh.indexOf('diff code') >= 0 && wh.indexOf('标题') >= 0);
+      var writeRun = { type: 'tool', id: 'c5', name: 'write', state: { status: 'streaming', input: {}, metadata: {} } };
+      T('toolHtml(write 运行中):不显示空正文',
+        toolHtml(writeRun).indexOf('toolrow') >= 0 && toolHtml(writeRun).indexOf('<details') < 0);
+
+      row('write', wh);
+
+      /* ================= toolHtml:patch(多文件) ================= */
+      var patchPart = { type: 'tool', id: 'c6', name: 'patch',
+        state: { status: 'completed', input: { patchText: '*** Begin Patch' }, content: [],
+          metadata: { files: [
+            { file: 'a.json', status: 'added', additions: 1, deletions: 0, patch: 'Index: a.json\n===\n--- a.json\n+++ a.json\n@@ -0,0 +1,1 @@\n+{}\n' },
+            { file: 'b.json', status: 'deleted', additions: 0, deletions: 3, patch: '' },
+          ] } } };
+      var ph = toolHtml(patchPart);
+      T('toolHtml(patch):多文件摘要写「← N 个文件」', ph.indexOf('← 2 个文件') >= 0, ph.slice(0, 300));
+      T('toolHtml(patch):汇总增删统计', ph.indexOf('tadd">+1') >= 0 && ph.indexOf('tdel">-3') >= 0);
+      T('toolHtml(patch):两个文件各一块', qaOf(ph, 'dfile') === 2, qaOf(ph, 'dfile'));
+      T('toolHtml(patch):默认展开', ph.indexOf('<details class="tool" open>') === 0);
+
+      row('patch', ph);
+
+      /* ================= toolHtml:question / skill ================= */
+      var qPart = { type: 'tool', id: 'c7', name: 'question',
+        state: { status: 'completed', input: { questions: [{ question: '改哪些文件?' }, { question: '是否全跟?' }] },
+          content: [], metadata: { answers: [['default.xml'], ['是']] } } };
+      var qh = toolHtml(qPart);
+      T('toolHtml(question 已答):摘要写「已提问 N 个问题」', qh.indexOf('→ 已提问 2 个问题') >= 0, qh);
+      T('toolHtml(question 已答):列出问题', qh.indexOf('改哪些文件?') >= 0 && qh.indexOf('是否全跟?') >= 0);
+      T('toolHtml(question 已答):列出答案', qh.indexOf('default.xml') >= 0 && qh.indexOf('>是<') >= 0, qh);
+      var qpend = { type: 'tool', id: 'c8', name: 'question',
+        state: { status: 'running', input: { questions: [{ question: 'x' }] }, metadata: {} } };
+      T('toolHtml(question 未答):只写「提问中…」', toolHtml(qpend).indexOf('→ 提问中…') >= 0);
+      var skillPart = { type: 'tool', id: 'c9', name: 'skill',
+        state: { status: 'completed', input: { id: 'brainstorming' }, content: [], metadata: { name: 'brainstorming' } } };
+      T('toolHtml(skill):写「→ Skill "名字"」',
+        toolHtml(skillPart).indexOf('→ Skill &quot;brainstorming&quot;') >= 0, toolHtml(skillPart));
+
+      /* ================= toolHtml:通用工具 ================= */
+      var bashPart = { type: 'tool', id: 'c10', name: 'bash',
+        state: { status: 'completed', input: { command: 'git log --oneline -5', description: '看提交' },
+          content: [{ type: 'text', text: '8546aa617 fix\n' }], metadata: { exit: 0 } } };
+      var bh = toolHtml(bashPart);
+      T('toolHtml(通用):摘要取 command', bh.indexOf('→ git log --oneline -5') >= 0, bh);
+      T('toolHtml(通用):默认折叠(保留点开看细节)', bh.indexOf('<details class="tool"') === 0 && bh.indexOf(' open>') < 0, bh.slice(0, 60));
+      T('toolHtml(通用):入参仍在 pre 里', bh.indexOf('<pre>') >= 0 && bh.indexOf('echo') < 0 && bh.indexOf('git log') >= 0);
+      var bare = { type: 'tool', id: 'c11', name: 'read',
+        state: { status: 'completed', input: {}, content: [] } };
+      T('toolHtml(通用):无入参无输出时是单行', toolHtml(bare).indexOf('class="toolrow"') >= 0);
+
+      /* ================= toolMetaSig ================= */
+      T('toolMetaSig:无 metadata 为空', toolMetaSig({ state: {} }) === '');
+      T('toolMetaSig:无 files 为空', toolMetaSig({ state: { metadata: { exit: 0 } } }) === '');
+      var s1 = toolMetaSig({ state: { metadata: { files: files } } });
+      T('toolMetaSig:有 files 时非空', s1.length > 0, s1);
+      var s2 = toolMetaSig({ state: { metadata: { files: [{ file: 'default.xml', status: 'modified', additions: 2, deletions: 1, patch: REAL_PATCH + '+x\n' }] } } });
+      T('toolMetaSig:内容变了指纹就变', s1 !== s2, [s1, s2]);
+
+      /* ================= 事件驱动:progress 带来 diff 要立刻重绘 ================= */
+      SESSIONS.forEach(function (s) { store.sessions.set(s.id, s); });
+      renderSessions();
+      await selectSession('ses_a');
+      feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: AID, started: 300,
+        model: { id: 'deepseek-v4-flash', providerID: 'company' } });
+      feed('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', name: 'edit' });
+      feed('session.tool.called', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', input: { path: 'default.xml' } });
+      renderMessages();
+      T('运行中的 edit 卡片已出现', !!el(AID).querySelector('details.tool, .toolrow'));
+      T('此时还没有 diff(服务端未给 files)', el(AID).querySelector('.diff') === null);
+
+      var elBefore = el(AID);
+      // 直接调 handleStreamEvent:只改数据、不做重绘决策(progress 依旧「不是结构变化」)
+      var rp = handleStreamEvent(ev('session.tool.progress', {
+        sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: { files: files, truncated: false },
+      }));
+      T('tool.progress 本身仍不算「结构变化」', rp === false);
+      T('tool.progress 只改数据时不会凭空重绘', el(AID) === elBefore);
+      T('tool.progress 之后指纹变了(metadata 进了指纹)',
+        !!view(AID) && toolMetaSig(view(AID).byKey['tool:call_e']).length > 0);
+      // 再走一遍完整事件通道:handleEvent 会比对「已渲染指纹」,于是补一次重绘
+      handleEvent(ev('session.tool.progress', {
+        sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: { files: files, truncated: false },
+      }));
+      T('tool.progress 之后消息被重绘(diff 立刻上屏)', el(AID) !== elBefore);
+      T('diff 真的渲染进了 DOM', !!el(AID).querySelector('.diff .dl.add'));
+      T('文件头也渲染进了 DOM', !!el(AID).querySelector('.dfile .dpath'));
+      T('行号列渲染出来', el(AID).querySelector('.dl.add .ln.n').textContent === '4',
+        el(AID).querySelector('.dl.add .ln.n') && el(AID).querySelector('.dl.add .ln.n').textContent);
+      T('摘要里的增删统计上屏', el(AID).querySelector('.tdesc').textContent.indexOf('← 编辑') >= 0,
+        el(AID).querySelector('.tdesc') && el(AID).querySelector('.tdesc').textContent);
+
+      /* 若 metadata 没变,不该因为一条 progress 就整条重建 */
+      var elAfter = el(AID);
+      handleEvent(ev('session.tool.progress', {
+        sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: { files: files, truncated: false },
+      }));
+      T('metadata 没变的 progress 不重建 DOM', el(AID) === elAfter);
+
+      /* success 把状态推到已完成,摘要同时保留 diff */
+      feed('session.tool.success', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e',
+        content: [{ type: 'text', text: 'ok' }], metadata: { files: files, truncated: false } });
+      T('成功后状态变已完成', statusInfo(view(AID).byKey['tool:call_e']).cls === 'ok');
+      T('成功后 diff 仍在', !!el(AID).querySelector('.diff'));
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post(out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post(out.join('\n') + '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) +
+           ' stack=' + (e && e.stack));
+    }
+
+    /* 统计字符串里某个类名出现几次(不引入 DOM 解析依赖) */
+    function qaOf(html, cls) {
+      var re = new RegExp('class="[^"]*\\b' + cls + '\\b', 'g');
+      return (String(html).match(re) || []).length;
+    }
+    /* 把一张卡片塞进消息流里,顺便验证它在真实消息容器里的样子 */
+    function row(tag, html) {
+      var d = document.createElement('div');
+      d.id = 'row_' + tag;
+      d.className = 'msg assistant';
+      d.innerHTML = html;
+      q('#messages').appendChild(d);
+    }
+  })();
+  </script>
+</body>
+</html>
