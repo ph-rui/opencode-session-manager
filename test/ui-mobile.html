@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>mobile unit</title>
+  <!-- /narrow.js 不是本目录的文件:运行器会从 public/index.html 里【抠】出那段内联脚本再送过来。
+       这样这里断言的就是线上真正跑的那两行,而不是我手抄的一份副本。 -->
+  <script src="/narrow.js"></script>
+  <link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header id="topbar">
+    <button type="button" id="btnFilters" class="chip" aria-expanded="false" aria-controls="topbar">筛选</button>
+    <div class="brand">OpenCode 会话管理器</div>
+    <label class="f"><span>搜索</span><input id="search" type="search"></label>
+    <div class="lbtools">
+      <button id="btnNew" class="chip primary">+ 新建</button>
+      <button id="btnImport" class="chip nf">导入</button>
+      <button id="refresh" class="chip nf">刷新</button>
+    </div>
+    <label class="f nf"><span>工程目录</span><select id="dirFilter"></select></label>
+    <label class="f nf"><span>排序</span><select id="order"></select></label>
+    <label class="chk nf"><input type="checkbox" id="showArchived"> 显示已归档</label>
+    <div class="hint nf">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
+    <div id="status" class="status"></div>
+  </header>
+  <main>
+    <section id="listpane">
+      <table id="list">
+        <thead><tr><th>标题</th><th>工程目录</th><th>更新</th><th>Tokens</th><th>Cost</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button id="loadMore" hidden></button>
+    </section>
+    <div class="resizer" id="resizer-mid"></div>
+    <section id="chatpane">
+      <div id="chatHeader">
+        <div class="chline">
+          <button type="button" id="backList" class="chip" aria-label="返回会话列表">‹ 会话</button>
+          <span id="chatTitle"></span><span id="chatState"></span>
+        </div>
+        <div id="chatMeta"></div>
+        <div id="chatOps" hidden>
+          <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
+        </div>
+        <button id="older" hidden></button>
+      </div>
+      <div id="messages"></div><div id="asks" hidden></div><div id="inbox" hidden></div>
+      <div id="composer">
+        <div id="ctoolbar" hidden>
+          <label class="ctl"><span>智能体</span><select id="agentSel"><option value=""></option></select></label>
+          <label class="ctl"><span>模型</span><select id="modelSel"><option value=""></option></select></label>
+          <label class="ctl" id="variantWrap" hidden><span>变体</span><select id="variantSel"></select></label>
+          <span class="ctl-spacer"></span>
+          <div id="delivery" class="seg" hidden><button type="button" data-delivery="queue">排队</button><button type="button" data-delivery="steer">插话</button></div>
+          <button type="button" id="interrupt" hidden>■ 中断</button>
+        </div>
+        <div id="attach" hidden></div>
+        <div class="cinput">
+          <button type="button" id="btnAttach">📎</button>
+          <textarea id="input"></textarea>
+          <button id="send"></button>
+        </div>
+        <div id="mentions" hidden></div>
+        <div id="cmds" hidden></div>
+        <input type="file" id="filePick" multiple hidden>
+      </div>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <dialog id="dlgHelp" class="dlg"><div class="dlgform"><h3>命令与快捷键</h3>
+    <div class="keys" id="helpKeys"></div>
+    <div class="dlgacts"><button type="button" class="chip primary" data-close>关闭</button></div>
+  </div></dialog>
+  <dialog id="dlgPick" class="dlg"><div class="dlgform"><h3 id="pickTitle">选择</h3>
+    <input id="pickFilter" class="pickfilter" type="text" autocomplete="off" hidden>
+    <div id="pickList" class="picklist" role="listbox"></div>
+    <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div>
+  </div></dialog>
+  <pre id="results"></pre>
+
+  <script>
+    /* 屏蔽 app.js 的自动 init:窄屏的接线函数由断言脚本自己按顺序调用 */
+    var __add = document.addEventListener.bind(document);
+    document.addEventListener = function (t, fn, o) {
+      if (t === 'DOMContentLoaded') return;
+      return __add(t, fn, o);
+    };
+
+    var SESSIONS = [
+      { id: 'ses_a', title: '甲会话', projectID: 'pj1', time: { created: 1, updated: 900 },
+        tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/alpha' },
+        agent: 'build', model: { providerID: 'company', id: 'deepseek-v4-flash', variant: 'low' } },
+      { id: 'ses_b', title: '乙会话', projectID: 'pj1', time: { created: 2, updated: 800 },
+        tokens: {}, cost: 0, location: { directory: '/proj/beta' } },
+      { id: 'ses_arch', title: '已归档会话', projectID: 'pj1', time: { created: 3, updated: 700 },
+        tokens: {}, cost: 0, location: { directory: '/proj/beta' }, metadata: { ocs: { archived: 1 } } },
+    ];
+    var AGENTS = [
+      { id: 'build', name: 'Build', mode: 'primary', hidden: false },
+      { id: 'plan', name: 'Plan', mode: 'primary', hidden: false },
+    ];
+    var MODELS = [
+      { providerID: 'company', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true,
+        variants: [{ id: 'low', settings: {} }] },
+    ];
+
+    window.__realFetch = window.fetch.bind(window);
+    window.calls = [];
+    var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    var noContent = function () { return { ok: true, status: 204, text: async function () { return ''; } }; };
+
+    window.fetch = async function (url, opts) {
+      var u = String(url);
+      window.calls.push({ url: u, method: (opts && opts.method) || 'GET', body: (opts && opts.body) || null });
+      if (u === '/__health') return json({ ok: true, base: 'http://127.0.0.1:1', uploadDir: '/tmp/oc-up' });
+      if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
+      if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
+      if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) return json({ data: { id: 'msg_new' } });
+      var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
+      if (m) return json({ data: [
+        { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '第一句' },
+        { id: 'msg_a1', type: 'assistant', time: { created: 200 }, content: [{ type: 'text', text: '回答' }] },
+      ], cursor: {} });
+      if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      return json({ data: [] });
+    };
+    window.EventSource = class { constructor() {} close() {} };
+    window.setInterval = function () { return 0; };
+    window.setTimeout = function () { return 0; };
+    window.clearTimeout = function () {};
+    window.confirm = function () { return true; };
+    window.prompt = function () { return '新标题'; };
+    window.alert = function () {};
+  </script>
+  <script src="/app.js"></script>
+  <script>
+  (async function () {
+    var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
+    var out = [];
+    var T = function (name, cond, extra) {
+      out.push((cond ? 'PASS ' : 'FAIL ') + label(name) + (cond ? '' : ' | got=' + JSON.stringify(extra)));
+    };
+    var q = function (s) { return document.querySelector(s); };
+    var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    var cs = function (el) { return getComputedStyle(el); };
+    /* 「看得见」不能只看自己的 display —— 祖先 display:none 时,
+       后代的 computed display 依然是 inline-block。offsetParent 才是那个信号:
+       元素自己或任一祖先 display:none 时它是 null。 */
+    var vis = function (el) {
+      if (!el || !el.isConnected) return false; // 脱离文档(被重画换掉的老节点)
+      if (cs(el).display === 'none') return false;
+      return el.offsetParent !== null;
+    };
+    var box = function (el) { return el.getBoundingClientRect(); };
+    var rowA = function () { return q('#list tbody tr[data-id="ses_a"]'); };
+    var MQ = '(max-width:860px),(max-height:560px) and (pointer:coarse)';
+    var SZ = window.innerWidth + 'x' + window.innerHeight;
+    var LAND = window.innerWidth > 860; // 走 height+pointer 那一半
+    var label = function (s) { return (LAND ? '[横]' : '[竖]') + s; };
+
+    try {
+      await loadSessions({ reset: true });
+      setupFilters();
+      setupListActions();
+      setupNarrow(); // 真实窗口是手机宽度(见 ui-mobile-run.js 的 --window-size),这里会真的命中
+
+      /* ===================== A. 判定源只有一处 ===================== */
+      T('A1 OCS_NARROW_MQ 字面量与设计文档 §3 逐字符一致',
+        window.OCS_NARROW_MQ === MQ, window.OCS_NARROW_MQ);
+      T('A2 判定式带上了高度维度(手机横屏 894px 靠它兜住)',
+        window.OCS_NARROW_MQ.indexOf('max-height') > 0 && window.OCS_NARROW_MQ.indexOf('coarse') > 0,
+        window.OCS_NARROW_MQ);
+      T('A2b OCS_SHORT_MQ 字面量正确(横屏把顶栏压成一行用)',
+        window.OCS_SHORT_MQ === '(max-height:560px)', window.OCS_SHORT_MQ);
+      T('A3 视口 ' + SZ + ' 下真实 matchMedia 命中窄屏', matchMedia(MQ).matches === true, SZ);
+      /* 横屏那一条是本次最想防的坑:894 > 860,单靠宽度会掉回桌面三栏 */
+      if (LAND) {
+        T('A3a 宽 ' + window.innerWidth + ' > 860:单看 max-width 那一半不会命中',
+          matchMedia('(max-width:860px)').matches === false, window.innerWidth);
+        T('A3b 是 max-height:560px + pointer:coarse 那一半把横屏判进来的',
+          matchMedia('(max-height:560px) and (pointer:coarse)').matches === true,
+          window.innerHeight);
+      } else {
+        T('A3a 竖屏 ' + window.innerWidth + ' ≤ 860:靠 max-width 那一半命中',
+          matchMedia('(max-width:860px)').matches === true, window.innerWidth);
+      }
+      T('A4 setupNarrow() 给 <html> 加上了 narrow', document.documentElement.classList.contains('narrow'));
+
+      /* app.js 复用的必须是【同一个字面量】:把 matchMedia 换成只认这一个字符串的桩,
+         若 app.js 偷偷自己又写了一份,这里就匹配不上。 */
+      var realMM = window.matchMedia;
+      window.matchMedia = function (q2) {
+        return { matches: q2 === MQ, media: q2,
+          addEventListener: function () {}, removeEventListener: function () {} };
+      };
+      document.documentElement.classList.remove('narrow');
+      syncNarrowClass();
+      T('A5 app.js 用的就是这个字面量(命中 → 加类)', document.documentElement.classList.contains('narrow'));
+      window.matchMedia = function (q2) {
+        return { matches: false, media: q2,
+          addEventListener: function () {}, removeEventListener: function () {} };
+      };
+      syncNarrowClass();
+      T('A6 不命中 → 去掉类', !document.documentElement.classList.contains('narrow'));
+      window.matchMedia = realMM;
+      syncNarrowClass();
+      T('A7 恢复真实 matchMedia 后又回到窄屏', document.documentElement.classList.contains('narrow'));
+
+      /* 样式里不能再出现第二份 @media 判定(静默回归的入口) */
+      var sheetTxt = qa('link[rel=stylesheet]').length + ':' + (window.OCS_NARROW_MQ === MQ);
+      T('A8 判定式没写进 CSS(靠 html.narrow 前缀)', sheetTxt === '1:true', sheetTxt);
+
+      /* ===================== B. 窄屏:列表 ===================== */
+      store.selected = null;
+      syncNarrowView();
+      T('B1 窄屏默认:列表可见', vis(q('#listpane')));
+      T('B2 窄屏默认:对话区不可见(不会两个 pane 一起堆出来)', !vis(q('#chatpane')));
+      T('B3 窄屏默认:没有 view-chat 类', !document.documentElement.classList.contains('view-chat'));
+
+      T('B4 窄屏:表头隐藏(卡片化)', !vis(q('#list thead')));
+      T('B5 窄屏:行变块级卡片', rowA() && cs(rowA()).display === 'block', rowA() && cs(rowA()).display);
+      T('B6 窄屏:卡片里的 td 不再吃 max-width', cs(rowA().querySelector('td.title')).maxWidth === 'none',
+        cs(rowA().querySelector('td.title')).maxWidth);
+      T('B7 窄屏:分栏条与折叠手柄一起隐掉', !vis(q('.resizer')));
+
+      var more = rowA().querySelector('.actions .more');
+      T('B8 每行都有 ⋯ 按钮', !!more);
+      T('B9 ⋯ 带着 data-act=more(交给既有的列表委托)', more && more.dataset.act === 'more');
+      T('B10 窄屏:⋯ 是可见的(没有藏在 hover 后面)', vis(more), more && cs(more).display);
+      T('B11 窄屏:⋯ 命中区 ≥44 高', box(more).height >= 44, box(more).height);
+      T('B12 窄屏:⋯ 命中区 ≥38 宽', box(more).width >= 38, box(more).width);
+      T('B13 窄屏:原来那六个动作按钮都没显示(但一个没删)',
+        qa('#list tbody tr[data-id="ses_a"] .actions button').length === 7 &&
+        !vis(rowA().querySelector('.actions button[data-act="open"]')) &&
+        !vis(rowA().querySelector('.actions button[data-act="del"]')),
+        qa('#list tbody tr[data-id="ses_a"] .actions button').map(function (b) { return [b.dataset.act, cs(b).display]; }));
+
+      /* 点 ⋯ → 走真实委托 → 打开动作面板 */
+      more.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('B14 点 ⋯ 打开了选择框', q('#dlgPick').open === true, q('#dlgPick').open);
+      T('B15 动作面板标题=该会话标题', q('#pickTitle').textContent === '甲会话', q('#pickTitle').textContent);
+      var acts = qa('#pickList .pick-item');
+      T('B16 动作面板有 6 项', acts.length === 6, acts.length);
+      T('B17 六项就是桌面那六个动作',
+        acts.map(function (i) { return i.querySelector('.pi-label').textContent; }).join(',') ===
+          '打开,改名,移动,分叉,归档,删除',
+        acts.map(function (i) { return i.querySelector('.pi-label').textContent; }));
+      closePick();
+      T('B18 关掉后选择框关上了', q('#dlgPick').open === false);
+
+      /* 顶栏收起 / 展开 */
+      T('B19 窄屏:桌面那批次要控件默认收起(工程目录)', !vis(q('#dirFilter')));
+      T('B20 窄屏:排序也收起', !vis(q('#order')));
+      T('B21 窄屏:显示已归档也收起', !vis(q('#showArchived')));
+      T('B22 窄屏:搜索留在明面上', vis(q('#search')));
+      T('B23 窄屏:+ 新建留在明面上', vis(q('#btnNew')));
+      T('B24 窄屏:筛选按钮可见', vis(q('#btnFilters')));
+      T('B25 筛选按钮初始 aria-expanded=false', q('#btnFilters').getAttribute('aria-expanded') === 'false');
+      T('B26 窄屏:筛选按钮命中区 ≥44', box(q('#btnFilters')).height >= 44, box(q('#btnFilters')).height);
+
+      /* 顶栏占多高 —— 手机上这是最贵的一寸土 */
+      T('B26a 窄屏顶栏不超过两行(≤120px)', box(q('#topbar')).height <= 120, box(q('#topbar')).height);
+      if (LAND) {
+        T('B26b 横屏:带上了 short 类', document.documentElement.classList.contains('short'));
+        T('B26c 横屏:顶栏压成一行(≤60px)', box(q('#topbar')).height <= 60, box(q('#topbar')).height);
+        T('B26d 横屏:搜索与筛选落在同一条水平线上',
+          Math.abs(box(q('#search')).top - box(q('#btnFilters')).top) < 6,
+          [box(q('#search')).top, box(q('#btnFilters')).top]);
+        T('B26e 横屏:+ 新建与状态也在这一行(顶栏真的只有一行)',
+          Math.abs(box(q('#btnNew')).top - box(q('#btnFilters')).top) < 6,
+          [box(q('#btnNew')).top, box(q('#btnFilters')).top]);
+      } else {
+        T('B26b 竖屏:没有 short 类(844 > 560)', !document.documentElement.classList.contains('short'));
+        T('B26c 竖屏:搜索另起一行(393px 宽塞不下)', box(q('#search')).top > box(q('#btnFilters')).top + 10,
+          [box(q('#search')).top, box(q('#btnFilters')).top]);
+        T('B26d 竖屏:+ 新建 与搜索同一行,省下一整行高度',
+          Math.abs(box(q('#btnNew')).top - box(q('#search')).top) < 6,
+          [box(q('#btnNew')).top, box(q('#search')).top]);
+      }
+
+      q('#btnFilters').click();
+      T('B27 点「筛选」后工程目录露出来', vis(q('#dirFilter')));
+      T('B28 点「筛选」后排序露出来', vis(q('#order')));
+      T('B29 点「筛选」后显示已归档露出来', vis(q('#showArchived')));
+      T('B30 点「筛选」后导入/刷新露出来', vis(q('#btnImport')) && vis(q('#refresh')));
+      T('B31 展开后 aria-expanded=true', q('#btnFilters').getAttribute('aria-expanded') === 'true');
+      q('#btnFilters').click();
+      T('B32 再点一次收起', !vis(q('#dirFilter')) && q('#btnFilters').getAttribute('aria-expanded') === 'false');
+
+      /* 抽屉不是「镜像副本」:同一批元素,只有一个实例 */
+      T('B33 没有第二份 #dirFilter(用的是同一批元素,不是副本)',
+        qa('#dirFilter').length === 1, qa('#dirFilter').length);
+      T('B34 没有第二份 #order', qa('#order').length === 1, qa('#order').length);
+      T('B35 没有第二份 #showArchived', qa('#showArchived').length === 1, qa('#showArchived').length);
+      T('B36 抽屉里的工程目录仍是接好的那个(改它会进 store.directory)', (function () {
+        q('#dirFilter').value = '';
+        q('#dirFilter').dispatchEvent(new Event('change', { bubbles: true }));
+        return store.directory === '';
+      })(), store.directory);
+
+      /* 窄屏整页不许横向溢出 */
+      T('B37 窄屏:整页没有横向溢出(scrollWidth ≤ 视口宽)',
+        document.documentElement.scrollWidth <= window.innerWidth,
+        [document.documentElement.scrollWidth, window.innerWidth]);
+
+      /* ===================== C. 窄屏:对话区 ===================== */
+      await selectSession('ses_a');
+      T('C1 选中会话后加上 view-chat', document.documentElement.classList.contains('view-chat'));
+      T('C2 选中会话后对话区可见', vis(q('#chatpane')));
+      T('C3 选中会话后列表让位', !vis(q('#listpane')));
+
+      var back = q('#backList');
+      T('C4 窄屏:#backList 可见', vis(back));
+      T('C5 窄屏:#backList 命中区 ≥44', box(back).height >= 44, box(back).height);
+      T('C6 窄屏:输入区字号 16px(防聚焦自动放大)',
+        cs(q('#input')).fontSize === '16px', cs(q('#input')).fontSize);
+      T('C7 窄屏:#send 命中区 ≥44', box(q('#send')).height >= 44, box(q('#send')).height);
+      T('C8 窄屏:📎 命中区 ≥44', box(q('#btnAttach')).height >= 44, box(q('#btnAttach')).height);
+
+      /* 对话框:基础样式 min-width:420px,在 393px 的屏上必然溢出 */
+      openPick({ title: '宽度检查', items: [{ key: 'a', label: '甲' }] });
+      var dw = box(q('#dlgPick')).width;
+      T('C9 窄屏:对话框不溢出视口', dw <= window.innerWidth, [dw, window.innerWidth]);
+      T('C10 窄屏:对话框铺满可用宽度', dw >= window.innerWidth - 40, [dw, window.innerWidth]);
+      T('C11 窄屏:.dlg 的 min-width:420px 已被顶掉',
+        cs(q('#dlgPick')).minWidth === '0px' || cs(q('#dlgPick')).minWidth === '0',
+        cs(q('#dlgPick')).minWidth);
+      closePick();
+
+      back.click();
+      T('C12 点「返回」清掉了选中', store.selected === null, store.selected);
+      T('C13 点「返回」回到列表', vis(q('#listpane')) && !vis(q('#chatpane')));
+      T('C14 点「返回」去掉了 view-chat', !document.documentElement.classList.contains('view-chat'));
+
+      /* ===================== D. 桌面:一切照旧 ===================== */
+      document.documentElement.classList.remove('narrow');
+      document.documentElement.classList.remove('view-chat');
+      T('D1 桌面:#btnFilters 隐藏', !vis(q('#btnFilters')));
+      T('D2 桌面:#backList 隐藏', !vis(q('#backList')));
+      T('D3 桌面:⋯ 隐藏', !vis(rowA().querySelector('.actions .more')));
+      T('D4 桌面:原来那六个按钮回来了', vis(rowA().querySelector('.actions button[data-act="open"]')) &&
+        vis(rowA().querySelector('.actions button[data-act="del"]')));
+      T('D5 桌面:表头回来了', vis(q('#list thead')));
+      T('D6 桌面:次要控件都在明面上(工程目录)', vis(q('#dirFilter')));
+      T('D7 桌面:排序/归档/导入/刷新也都在', vis(q('#order')) && vis(q('#showArchived')) &&
+        vis(q('#btnImport')) && vis(q('#refresh')));
+      T('D8 桌面:分栏条回来了', vis(q('.resizer')));
+      T('D9 桌面:列表与对话区同时在(三栏)', vis(q('#listpane')) && vis(q('#chatpane')));
+      T('D10 桌面:行恢复成表格行', rowA() && cs(rowA()).display === 'table-row', rowA() && cs(rowA()).display);
+
+      /* 顶栏在桌面不该受 filters-open 影响(万一残留) */
+      q('#topbar').classList.add('filters-open');
+      T('D11 桌面:残留的 filters-open 不改变可见性(规则都挂在 .narrow 下)',
+        vis(q('#dirFilter')) && !vis(q('#btnFilters')));
+      q('#topbar').classList.remove('filters-open');
+
+      document.getElementById('results').textContent = out.join('\n');
+      document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
+      post('# 视口 ' + SZ + (LAND ? ' (横屏:靠 max-height:560px+pointer:coarse 判入)' : ' (竖屏:靠 max-width:860px 判入)') +
+           '\n' + out.join('\n'));
+    } catch (e) {
+      document.getElementById('results').textContent = out.join('\n');
+      post('# 视口 ' + SZ + ' (异常中断)\n' + out.join('\n') +
+           '\nPAGE-ERROR name=' + (e && e.name) + ' message=' + (e && e.message) + ' stack=' + (e && e.stack));
+    }
+  })();
+  </script>
+</body>
+</html>

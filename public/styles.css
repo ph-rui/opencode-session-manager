@@ -950,3 +950,143 @@ html.narrow .chline { gap: 6px; }
 /* 流式消息:左侧色条做一个轻微的呼吸,提示内容在增长 */
 .msg.assistant.live { border-left-color: var(--accent); }
 .msg.assistant.live .meta { opacity: 0.75; }
+
+/* ==========================================================================
+   窄屏(手机)。
+
+   判定源在 index.html 的内联脚本里(window.OCS_NARROW_MQ),命中就给 <html> 加
+   .narrow。这里刻意【不写 @media】—— 同一套判定写两份迟早漂移。
+
+   所有规则都挂在 .narrow 下,并且新增控件在桌面默认 display:none,
+   所以桌面路径的渲染结果与这一节之前完全一致。
+   ========================================================================== */
+
+/* ---- 仅窄屏可见的新增控件(桌面默认隐藏) ---- */
+#btnFilters,
+#backList,
+#list .actions .more { display: none; }
+html.narrow #btnFilters,
+html.narrow #backList,
+html.narrow #list .actions .more { display: inline-flex; }
+
+/* ---- 顶栏:改成网格,次要控件默认收起 ---- */
+html.narrow #topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "filt brand status"
+    "search search tools";
+  gap: 6px 8px;
+  align-items: center;
+  padding: 8px 10px;
+}
+/* 手机横屏(视口很矮):顶栏压成一行。
+   393px 的高度下,三行顶栏能吃掉四成屏幕,消息就没地方了。 */
+html.narrow.short #topbar {
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "filt brand search tools status";
+  gap: 4px 8px;
+  padding: 6px 10px;
+}
+html.narrow.short #chatHeader { padding: 6px 10px; }
+html.narrow.short #chatMeta { font-size: 11px; }
+html.narrow .brand {
+  grid-area: brand;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html.narrow #btnFilters { grid-area: filt; }
+html.narrow #status { grid-area: status; margin-left: 0; justify-self: end; }
+/* 「搜索」是顶栏里唯一不带 .nf 的 .f —— 它留在明面上 */
+html.narrow #topbar .f:not(.nf) { grid-area: search; }
+html.narrow #topbar .f:not(.nf) input#search { width: 100%; }
+html.narrow .lbtools { grid-area: tools; justify-content: flex-end; }
+
+/* 次要控件(工程目录 / 排序 / 显示已归档 / 计数 / 导入 / 刷新):点「筛选」才展开 */
+html.narrow #topbar .nf { display: none; }
+html.narrow #topbar.filters-open .nf { display: flex; grid-column: 1 / -1; }
+html.narrow #topbar.filters-open .f.nf select { max-width: none; width: 100%; }
+
+/* ---- 三栏 → 单栏 ---- */
+html.narrow main,
+html.narrow main.list-hidden { grid-template-columns: minmax(0, 1fr); }
+html.narrow main.list-hidden #listpane { display: block; } /* 复位桌面留下的折叠态 */
+html.narrow .resizer { display: none; }                    /* 分栏条与折叠手柄一起隐掉 */
+/* 二选一。默认(没有 view-chat)= 列表,这样首屏不会闪出两个 pane;
+   选中会话 → syncNarrowView() 加上 view-chat。 */
+html.narrow #chatpane { display: none; }
+html.narrow.view-chat #chatpane { display: flex; }
+html.narrow.view-chat #listpane { display: none; }
+
+/* ---- 会话列表:<table> 变卡片行 ---- */
+html.narrow #list thead { display: none; }
+html.narrow #list tbody tr {
+  display: block;
+  position: relative;
+  padding: 10px 46px 10px 12px; /* 右侧给「⋯」留位 */
+  border-bottom: 1px solid var(--border);
+}
+html.narrow #list td { display: block; padding: 0; border: none; max-width: none; }
+html.narrow #list td.title { white-space: normal; font-size: 13px; }
+/* 第 2 行的几项并排(桌面靠列间距,窄屏自己补「·」) */
+html.narrow #list td.dir,
+html.narrow #list td.upd,
+html.narrow #list td.tok { display: inline; color: var(--muted); font-size: 11.5px; }
+html.narrow #list td.upd::before,
+html.narrow #list td.tok::before { content: " · "; }
+html.narrow #list td.cost { display: none; } /* 窄屏让位给更重要的信息 */
+
+/* 动作按钮:窄屏全收进右上角的「⋯」 */
+html.narrow #list td.actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: auto;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+}
+html.narrow #list tbody tr:hover td.actions,
+html.narrow #list tbody tr.selected td.actions { background: transparent; }
+html.narrow #list .actions button { display: none; }
+
+/* ---- 命中区:手指按得准(≥44px) ---- */
+html.narrow .chip,
+html.narrow #list .actions .more,
+html.narrow .attachbtn,
+html.narrow #send,
+html.narrow .dlgacts .chip { min-height: 44px; }
+html.narrow .chip { padding-top: 8px; padding-bottom: 8px; }
+html.narrow #list .actions .more { min-width: 38px; justify-content: center; }
+html.narrow #backList { flex: none; }
+/* 输入类控件 ≥16px:否则部分浏览器聚焦时会自动放大整页 */
+html.narrow #search,
+html.narrow .f select,
+html.narrow #input,
+html.narrow #ctoolbar .ctl select { font-size: 16px; }
+
+/* ---- 对话区 ---- */
+html.narrow #chatHeader { padding: 8px 10px; }
+html.narrow .chline { gap: 8px; }
+html.narrow #chatMeta { font-size: 11.5px; }
+html.narrow #chatOps .chip { min-height: 40px; }
+
+/* ---- 输入区 ---- */
+html.narrow #ctoolbar { gap: 8px; padding: 7px 10px 0; }
+html.narrow #ctoolbar .ctl select { max-width: none; }
+html.narrow .cinput { padding: 8px 10px 10px; }
+html.narrow #mentions,
+html.narrow #cmds { left: 10px; right: 10px; }
+
+/* ---- 对话框:原来 min-width:420px,在 393px 的屏上必然溢出 ---- */
+html.narrow dialog.dlg {
+  min-width: 0;
+  width: calc(100vw - 24px);
+  max-width: none;
+  max-height: calc(100vh - 24px);
+}
+html.narrow .dlgform { padding: 14px 14px 12px; }
+html.narrow .fldrow { flex-direction: column; }
+html.narrow .pick-item { padding: 11px 14px; }

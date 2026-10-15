@@ -2,34 +2,47 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- interactive-widget=resizes-content:安卓弹出软键盘时压缩视口,否则输入框与发送键会被顶出屏幕 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title>OpenCode 会话管理器</title>
+  <script>
+    /* 窄屏判定源:全仓库只此一处。CSS 一律用 html.narrow 前缀,不再写第二份 @media,
+       否则两边迟早漂移。放在样式之前 → 首次绘制就不会闪一下桌面三栏。
+       short = 视口很【矮】(手机横屏只有 393px)。横屏宽度够用,但竖向一寸都舍不得:
+       顶栏要压成一行,把高度让给消息。 */
+    window.OCS_NARROW_MQ = '(max-width:860px),(max-height:560px) and (pointer:coarse)';
+    window.OCS_SHORT_MQ = '(max-height:560px)';
+    if (matchMedia(window.OCS_NARROW_MQ).matches) document.documentElement.classList.add('narrow');
+    if (matchMedia(window.OCS_SHORT_MQ).matches) document.documentElement.classList.add('short');
+  </script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header id="topbar">
+    <button type="button" id="btnFilters" class="chip" aria-expanded="false" aria-controls="topbar"
+      title="筛选与排序">筛选</button>
     <div class="brand">OpenCode 会话管理器</div>
     <label class="f"><span>搜索</span>
       <input id="search" type="search" placeholder="标题关键字…" autocomplete="off">
     </label>
-    <label class="f"><span>工程目录</span>
+    <div class="lbtools">
+      <button id="btnNew" class="chip primary" title="在指定工程目录新建一个会话">+ 新建</button>
+      <button id="btnImport" class="chip nf" title="从 JSON 文件导入会话">导入</button>
+      <button id="refresh" class="chip nf" title="重新拉取会话列表">刷新</button>
+    </div>
+    <label class="f nf"><span>工程目录</span>
       <select id="dirFilter"><option value="">全部</option></select>
     </label>
-    <label class="f"><span>排序</span>
+    <label class="f nf"><span>排序</span>
       <select id="order">
         <option value="desc">最近更新</option>
         <option value="asc">最早更新</option>
       </select>
     </label>
-    <div class="lbtools">
-      <button id="btnNew" class="chip primary" title="在指定工程目录新建一个会话">+ 新建</button>
-      <button id="btnImport" class="chip" title="从 JSON 文件导入会话">导入</button>
-      <button id="refresh" class="chip" title="重新拉取会话列表">刷新</button>
-    </div>
-    <label class="chk" title="归档只记录在本面板(见 README),OpenCode 本身暂无会话归档接口">
+    <label class="chk nf" title="归档只记录在本面板(见 README),OpenCode 本身暂无会话归档接口">
       <input type="checkbox" id="showArchived"> 显示已归档
     </label>
-    <div class="hint">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
+    <div class="hint nf">共 <span id="count">0</span> 个会话<span id="archivedCount"></span></div>
     <div id="status" class="status">连接中…</div>
   </header>
 
@@ -61,6 +74,7 @@
     <section id="chatpane">
       <div id="chatHeader">
         <div class="chline">
+          <button type="button" id="backList" class="chip" aria-label="返回会话列表">‹ 会话</button>
           <span id="chatTitle">未选择会话</span>
           <span id="chatState" class="state"></span>
           <!-- 运行中的状态条,照 TUI 那条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」做的(帧序见 app.js 的 progressCells) -->

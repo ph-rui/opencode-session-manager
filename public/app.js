@@ -895,6 +895,7 @@ function renderSessions() {
       '<td class="tok">' + esc(fmtTokens(s.tokens)) + '</td>' +
       '<td class="cost">' + esc(fmtCost(s.cost)) + '</td>' +
       '<td class="actions">' +
+      '<button data-act="more" class="more" title="更多操作" aria-label="更多操作">⋯</button>' +
       '<button data-act="open">打开</button>' +
       '<button data-act="rename">改名</button>' +
       '<button data-act="move">移动</button>' +
@@ -991,6 +992,7 @@ function clearSelection() {
   renderInbox();
   renderChatOps();
   updateChatStatus();
+  syncNarrowView();
 }
 
 // 刷新后恢复:只在「还没选过任何会话」时出手,不抢用户已经做出的选择。
@@ -1206,6 +1208,7 @@ async function selectSession(id) {
   renderInbox();
   renderChatOps();
   updateChatStatus();
+  syncNarrowView();
   await Promise.all([
     loadMessages({ older: false }),
     loadAsks(id),
@@ -2523,6 +2526,25 @@ async function guard(fn) {
 async function onAction(act, id) {
   const s = store.sessions.get(id);
   if (act === 'open') return selectSession(id);
+
+  // 窄屏:列表行右侧只留一个「⋯」,把这几项收进通用的选择框(桌面那排按钮照旧)
+  if (act === 'more') {
+    if (!s) return;
+    const arch = isArchived(s);
+    openPick({
+      title: s.title || '(无标题)',
+      items: [
+        { key: 'open', label: '打开' },
+        { key: 'rename', label: '改名' },
+        { key: 'move', label: '移动' },
+        { key: 'fork', label: '分叉' },
+        { key: 'archive', label: arch ? '取消归档' : '归档' },
+        { key: 'del', label: '删除' },
+      ],
+      onPick: (it) => onAction(it.key, id),
+    });
+    return;
+  }
 
   if (act === 'rename') {
     const t = prompt('新的标题', (s && s.title) || '');
@@ -4282,6 +4304,74 @@ function debounce(fn, ms) {
   };
 }
 
+/* --------------------------- 窄屏(手机) ---------------------------
+ * 判定源只有一处:index.html 内联脚本里的 window.OCS_NARROW_MQ。
+ * 这里只做两件事:
+ *   ① 窗口尺寸 / 朝向变了就同步 <html>.narrow
+ *   ② 把「现在在哪一屏」同步成 <html>.view-chat(设计文档 §4.2:由 store.selected 派生)
+ * 刻意【不引入第二个状态变量】—— 视图跟着 store.selected 走,与 hash 路由天然一致,
+ * 于是深链与安卓返回键都免费可用。
+ */
+
+function syncNarrowView() {
+  document.documentElement.classList.toggle('view-chat', !!store.selected);
+}
+
+// 会话列表的点击委托:点按钮走 onAction,点行本身进会话。
+// 抽成函数是为了让 test/ui-mobile.html 能单独装上它(那里屏蔽了 init)。
+function setupListActions() {
+  $('#list tbody').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    if (btn) {
+      e.stopPropagation();
+      onAction(btn.dataset.act, tr.dataset.id);
+    } else {
+      selectSession(tr.dataset.id);
+    }
+  });
+}
+
+function syncNarrowClass() {
+  const apply = (cls, mq) => {
+    if (!mq || !window.matchMedia) return;
+    document.documentElement.classList.toggle(cls, matchMedia(mq).matches);
+  };
+  apply('narrow', window.OCS_NARROW_MQ);
+  apply('short', window.OCS_SHORT_MQ);
+}
+
+function setupNarrow() {
+  const mq = window.OCS_NARROW_MQ;
+  if (mq && window.matchMedia && matchMedia(mq).addEventListener) {
+    // change 只在跨过断点时来一次,不必防抖
+    matchMedia(mq).addEventListener('change', syncNarrowClass);
+  }
+  syncNarrowClass();
+
+  // 与安卓返回键同一条路:清掉 hash → 窄屏回到列表
+  const back = $('#backList');
+  if (back) {
+    back.addEventListener('click', () => {
+      clearSelection();
+      renderSessions();
+    });
+  }
+
+  // 顶栏在窄屏把次要控件收起来,点「筛选」才展开(桌面这一节不生效)
+  const filt = $('#btnFilters');
+  if (filt) {
+    filt.addEventListener('click', () => {
+      const bar = $('#topbar');
+      const open = bar.classList.toggle('filters-open');
+      filt.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
+  syncNarrowView();
+}
+
 function init() {
   health();
   setInterval(health, 15000);
@@ -4293,6 +4383,7 @@ function init() {
   setupEvents();
   setupResizers();
   setupListToggle();
+  setupNarrow();
   setupHistoryNav();
   setupScrollMemory();
   setupAttachments();
@@ -4335,17 +4426,7 @@ function init() {
     b.addEventListener('click', () => closeDlg(b.closest('dialog')))
   );
 
-  $('#list tbody').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-act]');
-    const tr = e.target.closest('tr[data-id]');
-    if (!tr) return;
-    if (btn) {
-      e.stopPropagation();
-      onAction(btn.dataset.act, tr.dataset.id);
-    } else {
-      selectSession(tr.dataset.id);
-    }
-  });
+  setupListActions();
 }
 
 document.addEventListener('DOMContentLoaded', init);

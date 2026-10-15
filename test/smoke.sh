@@ -497,7 +497,7 @@ case "$INIT_ORDER" in
   *)             echo "FAIL: init() 没有先回填顶栏条件 (got '$INIT_ORDER')"; fail=$((fail + 1)) ;;
 esac
 
-# I 组:运行中的状态条(TUI 同款 8 格字符条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」)
+# J 组:运行中的状态条(TUI 同款 8 格字符条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」)
 if has "$HOME_HTML" 'id="progress" hidden'; then
   echo "PASS: 首页有 #progress 且默认 hidden(脚本起来前不会先闪一条出来)"; pass=$((pass + 1))
 else
@@ -560,6 +560,111 @@ if [ "$PROG_HITS" = 2 ]; then
   echo "PASS: paintProgressBar 只被调一处(没有第二处同步点)"; pass=$((pass + 1))
 else
   echo "FAIL: paintProgressBar 在 app.js 里出现 $PROG_HITS 次(want 2:定义 + updateChatStatus 里那一次)"; fail=$((fail + 1))
+fi
+
+# K 组:手机端(窄屏)适配。设计文档 docs/superpowers/specs/2026-10-15-mobile-design.md
+# 判定源唯一:index.html 的 <head> 内联脚本里写死两个媒体查询,命中就给 <html> 加类。
+# 内联的意义是首帧就判对 —— 等 app.js 起来再加类,手机上会先闪一下桌面布局。
+if has "$HOME_HTML" "window.OCS_NARROW_MQ = '(max-width:860px),(max-height:560px) and (pointer:coarse)'"; then
+  echo "PASS: 窄屏判定写在 index.html 内联脚本里(窗口窄 / 矮屏且粗指针)"; pass=$((pass + 1))
+else
+  echo "FAIL: index.html 里没有 OCS_NARROW_MQ 的定义"; fail=$((fail + 1))
+fi
+if has "$HOME_HTML" "window.OCS_SHORT_MQ = '(max-height:560px)'"; then
+  echo "PASS: 另外判了「视口很矮」(手机横屏只有 393px 高,顶栏要压成一行)"; pass=$((pass + 1))
+else
+  echo "FAIL: index.html 里没有 OCS_SHORT_MQ 的定义"; fail=$((fail + 1))
+fi
+if has "$HOME_HTML" "document.documentElement.classList.add('narrow')"; then
+  echo "PASS: 判定在 <head> 里当场做掉(首帧就是窄屏布局,不会闪一下桌面版)"; pass=$((pass + 1))
+else
+  echo "FAIL: 内联脚本没有立刻给 <html> 加 narrow"; fail=$((fail + 1))
+fi
+# 断点数值只允许出现在 index.html 一处:同一套判定写两份迟早漂移
+MQ_HTML=$(printf '%s' "$HOME_HTML" | grep -oF 'max-width:860px' | wc -l)
+MQ_CSS=$(printf '%s' "$CSS" | grep -oF 'max-width:860px' | wc -l)
+MQ_JS=$(printf '%s' "$APPJS" | grep -oF 'max-width:860px' | wc -l)
+if [ "$MQ_HTML" = 1 ] && [ "$MQ_CSS" = 0 ] && [ "$MQ_JS" = 0 ]; then
+  echo "PASS: 断点值只写在 index.html 一处(styles.css / app.js 里都没有)"; pass=$((pass + 1))
+else
+  echo "FAIL: 断点值分散了(index.html=$MQ_HTML styles.css=$MQ_CSS app.js=$MQ_JS)"; fail=$((fail + 1))
+fi
+CSS_MQ=$(printf '%s' "$CSS" | grep -c '@media (max-width\|@media (max-height')
+if [ "$CSS_MQ" = 0 ]; then
+  echo "PASS: styles.css 里没有第二份断点 @media(全靠 html.narrow 前缀)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 里有 $CSS_MQ 处 @media 断点,与内联判定重复"; fail=$((fail + 1))
+fi
+# 新增控件:桌面默认 display:none,只在 .narrow 下露出来 —— 桌面渲染结果一像素不变
+if has "$HOME_HTML" 'id="backList"' && has "$HOME_HTML" 'id="btnFilters"'; then
+  echo "PASS: 首页有「‹ 会话」返回键与顶栏「筛选」按钮"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 #backList / #btnFilters"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'data-act="more"'; then
+  echo "PASS: 每行有把动作收起来的「⋯」按钮"; pass=$((pass + 1))
+else
+  echo "FAIL: 列表里没有「⋯」按钮(data-act=\"more\")"; fail=$((fail + 1))
+fi
+if has "$CSS" '#list .actions .more { display: none; }' && has "$CSS" 'html.narrow #list .actions .more { display: inline-flex; }'; then
+  echo "PASS: 这三个新控件桌面藏、窄屏露(桌面 DOM 里多出来但不显示)"; pass=$((pass + 1))
+else
+  echo "FAIL: 新控件的默认隐藏 / 窄屏显示规则缺了"; fail=$((fail + 1))
+fi
+# 窄屏只有一栏:靠 <html>.view-chat 二选一,默认(没选中)= 列表
+if has "$CSS" 'html.narrow #chatpane { display: none; }' && has "$CSS" 'html.narrow.view-chat #listpane { display: none; }'; then
+  echo "PASS: 窄屏是列表 / 对话二选一(默认列表)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺窄屏两屏切换的规则"; fail=$((fail + 1))
+fi
+if has "$APPJS" "toggle('view-chat', !!store.selected)"; then
+  echo "PASS: view-chat 由 store.selected 派生(没有引入第二个状态变量)"; pass=$((pass + 1))
+else
+  echo "FAIL: view-chat 不是从 store.selected 派生的"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow main.list-hidden #listpane { display: block; }'; then
+  echo "PASS: 桌面留下的折叠态在窄屏被复位(否则列表整块看不见)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏没有复位 main.list-hidden"; fail=$((fail + 1))
+fi
+NARROW_DLG=$(printf '%s' "$CSS" | awk '/^html\.narrow dialog\.dlg \{/{f=1} f{print} f&&/^\}/{exit}')
+if has "$NARROW_DLG" 'min-width: 0;'; then
+  echo "PASS: 窄屏对话框把 min-width:420px 归零(393px 的屏上放得下)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏对话框没有把 min-width 归零"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow .dlgacts .chip { min-height: 44px; }'; then
+  echo "PASS: 窄屏命中区撑到 44px(手指按得准)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏没有把命中区撑到 44px"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #ctoolbar .ctl select { font-size: 16px; }'; then
+  echo "PASS: 窄屏输入控件 ≥16px(否则聚焦时浏览器会自动放大整页)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏输入控件字号不足 16px"; fail=$((fail + 1))
+fi
+if [ "$(printf '%s' "$CSS" | grep -oF -- '--chat-fs:' | wc -l)" = 1 ]; then
+  echo "PASS: 会话区字号仍只有一个旋钮 --chat-fs(窄屏没有偷偷再定一份)"; pass=$((pass + 1))
+else
+  echo "FAIL: --chat-fs 被定义了多次,字号旋钮不再单一"; fail=$((fail + 1))
+fi
+# 横竖屏切换要重新判定;接线只允许一处(init)
+NARROW_FN=$(printf '%s' "$APPJS" | awk '/^function setupNarrow\(\)/{f=1} f{print} f&&/^\}/{exit}')
+if has "$NARROW_FN" "matchMedia(mq).addEventListener('change', syncNarrowClass)"; then
+  echo "PASS: 跨过断点(转屏)时会重新判定"; pass=$((pass + 1))
+else
+  echo "FAIL: setupNarrow 没监听媒体查询的 change"; fail=$((fail + 1))
+fi
+INIT_FN=$(printf '%s' "$APPJS" | awk '/^function init\(\)/{f=1} f{print} f&&/^\}/{exit}')
+if has "$INIT_FN" 'setupNarrow()'; then
+  echo "PASS: setupNarrow() 接进了 init()"; pass=$((pass + 1))
+else
+  echo "FAIL: init() 里没有 setupNarrow()"; fail=$((fail + 1))
+fi
+if [ "$(printf '%s' "$APPJS" | grep -oF 'setupNarrow' | wc -l)" = 2 ]; then
+  echo "PASS: setupNarrow 只有定义 + init 里一次(没有第二处接线)"; pass=$((pass + 1))
+else
+  echo "FAIL: setupNarrow 出现次数不对(应当 2:定义 + init 里那次)"; fail=$((fail + 1))
 fi
 
 sse=$(timeout 3 curl -s -N "${AUTH[@]}" "$PROXY/api/event" | head -c 4000)
