@@ -355,6 +355,25 @@
       T('成功后状态变已完成', statusInfo(view(AID).byKey['tool:call_e']).cls === 'ok');
       T('成功后 diff 仍在', !!el(AID).querySelector('.diff'));
 
+      /* ========== 运行中的工具行不再重复写「运行中」==========
+       * 对话头部那套(标题旁的「● 运行中」+ 进度条)已经把这个状态说清楚了,
+       * 工具行再写一遍纯属重复;手机竖屏上它还会折成「● 运」「行中」两行。
+       * 只留 statusInfo 里那个带状态色的 ● 圆点。 */
+      var runPart = { type: 'tool', id: 'c9', name: 'bash',
+        state: { status: 'running', input: { command: 'make -j8' } } };
+      var runHtml = toolHtml(runPart);
+      T('运行中的工具行不再写「运行中」', runHtml.indexOf('运行中') < 0, runHtml);
+      T('运行中的工具行留着状态色圆点',
+        runHtml.indexOf('class="tstate run"') >= 0 && runHtml.indexOf('●') >= 0, runHtml);
+      T('statusInfo(running) 标签为空', statusInfo({ state: { status: 'running' } }).label === '');
+      T('statusInfo(streaming) 标签为空', statusInfo({ state: { status: 'streaming' } }).label === '');
+      T('statusInfo(running) 仍是 run 类',
+        statusInfo({ state: { status: 'running' } }).cls === 'run');
+      T('可读标记只留给完成与出错',
+        statusInfo({ state: { status: 'completed' } }).icon === '✓' &&
+        statusInfo({ state: { status: 'completed' } }).label === '' &&
+        statusInfo({ state: { status: 'error' } }).label === '出错');
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

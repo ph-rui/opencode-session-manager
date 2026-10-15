@@ -1425,11 +1425,14 @@ function md(text) {
 /* 工具调用与状态 */
 function statusInfo(p) {
   const st = (p.state && p.state.status) || (p.executed ? 'completed' : 'running');
+  // 运行中/流式【不写「运行中」这几个字】:对话头部那套(标题旁的「● 运行中」+ 进度条)
+  // 已经把这个状态说清楚了,工具行再写一遍是重复 —— 手机竖屏上它还会折成「● 运」「行中」两行。
+  // 只留彩色的 ● 圆点:.cls='run' 的配色还在,一眼仍看得出这一条在跑。
   const map = {
     completed: { icon: '✓', cls: 'ok', label: '' },
     error: { icon: '✗', cls: 'err', label: '出错' },
-    running: { icon: '●', cls: 'run', label: '运行中' },
-    streaming: { icon: '●', cls: 'run', label: '运行中' },
+    running: { icon: '●', cls: 'run', label: '' },
+    streaming: { icon: '●', cls: 'run', label: '' },
   };
   return map[st] || { icon: '●', cls: 'run', label: String(st) };
 }
