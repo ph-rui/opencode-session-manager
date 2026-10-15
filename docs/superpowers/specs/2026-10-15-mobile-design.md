@@ -427,9 +427,9 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 150 |
+| `smoke.sh` | 153 |
 | `netallow-run.js`（新）| 74 |
-| `ui-layout` / `ui-tools` / `ui-asks` | 114 / 94 / 39 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 114 / 100 / 39 |
 | `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 123 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
 | `ui-mobile`（新）| 154 |
@@ -464,6 +464,19 @@ html.narrow #list td { display: block; border: none; }
 **实测**（无头 Firefox，真视口）：393×894 上展开约 130px → 收起 48px（`html.narrow .chip` 已经给了
 44px 命中区）；桌面收起 30px。目检四种状态都看过：竖屏空闲 / 展开 / 运行中 / 有草稿，外加横屏与桌面收起。
 新增 `test/ui-composer.html` + `test/ui-composer-run.js`（84 条）与 `smoke.sh` 的 M 组（16 条）。
+
+### 8.5 追加：「运行中」只说一遍
+
+页面里显示「运行中」的地方原本有三处：会话列表行的徽标、对话头部标题旁（`● 运行中`，与进度条同处），
+以及**消息流里正在跑的工具行右边**。第三处是重复 —— 头部那套已经把状态说清楚了；更要紧的是
+在手机竖屏上它会被挤到折行，变成「● 运」「行中」两行，比不写还难看。
+
+**决定**：`statusInfo()` 里 `running` / `streaming` 的 `label` 改成空串，**只留那个带状态色的 `●` 圆点**
+（`.tstate.run` 的配色还在，一眼仍看得出这一条在跑）；`completed` 的 `✓` 与 `error` 的 `✗ 出错` 不动 ——
+它们不是「重复」，工具行结束后需要知道成没成。头部那句 `● 运行中` 与列表徽标保留。
+
+**实测**：手机 393×894 上工具行从「`⏺ bash ← … ● 运行中`（折两行）」变成「`⏺ bash ← … ●`」（一行）。
+回归：`ui-tools` 94 → 100（新增 6 条锁这条），`smoke.sh` 的 N 组 +3 条（150 → 153）。
 
 ---
 
