@@ -4618,13 +4618,20 @@ function setupListToggle() {
   });
 }
 
-/* 临时展开的「宽限期」:动手(改名/移动/删除/归档)会弹原生 confirm/prompt,一弹浏览器就
- * 把指针当成离开了文档 → main 收到 mouseleave → 列表当场收回;收回后分栏槽缩回 x=0..16,
- * 指针已经不在槽里,再动一下就被判成「挪进对话区」,再也拉不回来 —— 想「删完这个接着删
- * 下一个」都做不到。所以动手之前先武装一下:这 3 秒里来的第一次 mouseleave 直接吞掉
- * (就是弹窗抢走指针那一次),之后照旧。真实移动(mousemove)不受影响:挪进对话区立刻收。 */
+/* 临时展开的「宽限期」:动手(改名/移动/删除/归档)会弹原生 confirm/prompt。原生弹窗期间
+ * 页面会收到一串看着像「指针跑掉了」的事件 —— mouseleave(指针离开文档),弹窗关掉时
+ * 还可能再来一发 mousemove(浏览器拿弹窗里的位置来同步指针状态)。只要有一条落到
+ * 「不在分栏槽里」的判定上,临时展开当场就被收掉;更麻烦的是收掉后分栏槽缩回 x=0..16,
+ * 指针已经不在槽里,再动一下就被判成「挪进对话区」,列表再也拉不回来 —— 想「删完这个
+ * 接着删下一个」都做不到。
+ *
+ * 所以动手之前先武装一段宽限期:这 3 秒里【谁来都不收】(mouseleave 与 mousemove 两条
+ * 路径都挡),到点再按「指针最后一次真实移动停在哪」复查一遍 —— 还在槽里就继续留着,
+ * 已经挪进对话区就收掉。真实意图只被推迟几秒,不会被吃掉。 */
 const PEEK_HOLD_MS = 3000;
-let peekLeaveGuard = 0; // > Date.now() 表示「下一次 mouseleave 不算数」
+let peekHoldUntil = 0; // > Date.now():宽限期里,谁也别想把它收掉
+let peekHoldTimer = 0;
+let peekLastX = -1; // 指针最后一次真实 mousemove 停在哪
 let listPeekHold = null; // 由列表临时展开那段接线装上,onAction() 动手前叫一声
 
 /* -------------------- 鼠标靠左边缘:列表临时拉出来 --------------------
@@ -4646,41 +4653,53 @@ function setupListPeek() {
   const pane = document.getElementById('listpane');
   if (!main || !rz || !pane) return;
 
-  const hide = () => {
+  // force = 显式收掉(点手柄、初始化、到点复查),不吃宽限期
+  const hide = (force) => {
+    if (!force && Date.now() < peekHoldUntil) return; // 宽限期里谁来都不收
     main.classList.remove('list-peek');
-    peekLeaveGuard = 0; // 显式收掉了,宽限期一并取消
+    peekHoldUntil = 0;
+    if (peekHoldTimer) { clearTimeout(peekHoldTimer); peekHoldTimer = 0; }
   };
   const onMove = (e) => {
+    peekLastX = e.clientX; // 只认真实移动 —— 到点复查靠它
     // 常态(列表好好开着)不 measure、也不留残留的临时态 —— 早退
     if (!main.classList.contains('list-hidden')) {
-      if (main.classList.contains('list-peek')) hide();
+      if (main.classList.contains('list-peek')) hide(true);
       return;
     }
     if (document.documentElement.classList.contains('narrow')) return;
+    if (Date.now() < peekHoldUntil) return; // 宽限期里连真实移动也不收(用户要「等个几秒」)
     if (e.clientX < rz.getBoundingClientRect().right) main.classList.add('list-peek');
     else hide();
+  };
+  /* 到点复查:指针最后停在哪 —— 还在分栏槽里就留着(那多半只是想接着删下一个),
+   * 已经挪进对话区就收掉。 */
+  const holdExpire = () => {
+    const left = peekHoldUntil - Date.now();
+    if (left > 0) { peekHoldTimer = setTimeout(holdExpire, left + 30); return; } // 期间又动过手
+    peekHoldTimer = 0;
+    peekHoldUntil = 0;
+    if (!main.classList.contains('list-peek')) return;
+    if (peekLastX >= 0 && peekLastX >= rz.getBoundingClientRect().right) hide(true);
   };
   const peekHold = () => {
     if (document.documentElement.classList.contains('narrow')) return;
     if (!main.classList.contains('list-hidden')) return; // 列表本来就开着,没什么可保的
     if (!main.classList.contains('list-peek')) return; // 没在临时展开
-    peekLeaveGuard = Date.now() + PEEK_HOLD_MS;
+    peekHoldUntil = Date.now() + PEEK_HOLD_MS;
+    if (!peekHoldTimer) peekHoldTimer = setTimeout(holdExpire, PEEK_HOLD_MS + 30);
   };
   listPeekHold = peekHold; // 给 onAction() 用:动手之前叫一声
 
   if (main.dataset.peekWired !== '1') {
     main.dataset.peekWired = '1';
     main.addEventListener('mousemove', onMove);
-    main.addEventListener('mouseleave', () => {
-      // 宽限期内来的第一次「离开」吞掉:那就是弹窗把指针抢走那一下
-      if (Date.now() < peekLeaveGuard) { peekLeaveGuard = 0; return; }
-      hide();
-    }); // 移出整个主区(含移出窗口)就收回
+    main.addEventListener('mouseleave', () => hide(false)); // 移出整个主区(含移出窗口)就收回
     const btn = document.getElementById('btnList');
     // 临时展开期间点手柄 = 显式展开并保持(setupListToggle 已经写好记忆与类),这里只摘掉临时态
-    if (btn) btn.addEventListener('click', hide);
+    if (btn) btn.addEventListener('click', () => hide(true));
   }
-  hide();
+  hide(true);
 }
 
 /* ---------------------- 底板(输入区)收起 / 展开 ----------------------

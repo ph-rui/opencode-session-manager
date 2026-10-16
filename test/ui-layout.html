@@ -104,7 +104,8 @@
     };
     window.EventSource = class { constructor() {} close() {} };
     window.setInterval = function () { return 0; };
-    window.setTimeout = function () { return 0; };
+    window.__timers = []; // { fn, ms }:本页不真跑定时器,测试要哪一下自己点哪一下
+    window.setTimeout = function (fn, ms) { window.__timers.push({ fn: fn, ms: ms }); return 0; };
     window.clearTimeout = function () {};
   </script>
   <script src="/app.js"></script>
@@ -289,9 +290,17 @@
       /* ============ 3d. 动手之前先武装宽限期(原生弹窗会抢走指针) ============
        * 用户报的:靠左边缘把列表临时拉出来,删掉一个会话,列表「当场收回」;
        * 收回后分栏槽缩回 x=0..16,指针已经不在槽里,再动一下就被判成「挪进对话区」,
-       * 于是再也拉不回来 —— 想接着删下一个都不行。根子是原生 confirm 一弹,
-       * 浏览器就把指针当成离开了文档,main 收到 mouseleave 把临时态摘了。
-       * 改法:onAction() 动手之前叫一声 listPeekHold(),宽限期里那一次 mouseleave 吞掉。 */
+       * 于是再也拉不回来 —— 想接着删下一个都不行。
+       * 原生弹窗期间页面会收到一串像「指针跑掉了」的事件(mouseleave,关掉时还可能
+       * 再来一发 mousemove),所以宽限期里【两条路径都不许收】,到点再按指针最后
+       * 停在哪复查。 */
+      var fireTimers = function (ms) {
+        window.__timers.filter(function (t) { return t.ms === ms; })
+          .forEach(function (t) { try { t.fn(); } catch (e) {} });
+        window.__timers = window.__timers.filter(function (t) { return t.ms !== ms; });
+      };
+      // 时间是按 Date.now() 算的,测试里不真等 3 秒:把到点时间拨到过去再点那个回调
+      var expireNow = function () { peekHoldUntil = Date.now() - 1; fireTimers(PEEK_HOLD_MS + 30); };
       localStorage.setItem('ocs.listHidden', '1');
       setupListToggle();
       setupListPeek();
@@ -300,26 +309,32 @@
       store.sessions.set('ses_c', { id: 'ses_c', title: '会话 C', time: { created: 1, updated: 3 } });
       await onAction('del', 'ses_c'); // 真走一遍删除(本页 confirm 被桩成 true)
       T('(前置)会话确实删掉了', !store.sessions.has('ses_c'));
-      T('删完之后列表还留着(没被弹窗抢指针那一下收掉)', main.classList.contains('list-peek'));
+      T('删完之后列表还留着(没被弹窗那串事件收掉)', main.classList.contains('list-peek'));
+      T('宽限期武装上了', peekHoldUntil > Date.now(), peekHoldUntil - Date.now());
       main.dispatchEvent(new MouseEvent('mouseleave'));
-      T('宽限期里那一次 mouseleave 被吞掉', main.classList.contains('list-peek'));
-      main.dispatchEvent(new MouseEvent('mouseleave'));
-      T('宽限期只管一次:再离开还是照常收', !main.classList.contains('list-peek'));
+      T('宽限期里 mouseleave 不收', main.classList.contains('list-peek'));
+      mv(resizer.getBoundingClientRect().right + 5); // 弹窗关掉时浏览器可能来这么一发
+      T('宽限期里连「挪进对话区」的那一发 mousemove 也不收(可能不是用户挪的)', main.classList.contains('list-peek'));
+      expireNow(); // 到点复查:指针最后停在对话区 → 这才收
+      T('到点复查:指针已经不在槽里 → 收掉', !main.classList.contains('list-peek'));
       T('收掉之后列表也藏起来了', hiddenOf(listPane));
 
       mv(5);
       T('(前置)又拉出来了', main.classList.contains('list-peek'));
       store.sessions.set('ses_d', { id: 'ses_d', title: '会话 D', time: { created: 1, updated: 2 } });
       await onAction('del', 'ses_d');
-      T('(前置)删完还留着', main.classList.contains('list-peek'));
+      mv(200); // 指针还在列表里:多半是想接着删下一个
+      T('(前置)指针还停在列表里', main.classList.contains('list-peek'));
+      expireNow();
+      T('到点复查:指针还在槽里 → 留着(方便接着删)', main.classList.contains('list-peek'));
       mv(resizer.getBoundingClientRect().right + 5);
-      T('宽限期不挡真实移动:挪进对话区照样立刻收', !main.classList.contains('list-peek'));
+      T('宽限期过了之后,挪进对话区照旧立刻收', !main.classList.contains('list-peek'));
 
       localStorage.removeItem('ocs.listHidden');
       setupListToggle();
       setupListPeek();
       await onAction('del', 'ses_e'); // 列表好好开着的时候动手
-      T('列表本来就开着时不武装(别把正常的 mouseleave 也吞掉)', peekLeaveGuard === 0, peekLeaveGuard);
+      T('列表本来就开着时不武装(别把正常的收回也挡了)', peekHoldUntil === 0, peekHoldUntil);
 
       /* ============ 4. 折叠状态被记住(模拟刷新后重新接线) ============ */
       localStorage.setItem('ocs.listHidden', '1');

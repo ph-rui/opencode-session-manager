@@ -1022,17 +1022,19 @@ if has "$PEEK_FN" "classList.contains('narrow')" && has "$PEEK_FN" 'dataset.peek
 else
   echo "FAIL: 少了窄屏判定或重复接线保护"; fail=$((fail + 1))
 fi
-if has "$PEEK_FN" "btn.addEventListener('click', hide)"; then
+if has "$PEEK_FN" "btn.addEventListener('click', () => hide(true))"; then
   echo "PASS: 临时展开期间点手柄 → 显式展开并保持(记忆由 setupListToggle 写)"; pass=$((pass + 1))
 else
   echo "FAIL: 点手柄没有把临时态摘掉"; fail=$((fail + 1))
 fi
-# 动手(改名/移动/删除/归档)会弹原生 confirm/prompt:一弹浏览器就把指针当「离开文档」,
-# mouseleave 一收,分栏槽缩回 x=0..16,再动一下就被判成「挪进对话区」,列表再也拉不回来。
-# 所以 onAction() 动手前叫一声 listPeekHold(),宽限期里那一次 mouseleave 吞掉。
-if has "$PEEK_FN" 'PEEK_HOLD_MS' && has "$PEEK_FN" 'if (Date.now() < peekLeaveGuard)' &&
-   has "$PEEK_FN" 'peekHold'; then
-  echo "PASS: 弹窗抢指针那一次 mouseleave 有宽限期兜着(动手前 listPeekHold())"; pass=$((pass + 1))
+# 动手(改名/移动/删除/归档)会弹原生 confirm/prompt:弹窗期间页面会收到一串像「指针跑掉了」
+# 的事件(mouseleave,关掉时还可能再来一发 mousemove),任一条落到「不在分栏槽里」的判定上
+# 就把临时展开收掉,而收掉后分栏槽缩回 x=0..16,列表再也拉不回来。
+# 所以 onAction() 动手前叫一声 listPeekHold():宽限期里【两条路径都不收】,到点按指针最后
+# 停在哪复查。
+if has "$PEEK_FN" 'PEEK_HOLD_MS' && has "$PEEK_FN" 'if (Date.now() < peekHoldUntil) return;' &&
+   has "$PEEK_FN" 'peekLastX' && has "$PEEK_FN" 'holdExpire'; then
+  echo "PASS: 弹窗那一串事件有宽限期兜着(mouseleave 与 mousemove 都不收,到点复查)"; pass=$((pass + 1))
 else
   echo "FAIL: 缺「动手后别被弹窗收掉列表」的宽限期"; fail=$((fail + 1))
 fi
