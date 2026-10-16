@@ -1581,6 +1581,39 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.31 追加：待发送队列收成一条（照 TUI 的 QueuedPromptDock）
+
+**起因**：用户「一切往 TUI 的方向靠拢」的清单第 5 项 —— 待发送队列收一行。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/routes/session/index.tsx:2343` 的 `QueuedPromptDock` +
+`1462` 行那处渲染条件）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 一条档：`N queued · <下一条的正文>`（正文里的换行 `replaceAll("\n", " ")` 压成空格、`truncate` 截断） | `2346-2370` 行 |
+| 计数只数 `type === "user" && delivery === "queue"` 的项；点一下打开「Queued prompts」对话框看逐条 | `220-225` / `2343` 行 |
+| 无队列时不渲染这一条 | `1462` 行 `queuedPrompts().length > 0` |
+| 左边一条中性色边 + 抬起底色，hover 时底色再压深一档 | `2350-2364` 行 |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 形态 | `#inbox` 里收成一条 `<details class="ibdock" data-def="0">`，行头就是 TUI 那行，点开才是原来那一列 `.inbox-item`（面板没有 TUI 那个对话框，用 `details` 顶） |
+| 计数 | 面板这边数**整张待发送表**（待发送队列是面板自己的一个列表：排队 / 插话 / 压缩 / 移动都在里面）—— 只数 `delivery=queue` 的话行数与展开后对不上；措辞照 TUI 的 `queued` |
+| 截断 | 照 TUI 把换行压成空格；截断交给 CSS（`.ibNext` 的 `text-overflow: ellipsis`），不在 JS 里切字数 —— 宽度是活的 |
+| 展开态 | 这份列表每次事件都**整块重画**（`box.innerHTML = ''`），所以展开态得自己记住（重画前读一次旧 `details.open`，重画后照搬），否则排队→插话、取消一条就折回去了 |
+| 一行没少 | 逐条那列的 DOM 一个字段都没动（`.inbox-item` / `.ib-kind` / `.ib-delivery` / `.ib-text` / 两个按钮），只是挪进了 `details` —— 老断言（`qa('#inbox .inbox-item')` 计数、`textContent` 里找文案）照旧成立 |
+
+**验证**：`footer-audit.js` 探针往 `store.inbox` 塞两条（排队 + 插话）后调 `renderInbox()`。393×894 实拍：
+行头 `2 queued · 第一条待发送的消息,正文挺长的要看看会不会把…`（省略号收住，没撑破行），`rows: 2`、
+`nextEllipsis: "ellipsis"`；点开后两条的标签与按钮都在（`/tmp/ocsm-probe/perf/footer-audit-393x894.png`）。
+
+**回归**：`smoke.sh` 新 R8 组 3 项；`ui-controls` 90 → **96**（6 项：收在 details 里且默认收起、行头文案、
+逐条那列一行没少、展开态跨重画留住、换行压成空格、只有控制项时只留计数）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
