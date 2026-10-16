@@ -521,6 +521,27 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .tool .tadd, .toolrow .tadd { flex: none; color: var(--diff-add-fg); font-size: 0.88em; }
 .tool .tdel, .toolrow .tdel { flex: none; color: var(--diff-del-fg); font-size: 0.88em; }
 
+/* 其它消息种类的行(照 TUI 的 SessionSwitchMessageV2 / SessionNoticeMessageV2 /
+   SessionSkillMessage):切换类整行 muted(location 那行的目录用 info 蓝)、通知类的 ◈
+   跟 TUI 一样是 muted(不是工具行那枚琥珀)、子会话/shell 收工那行行头按状态着色
+   (completed/其余 info 蓝、error 红、cancelled 琥珀)。 */
+.notice .tmark, .skillmsg .tmark { color: var(--muted); }
+.swrow { font-family: var(--mono); }
+.swPath { color: #0a5c9c; }
+.completion { font-family: var(--mono); display: flex; align-items: baseline; }
+.completion .cHead { flex: none; white-space: nowrap; color: #0a5c9c; }
+.completion.warn .cHead { color: #b8860b; }
+.completion.err .cHead { color: var(--bad); }
+/* 描述跟工具行一样:一行、超了省略号(照 TUI 的 Locale.truncateWidth) */
+.completion .cSuffix {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
 /* 正文整体限高内滚:长改动不会把消息流撑爆 */
 .toolbody { margin: 4px 0 2px; max-height: 420px; overflow: auto; }
 

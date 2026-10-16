@@ -2615,6 +2615,89 @@ function tokenBlockHtml(seg) {
   return html + '</tbody></table></details>';
 }
 
+/* ------- 其它消息种类(照 TUI 的 SessionMessageView,index.tsx:1799 ---------------
+ *
+ * 面板原来一律画成「· <type>: <text>」一句,跟 TUI 不是一回事。照 TUI 一一对上:
+ *
+ *   location-switched → SessionSwitchMessageV2:`↳ Moved to <目录>`(目录那格 info 蓝)
+ *   agent-switched    → 同上:`Switched agent to <X>` / `Switched agent from <X> to <Y>`
+ *                       (两头都 titlecase;previous 跟 agent 相同就只写 to)
+ *   model-switched    → switchLabel:`Switched model to <名字>`(名字后面补 (` (档)`,档不是
+ *                       default 时);providerID+id 跟 previous 相同(只换档)则
+ *                       `Switched variant to <档|default>`;模型表里查不到名字退回
+ *                       `providerID/id/variant`
+ *   system            → SessionNoticeMessageV2:`◈ <description ?? "Instructions updated">`
+ *   synthetic         → 同上;但 metadata.source 是 subagent / shell 的(子会话跑完、shell
+ *                       跑完)另画:`↳ Explorer finished · <描述>`(state=completed → finished、
+ *                       error → failed;completed 用 ↳,别的用 !;error 红、cancelled 琥珀、
+ *                       其余 info 蓝);shell 的描述先把空白压平(照 TUI)
+ *   skill             → SessionSkillMessage:`→ Skill <名字>`
+ *
+ * 另外两种「压根不出行」的照 TUI:① idle(rows.ts 撞上它只收轮、不 push 行);
+ * ② synthetic 没有 description 的(rows.ts:383 —— 例如「上一条被打断,接着干」那条原始
+ * 指令,正文是给模型看的,显示出来只是噪音)。见 msgHidden()。
+ */
+
+/* 照 TUI 的 switchLabel(util/model.ts,二进制里核对过原文) */
+function switchLabel(model, previous) {
+  const m = model || {};
+  if (previous && previous.providerID === m.providerID && previous.id === m.id) {
+    return 'Switched variant to ' + (m.variant || 'default');
+  }
+  const info = store.modelIndex.get(m.providerID + '/' + m.id);
+  const name = info && info.name;
+  if (name === undefined) {
+    return 'Switched model to ' + [m.providerID, m.id, m.variant].filter((x) => x !== undefined).join('/');
+  }
+  const v = m.variant && m.variant !== 'default' ? ' (' + m.variant + ')' : '';
+  return 'Switched model to ' + name + v;
+}
+
+/* synthical / system 那一行的正文(照 TUI 的 text():system 没描述时兜底 Instructions updated) */
+function noticeText(m) {
+  if (m.type === 'system') return m.description || 'Instructions updated';
+  return m.description || '';
+}
+
+function switchRowHtml(m) {
+  if (m.type === 'location-switched') {
+    const dir = (m.location && m.location.directory) || '';
+    return '<span class="swHead">↳ Moved to </span><span class="swPath">' + esc(dir) + '</span>';
+  }
+  if (m.type === 'agent-switched') {
+    const agent = titlecase(m.agent || '');
+    const from = m.previous && m.previous !== m.agent ? titlecase(m.previous) : '';
+    return '<span class="swText">Switched agent ' + (from ? 'from ' + esc(from) + ' to ' : 'to ') + esc(agent) + '</span>';
+  }
+  return '<span class="swText">' + esc(switchLabel(m.model, m.previous)) + '</span>';
+}
+
+function noticeRowHtml(m) {
+  const meta = (m.type === 'synthetic' && m.metadata) || {};
+  const source = typeof meta.source === 'string' ? meta.source : '';
+  const state = typeof meta.state === 'string' ? meta.state : '';
+  if (source !== 'subagent' && source !== 'shell') {
+    return '<div class="toolrow notice"><span class="tmark">◈</span>' +
+      '<span class="tdesc">' + esc(noticeText(m)) + '</span></div>';
+  }
+  const actor = source === 'shell' ? 'Shell' : titlecase(typeof meta.agent === 'string' ? meta.agent : 'Subagent');
+  const status = state === 'completed' ? 'finished' : state === 'error' ? 'failed' : state || 'finished';
+  const text = source === 'shell' ? noticeText(m).replace(/\s+/g, ' ').trim() : noticeText(m);
+  const cls = state === 'error' ? ' err' : state === 'cancelled' ? ' warn' : '';
+  return (
+    '<div class="completion' + cls + '"><span class="cHead">' + (state === 'completed' ? '↳' : '!') + ' ' +
+    esc(actor) + ' ' + esc(status) + '</span>' +
+    (text ? '<span class="cSuffix"> · ' + esc(text) + '</span>' : '') + '</div>'
+  );
+}
+
+/* 整条不出行的(照 TUI 的 rows.ts:383):idle,以及没有 description 的 synthetic */
+function msgHidden(m) {
+  if (m.type === 'idle') return true;
+  if (m.type === 'synthetic' && !noticeText(m).trim()) return true;
+  return false;
+}
+
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -2747,7 +2830,26 @@ function renderMessage(m, opts) {
     return el;
   }
 
-  if (m.type === 'idle') return el; // 占位,不显示
+  if (m.type === 'idle') return el; // 占位,不显示(renderMessages 根本不会把它插进来)
+
+  // 切换类 / 通知类 / 技能行照 TUI 的 SessionMessageView 一一对上(见上面那一段注释)
+  if (m.type === 'location-switched' || m.type === 'agent-switched' || m.type === 'model-switched') {
+    el.className = 'msg minor swrow';
+    el.innerHTML = switchRowHtml(m);
+    return el;
+  }
+  if (m.type === 'system' || m.type === 'synthetic') {
+    el.className = 'msg minor';
+    el.innerHTML = noticeRowHtml(m);
+    return el;
+  }
+  if (m.type === 'skill') {
+    el.className = 'msg minor';
+    el.innerHTML =
+      '<div class="toolrow skillmsg"><span class="tmark">→</span><span class="tname">Skill</span>' +
+      '<span class="tdesc">' + esc(m.name || '') + '</span></div>';
+    return el;
+  }
 
   el.className = 'msg minor';
   el.textContent = '· ' + m.type + (m.text ? ': ' + m.text : '');
@@ -2825,6 +2927,9 @@ function renderMessages() {
     const m = msgs[mi];
     const L = liveView(m.id);
     let view = L ? liveMessage(L) : m;
+    // idle 与「没有 description 的 synthetic」压根不出行(照 TUI 的 rows.ts:383)。
+    // 在这里 continue:不建 DOM、不占 msgEls 记录,也不动 prev —— 整条就像不存在。
+    if (!L && msgHidden(view)) continue;
     // 压缩块的正文在压缩期间是流式的(store.compactText 一段段涨):把当前正文并进
     // view 再算签名,签名才会跟着变 —— 不然新攒的正文上不了屏。
     if (!L && view && view.type === 'compaction') {
@@ -2834,7 +2939,10 @@ function renderMessages() {
     const liveFp = L ? liveSig(L) : '';
     // 脚注里的模型名是从模型表里查出来的(不在消息本体里),得一起进签名 ——
     // 否则模型表晚到一步,脚注就一直停在 providerID/id 的退回形态(TUI 那边是响应式,天然会重画)。
-    const fpExtra = !L && view && view.type === 'assistant' ? '|' + modelDisplayName(view.model) : '';
+    // model-switched 那行同理(switchLabel 也要查表)。
+    let fpExtra = '';
+    if (!L && view && view.type === 'assistant') fpExtra = '|' + modelDisplayName(view.model);
+    else if (!L && view && view.type === 'model-switched') fpExtra = '|' + switchLabel(view.model, view.previous);
     const sig = L ? 'live|' + liveFp : JSON.stringify(view) + fpExtra;
     // 脚注要按「整轮」算时长与速度,所以把整张消息表与自己在表里的位置一起交下去
     const rOpts = { msgs: msgs, index: mi };

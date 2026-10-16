@@ -1546,6 +1546,33 @@ else
   echo "FAIL: dock 的样式缺"; fail=$((fail + 1))
 fi
 
+# ---- R9 组:其它消息种类照 TUI(§8.32)----
+if has "$APPJS" 'function switchLabel(model, previous)' && has "$APPJS" "'Switched variant to '" &&
+   has "$APPJS" "Switched agent ' + (from ? " && has "$APPJS" "↳ Moved to "; then
+  echo "PASS: 切换类三行照 TUI(model 走 switchLabel、agent 两头 titlecase、location 写 Moved to)"; pass=$((pass + 1))
+else
+  echo "FAIL: 切换类那三行没照 TUI"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function noticeRowHtml(m)' && has "$APPJS" ">◈</span>" &&
+   has "$APPJS" "'completed' ? 'finished' : state === 'error' ? 'failed'" && has "$APPJS" "cSuffix\"> · ' + esc(text)"; then
+  echo "PASS: 通知类照 TUI(subagent/shell 收工写 ↳ <Actor> finished · 描述,其余 ◈ <描述>)"; pass=$((pass + 1))
+else
+  echo "FAIL: 通知类没照 TUI"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function msgHidden(m)' && has "$APPJS" "if (m.type === 'idle') return true;" &&
+   has "$APPJS" "if (m.type === 'synthetic' && !noticeText(m).trim()) return true;" &&
+   has "$APPJS" 'if (!L && msgHidden(view)) continue;'; then
+  echo "PASS: idle 与没描述的 synthetic 整条不出行(照 rows.ts:383)"; pass=$((pass + 1))
+else
+  echo "FAIL: 不出行的那两种还在建 DOM"; fail=$((fail + 1))
+fi
+if has "$CSS" '.completion { font-family: var(--mono); display: flex;' && has "$CSS" '.swPath {' &&
+   has "$CSS" '.completion.err .cHead {' && has "$CSS" '.notice .tmark, .skillmsg .tmark { color: var(--muted); }'; then
+  echo "PASS: 这些行的样式在(收工行一行不折、◈ 是 muted 不是工具行那枚琥珀)"; pass=$((pass + 1))
+else
+  echo "FAIL: 这些行的样式缺"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

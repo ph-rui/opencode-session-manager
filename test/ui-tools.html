@@ -873,6 +873,90 @@
         tHead([tkU, pcA, tkIdle, { id: 'pcc', type: 'compaction', status: 'completed' }, pcU2, pcB, tkIdle], 5)
           .indexOf('cache bust') < 0);
 
+      /* ---------------- 其它消息种类照 TUI 的 SessionMessageView(§8.32) ---------------- */
+      function km(m) { return renderMessage(m, {}); }
+      function kTxt(m) { return km(m).textContent.replace(/\s+/g, ' ').trim(); }
+      store.modelIndex.set('p1/m1', { providerID: 'p1', modelID: 'm1', name: 'Model One' });
+      store.modelIndex.set('p1/m2', { providerID: 'p1', modelID: 'm2', name: 'Model Two' });
+
+      /* switchLabel(照 TUI 的 util/model.ts) */
+      T('switchLabel:查得到名字就写名字',
+        switchLabel({ id: 'm1', providerID: 'p1' }, { id: 'm2', providerID: 'p1' }) === 'Switched model to Model One');
+      T('switchLabel:档不是 default 时名字后面补 (档)',
+        switchLabel({ id: 'm1', providerID: 'p1', variant: 'high' }, {}) === 'Switched model to Model One (high)' &&
+        switchLabel({ id: 'm1', providerID: 'p1', variant: 'default' }, {}) === 'Switched model to Model One');
+      T('switchLabel:同一个模型(providerID+id 都没变)只报换档',
+        switchLabel({ id: 'm1', providerID: 'p1', variant: 'high' }, { id: 'm1', providerID: 'p1', variant: 'low' }) ===
+          'Switched variant to high' &&
+        switchLabel({ id: 'm1', providerID: 'p1' }, { id: 'm1', providerID: 'p1' }) === 'Switched variant to default');
+      T('switchLabel:模型表里查不到就退回 providerID/id/variant',
+        switchLabel({ id: 'zz', providerID: 'p9', variant: 'low' }, {}) === 'Switched model to p9/zz/low',
+        switchLabel({ id: 'zz', providerID: 'p9', variant: 'low' }, {}));
+
+      T('model-switched 那行照 switchLabel',
+        kTxt({ id: 's1', type: 'model-switched', model: { id: 'm1', providerID: 'p1' }, previous: { id: 'm2', providerID: 'p1' } }) ===
+          'Switched model to Model One',
+        kTxt({ id: 's1', type: 'model-switched', model: { id: 'm1', providerID: 'p1' }, previous: { id: 'm2', providerID: 'p1' } }));
+      T('agent-switched 两头都 titlecase、写 from … to …',
+        kTxt({ id: 's2', type: 'agent-switched', agent: 'sisyphus - ultraworker', previous: 'build' }) ===
+          'Switched agent from Build to Sisyphus - Ultraworker',
+        kTxt({ id: 's2', type: 'agent-switched', agent: 'sisyphus - ultraworker', previous: 'build' }));
+      T('agent-switched 没换人(previous === agent)就只写 to',
+        kTxt({ id: 's3', type: 'agent-switched', agent: 'build', previous: 'build' }) === 'Switched agent to Build');
+      T('location-switched 照 TUI 写「↳ Moved to <目录>」,目录那格单独着色',
+        kTxt({ id: 's4', type: 'location-switched', location: { directory: '/proj/x' } }) === '↳ Moved to /proj/x' &&
+        km({ id: 's4', type: 'location-switched', location: { directory: '/proj/x' } }).querySelector('.swPath').textContent === '/proj/x');
+      T('切换类那行带 .swrow(整行 muted、等宽)', km({ id: 's1', type: 'model-switched', model: {}, previous: {} }).classList.contains('swrow'));
+
+      /* 通知类(SystemNoticeMessageV2) */
+      T('system 印「◈ <description>」',
+        kTxt({ id: 'n1', type: 'system', description: 'Instructions updated: core/date' }) === '◈Instructions updated: core/date',
+        kTxt({ id: 'n1', type: 'system', description: 'Instructions updated: core/date' }));
+      T('system 没有 description 时照 TUI 兜底 Instructions updated',
+        kTxt({ id: 'n2', type: 'system' }) === '◈Instructions updated');
+      T('synthetic 没 source 的也是「◈ <description>」',
+        kTxt({ id: 'n3', type: 'synthetic', description: 'Continuing after restart' }) === '◈Continuing after restart');
+      T('synthetic 是 subagent 收工:↳ <Actor> finished · <描述>(actor 照 TUI titlecase)',
+        kTxt({ id: 'n4', type: 'synthetic', metadata: { source: 'subagent', agent: 'explorer', state: 'completed' }, description: '核查源码' }) ===
+          '↳ Explorer finished · 核查源码',
+        kTxt({ id: 'n4', type: 'synthetic', metadata: { source: 'subagent', agent: 'explorer', state: 'completed' }, description: '核查源码' }));
+      T('synthetic 是 shell 收工:actor 恒为 Shell,描述先把空白压平',
+        kTxt({ id: 'n5', type: 'synthetic', metadata: { source: 'shell', state: 'completed' }, description: 'du  -s\n  /tmp' }) ===
+          '↳ Shell finished · du -s /tmp',
+        kTxt({ id: 'n5', type: 'synthetic', metadata: { source: 'shell', state: 'completed' }, description: 'du  -s\n  /tmp' }));
+      T('state=error → 「! … failed」+ 红;state=cancelled → 琥珀;completed 才是 ↳',
+        kTxt({ id: 'n6', type: 'synthetic', metadata: { source: 'shell', state: 'error' }, description: 'x' }).indexOf('! Shell failed') === 0 &&
+        km({ id: 'n6', type: 'synthetic', metadata: { source: 'shell', state: 'error' }, description: 'x' }).querySelector('.completion').classList.contains('err') &&
+        km({ id: 'n7', type: 'synthetic', metadata: { source: 'subagent', agent: 'explorer', state: 'cancelled' }, description: 'x' })
+          .querySelector('.completion').classList.contains('warn') &&
+        kTxt({ id: 'n7', type: 'synthetic', metadata: { source: 'subagent', agent: 'explorer', state: 'cancelled' }, description: 'x' }).indexOf('! Explorer cancelled') === 0);
+      T('skill 消息画成「→ Skill <名字>」(照 SessionSkillMessage)',
+        kTxt({ id: 'n8', type: 'skill', name: 'brainstorming' }) === '→Skillbrainstorming' &&
+        km({ id: 'n8', type: 'skill', name: 'brainstorming' }).querySelector('.toolrow').className.indexOf('skillmsg') > 0,
+        kTxt({ id: 'n8', type: 'skill', name: 'brainstorming' }));
+
+      /* 整条不出行的(照 rows.ts:383) */
+      T('idle 不出行', msgHidden({ id: 'h1', type: 'idle' }) === true);
+      T('synthetic 没有 description 的整条不出行(正文是给模型看的)',
+        msgHidden({ id: 'h2', type: 'synthetic', text: 'The previous response was interrupted.' }) === true &&
+        msgHidden({ id: 'h3', type: 'synthetic', description: 'Continuing after restart' }) === false);
+      T('system 即便没有 description 也要出(有 Instructions updated 兜底)',
+        msgHidden({ id: 'h4', type: 'system' }) === false);
+
+      /* 走一趟真渲染:不出行的那些压根不建 DOM,也不再留一圈白边 */
+      store.selected = 'ses_k';
+      store.live = new Map(); // 前面几组留下的流式缓冲不算数
+      store.messages = new Map([
+        ['k1', { id: 'k1', type: 'user', text: 'go', time: { created: 1 } }],
+        ['k2', { id: 'k2', type: 'idle', time: { created: 2 } }],
+        ['k3', { id: 'k3', type: 'synthetic', text: 'raw instruction', time: { created: 3 } }],
+        ['k4', { id: 'k4', type: 'synthetic', description: 'Continuing after restart', time: { created: 4 } }],
+      ]);
+      renderMessages();
+      T('idle 与没描述的 synthetic 都不建元素', qa('#messages .msg').length === 2, qa('#messages .msg').length);
+      T('没留 .msg.idle 的空壳(原来会剩一条 3px 灰边 + 22px 空隙)', qa('#messages .msg.idle').length === 0);
+      T('有描述的那条照常印出来', qa('#messages .msg').pop().textContent.indexOf('Continuing after restart') > 0);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));
