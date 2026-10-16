@@ -427,13 +427,13 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 178 |
+| `smoke.sh` | 187 |
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 141 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 131 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 162 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
-| `ui-mobile`（新）| 154 |
-| `ui-composer`（新，见 §8.4）| 84 |
+| `ui-mobile`（新）| 160 |
+| `ui-composer`（新，见 §8.4）| 91 |
 | `ui-jump`（新，见 §8.6）| 44 |
 | `e2e-asks` / `e2e-controls` / `e2e-capabilities` | 15 / 22（+1 跳）/ 26 |
 | `e2e-stream` / `e2e-attach` / `e2e-commands` | 4（+1 跳）/ 32 / 40 |
@@ -616,6 +616,57 @@ CSS 上是个顺序活：`list-hidden`（用户记下来的选择）与 `list-pe
 完成/出错回到 `⏺`、`toolRunning()` 判定）、`ui-stream` 123 → 131（新增 8 条：DOM 里确实有 `.tmark.spin`、
 定时器 80ms、`__tick()` 走一帧换到下一个字形、重绘不回跳相位、没有运行中的工具后定时器停掉）、
 `smoke.sh` 的 N 组 +3 条（175 → 178）；其余套件与 `e2e-*` 全部 0 失败。
+
+---
+
+### 8.10 追加：状态条搬到输入框下面、压缩也全程在转、压缩块照 TUI 画
+
+**起因**：用户三条反馈 —— ①进度条位置与 TUI 不一致（TUI 在输入框**下面**）；②「思考中」看不到条；
+③压缩（compaction）时看不到条。
+
+先把 TUI 的事实抓准（`/tmp/ocsm-probe/tui/cap4.py`：pty 跑真 TUI、对底栏区域逐块记时；
+再对上反编译里的 `bs({style:"blocks",holdStart:30,holdEnd:9})` 与 `spinner.interval:40`）：
+
+| 事实 | 来源 |
+|---|---|
+| 条在 `prompt.footer`（输入框**下面**那一行）：`   ■■⬝⬝⬝⬝⬝⬝ esc interrupt` | 抓屏 row 38（`\e[39;4H`，1-based） |
+| 亮不亮的条件只有「这一回合在跑」—— 思考 / 工具 / 压缩一视同仁 | `status === "running"` |
+| 8 格、**54 帧一圈、40ms 一帧**（2.16 秒）：往右长到 6 格 → 右端往回缩 → 空三拍 → 倒着重走一遍 → 空约 1 秒 | 抓屏时间戳 + `holdStart:30 / holdEnd:9` |
+
+| 点 | 决定 | 理由 |
+|---|---|---|
+| 位置 | `#progress` 从聊天标题行搬进 `#composer`，排在 `.cinput` **后面**（= TUI 的 `prompt.footer`）；头部只留文字（`● 运行中` / `◌ 重试中` / `空闲`） | 照 TUI；手机上头部那一行本来就挤 |
+| 收起态 | 细边上**也看得见**：`flex-direction: row` + `#progress { order:-1; margin-left:14px }`（排最左，`■ 中断` 紧跟它右边）+ `.phint { display:none }`（`■ 中断` 就在旁边，不用再教 Esc），且不额外长高 | 手机默认就是收起的 —— 一收就没等于没有 |
+| 帧表 | `PBAR_FRAMES = 54` / `PBAR_MS = 40`：`progressShape(n)`（14 个形状）+ 相位版 `progressCells(i)` —— `0..13` 正走 / `14..16` 空三拍 / `17..29` 倒放 / `30..53` 长空 | 原来 14 帧 @90ms 只取了前半圈 |
+| 「思考中也有条」 | 其实一直有（条挂在 `updateChatStatus()` 上），只是在头部那一行、又只有 8 格，没被认出来；搬到输入框下面并按 54 帧走之后就清楚了 | —— |
+| **压缩也有条** | 面板自己消费 `session.compaction.*` 记进 `store.compacting`（会话级 Set），并把「消息列表里最新一条 `status==='running'` 的 compaction」当刷新后的兜底；`isRunning()` / `updateChatStatus()` / 列表徽标都取同一个 `compactionRunning()` | 实测压缩跑到一半 `/api/session/active` 会空一拍（约 7.4s 就没了，而压缩到 10.85s 才结束）→ 只认 active 的话条会中途灭掉 |
+| 压缩块 | 消息流里 `type:'compaction'` 不再画 `· compaction` 一句，改成 TUI 风的一块：运行中 → 行首盲文 spinner（与工具行同一条帧表）+ `上下文压缩` + `进行中`；完成 → `⏺` + `N tokens` + `<details class="compact"><summary>摘要</summary>`（**默认折起**）；`error.type==='aborted'` → `已取消`；其它失败 → `✗` + `error.message` | 实测一份摘要 5~9 KB（真会话里抓到 4883 字节），手机上摊开能把整段会话顶没 |
+| 顺带修 | 窄屏加 `html.narrow.view-chat #chatpane { grid-column: 1 }` | 桌面那份 `grid-column: 3` 在单列网格里会撑出两个隐式列，对话区只按**内容宽度**落位 —— 底板收成细边（内容很短）时右边就白出一条，细边也不铺满 |
+
+**实测**（两条证据链）：
+
+1. 真服务 + 真面板（`/tmp/ocsm-probe/pbar2/live-shot.js`：鉴权本地反代 + 一张 1px 图挂住 `load` + 深链
+   `#会话id` + 无头 Firefox；状态由 `/tmp/ocsm-probe/probe/reporter.js` 每 200ms 上报一次）：
+   - 手机 393×894（默认**收起**）：`● 运行中`、`条hidden=false`、条 `rect(top,left,w,h)=[864,14,71,13]`、
+     底板 `[845,0,393,49]` —— 条在细边最左、左侧留白正好一格 14px；采到的格子序列
+     `2,4,6,5,2,0,1,4,6,4,1,0,3,6,5,2,0,1,4,6,4,1,0,1,5,6,2,0,…`（升到 6 → 掉到 0 → 再升，正是
+     「正走 / 空 / 倒走」那套，14 帧的旧表不会这样来回）；
+   - 桌面 1366×900：条 `top=874`，输入框 `top=794 h=80` → 条紧贴输入框**下面**（874 = 794 + 80）；
+   - **真压缩一回合**（对 `ses_demo` 发 `/compact`，SSE `started 6.08s → ended 13.54s`）：
+     面板从 `3889ms` 起画 `msg compaction live:⠋上下文压缩进行中`，行首 spinner 一路
+     `⠋⠸⠴⠇⠹⠧⠏⠙⠼⠦` 在转，`bar` 全程不是 `hidden`（含空拍）；`11163ms` 那一拍 `activeSel=None`
+     （就是上面那个「空一拍」）而条仍然亮着；`11364ms` 收工 → `空闲` + 条收起 + 块变成
+     `⏺上下文压缩 4,454 tokens 摘要…`；
+   - 真载荷渲染：`ses_demo` 里那条真 compaction（摘要 4883 字、
+     `tokens = 1255 + 2472`）直接喂给真 `renderMessage` → `⏺上下文压缩 3,727 tokens 摘要…`、`details=folded`；
+     真面板上同一块也核对过。
+2. 静态目检（`/tmp/ocsm-probe/pbar2/shot.js`：真 `index.html` + 真 `app.js`/`styles.css`，挡住 `init()` 只渲染）：
+   桌面展开 / 手机展开 / 手机收起（细边）/ 压缩块（进行中 + 已完成 + 真载荷）四张截图。
+
+**回归**：`ui-stream` 131 → 162（+20 条状态条位置与整圈 54 帧、+26 条压缩）、`ui-composer` 84 → 91
+（+7 条细边上的状态条）、`ui-mobile` 154 → 160（+3 条窄屏列位，两个视口各跑一遍）、
+`smoke.sh` 178 → 187（J 组 11 → 20）；`ui-*` 其余与 `e2e-*` 全部 0 失败。
+`test/ui-composer.html` 的夹具也补上了 `#progress`（与 `public/index.html` 的底板段保持一致）。
 
 ---
 
