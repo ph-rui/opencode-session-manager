@@ -16,6 +16,7 @@ const store = {
   running: false,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
   active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
+  compacting: new Set(), // sessionID:正在压缩上下文(SSE 的 session.compaction.* 说了算)
   inbox: new Map(), // sessionID -> [Session.Inbox.Info]
   agents: new Map(), // directory -> [Agent.Info]
   models: new Map(), // directory -> [Model.Info]
@@ -146,7 +147,28 @@ function runStatus(sid) {
 }
 
 function isRunning(sid) {
-  return !!sid && store.active.has(sid);
+  return !!sid && (store.active.has(sid) || compactionRunning(sid));
+}
+
+/* 「正在压缩上下文吗」—— 两路信号合起来看:
+ *   ① SSE 的 session.compaction.started/.ended(权威,压缩期 /api/session/active 会空一拍);
+ *   ② 消息列表里最新那条压缩消息还是 running(刷新/重连后的兜底)。
+ * 消息列表是权威:它已经收工,就把漏掉的 .ended 留下的标记清掉,免得条一直亮。
+ * 别的会话只有 ① 这一路(store.messages 里装的是当前选中会话的消息)。 */
+function compactionRunning(sid, msgs) {
+  sid = sid || store.selected;
+  if (!sid) return false;
+  if (sid !== store.selected) return store.compacting.has(sid);
+  let latest = null;
+  const list = msgs || Array.from(store.messages.values());
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i] && list[i].type === 'compaction') {
+      latest = list[i];
+      break;
+    }
+  }
+  if (latest && latest.status !== 'running') store.compacting.delete(sid);
+  return store.compacting.has(sid) || !!(latest && latest.status === 'running');
 }
 
 async function loadActive() {
@@ -883,7 +905,7 @@ function renderSessions() {
     if (arch) tr.classList.add('archived');
     const dir = (s.location && s.location.directory) || '';
     const nAsk = askCountFor(s.id);
-    const st = runStatus(s.id);
+    const st = runStatus(s.id) || (compactionRunning(s.id) ? 'busy' : null);
     tr.innerHTML =
       '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
       (st ? ' <span class="run-badge" title="正在执行">' + (st === 'retry' ? '◌ 重试中' : '● 运行中') + '</span>' : '') +
@@ -1853,6 +1875,36 @@ function renderMessage(m, opts) {
     return el;
   }
 
+  if (m.type === 'compaction') {
+    // 面板原来把这条画成「· compaction」—— 一句和正文无关的话。照 TUI 的 Compaction
+    // 块画:行首标记在压缩时转起来(dots 同款),完了给 tokens,摘要折在下面。
+    // 摘要默认折起:实测一份摘要 5~9 KB,手机上摊开能把整段会话顶没。
+    const running = m.status === 'running';
+    const aborted = !!(m.error && m.error.type === 'aborted');
+    const failed = m.status === 'failed' && !aborted;
+    el.className = 'msg compaction' + (running ? ' live' : '');
+    el.innerHTML =
+      '<div class="turn-head">' +
+      (running
+        ? '<span class="tmark spin">' + SPIN_FRAMES[spinFrame] + '</span>'
+        : '<span class="marker">' + (failed || aborted ? '✗' : '⏺') + '</span>') +
+      '<span class="who">上下文压缩</span>' +
+      (running ? '<span class="live-tag">进行中</span>' : '') +
+      (aborted ? '<span class="live-tag">已取消</span>' : '') +
+      (!running && !failed && m.tokens
+        ? '<span class="model">' + esc(fmtTokens(m.tokens)) + ' tokens</span>'
+        : '') +
+      '</div>' +
+      (m.summary
+        ? '<details class="compact"><summary>摘要</summary>' +
+          '<div class="content">' + md(m.summary) + '</div></details>'
+        : '') +
+      (failed && m.error && m.error.message
+        ? '<div class="content">' + esc(m.error.message) + '</div>'
+        : '');
+    return el;
+  }
+
   if (m.type === 'idle') return el; // 占位,不显示
 
   el.className = 'msg minor';
@@ -1930,23 +1982,29 @@ function renderMessages() {
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
   const streaming = !!(last && last.type === 'assistant' && last.time && !last.time.completed);
-  store.running = store.pending || streaming || !!liveForSid(store.selected);
+  const compacting = compactionRunning(store.selected, msgs);
+  store.running = store.pending || streaming || compacting || !!liveForSid(store.selected);
   updateChatStatus();
 }
 
 /* ------------------- 运行中的状态条(TUI 同款) ------------------- */
 
 const PBAR_CELLS = 8;
-const PBAR_FRAMES = 14;
-const PBAR_MS = 90;
+const PBAR_FRAMES = 54;
+const PBAR_MS = 40;
 
-/* 第 i 帧里哪些格子是实心的。这张表就是 TUI 实测到的 14 帧:
+/* 第 n 个「形状」(n = 0..13)里哪些格子是实心的:
  *   0-5   从左边长出来,1 格长到 6 格
  *   6-12  整段往右滑出去,同时从 6 格缩到 1 格
- *   13    空一拍(整条都是 ⬝)
- * 然后回到第 0 帧。TUI 是 8 格、14 帧一循环,这里逐帧照搬。 */
-function progressCells(i) {
-  const n = ((i % PBAR_FRAMES) + PBAR_FRAMES) % PBAR_FRAMES;
+ *   13    空(整条都是 ⬝)
+ * TUI 一个循环就是这 14 个形状按下面的相位拼出来的(pty 抓屏实测 + 反编译
+ * bs({style:"blocks",holdStart:30,holdEnd:9}) 对得上,见 §8.10):
+ *   0..13   正着走一遍(往右长 → 在右端一边缩一边停)
+ *   14..16  空三拍
+ *   17..29  倒着重走一遍(12 → 0;那个重复的空拍不再走一遍)
+ *   30..53  长空 ~1 秒(holdStart 30 帧里有 6 帧被倒放吃掉了)
+ * 54 帧 × 40ms = 2.16s 一圈 —— 之前这里是 14 帧 / 90ms,只取了前半段。 */
+function progressShape(n) {
   const on = [];
   for (let k = 0; k < PBAR_CELLS; k++) on.push(false);
   if (n < 6) {
@@ -1956,6 +2014,16 @@ function progressCells(i) {
     for (let k = lo; k <= Math.min(lo + 5, PBAR_CELLS - 1); k++) on[k] = true;
   }
   return on;
+}
+
+function progressCells(i) {
+  const n = ((i % PBAR_FRAMES) + PBAR_FRAMES) % PBAR_FRAMES;
+  let k;
+  if (n < 14) k = n;
+  else if (n < 17) k = 13;
+  else if (n < 30) k = 13 - (n - 16);
+  else k = 13;
+  return progressShape(k);
 }
 
 let pbarTimer = null;
@@ -2063,7 +2131,7 @@ function updateChatStatus() {
   const st = runStatus(store.selected);
   if (st === 'retry') {
     paint('◌ 重试中', 'state retry', 'retry');
-  } else if (st || store.running) {
+  } else if (st || store.running || compactionRunning()) {
     paint('● 运行中', 'state running', 'run');
   } else {
     paint('空闲', 'state', false);
@@ -4254,6 +4322,14 @@ function handleControlEvent(e) {
     if (sid) {
       if (t === 'session.execution.started') store.active.set(sid, 'busy');
       else store.active.delete(sid);
+      dirty = true;
+    }
+  } else if (t.indexOf('session.compaction.') === 0) {
+    // 压缩不是普通回合:实测 /api/session/active 在压缩跑到一半时会空一拍,
+    // 只认 status/execution 的话状态条会中途灭掉。这里直接按压缩事件记一笔。
+    if (sid) {
+      if (t === 'session.compaction.started') store.compacting.add(sid);
+      else store.compacting.delete(sid); // .ended / .failed 都算收工
       dirty = true;
     }
   } else if (t === 'session.renamed') {

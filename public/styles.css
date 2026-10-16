@@ -254,6 +254,11 @@ table#list { width: 100%; border-collapse: collapse; }
 .msg.user { border-left-color: #007acc; }
 .msg.assistant { border-left-color: #2e8b57; }
 .msg.minor { border-left-color: transparent; color: var(--muted); font-size: 0.88em; margin-bottom: 8px; }
+/* 上下文压缩那一块(照 TUI 的 Compaction 块):压缩中行首标记也转起来 */
+.msg.compaction { border-left-color: #7a6ca8; }
+.msg.compaction .turn-head .marker,
+.msg.compaction .tmark { color: #7a6ca8; }
+.msg.compaction .tmark.spin { display: inline-block; min-width: 1em; text-align: center; }
 
 .turn-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
 .turn-head .marker { font-weight: 700; }
@@ -467,6 +472,13 @@ table#list { width: 100%; border-collapse: collapse; }
 .reasoning[open] > summary::before { content: '▾ '; }
 .reasoning .content { color: var(--muted); font-size: 0.92em; margin-top: 4px; }
 
+/* 压缩摘要(跟「思考」同款折法:默认收着 —— 实测一份摘要有 5~9 KB) */
+.msg.compaction details > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 0.88em; }
+.msg.compaction details > summary::-webkit-details-marker { display: none; }
+.msg.compaction details > summary::before { content: '▸ '; }
+.msg.compaction details[open] > summary::before { content: '▾ '; }
+.msg.compaction details .content { color: var(--muted); font-size: 0.92em; margin-top: 4px; }
+
 /* --------------------------- 问询卡片 --------------------------- */
 #asks { border-top: 1px solid var(--border); background: #fffdf5; max-height: 46vh; overflow: auto; }
 .ask {
@@ -676,9 +688,18 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 #composer.collapsed {
   min-height: 30px;
-  justify-content: center; /* 细边里只剩一行,竖着居中(空闲时那行是空的,高度全靠 min-height) */
+  /* 细边就一行:输入框下面那条状态条(order:-1 排最前) + 工具栏里留下的 ■ 中断。
+     横着排、竖着居中 —— 空闲时这行是空的,高度全靠 min-height。 */
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
 }
 #composer.collapsed #ctoolbar { padding: 0 80px 0 14px; }
+/* 收起时状态条也在细边上:排到最左(照 TUI「条 + esc interrupt」的次序),
+   左内边距自己带 —— 空闲时它整个 display:none,这份缩进不会跑到别处去。 */
+#composer.collapsed #progress { order: -1; margin-left: 14px; padding: 0; }
+/* 细边里 ■ 中断 就在旁边,不用再教一遍 Esc */
+#composer.collapsed .phint { display: none; }
 /* 收起时藏起来的:三个选择器、投递方式、附件行、输入行、两个补全面板。
    #interrupt 刻意不在这个名单里 —— 运行中它是细边上唯一不能藏的东西。 */
 #composer.collapsed #ctoolbar .ctl,
@@ -1000,13 +1021,16 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
   opacity: 0.85;
 }
 
-/* 运行中的状态条 —— 照 TUI 那条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」做的。
-   8 格字符:■ = 已走过,⬝ = 还没到;一个 14 帧的循环从左边长出来、整段往右
-   滑出、空一拍再重来(帧序在 app.js 的 progressCells 里,那边有逐帧对表测试)。
+/* 运行中的状态条 —— 照 TUI 的 prompt.footer 做的:它在**输入框下面**那一行
+   (「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」),会话一跑就亮,思考中 / 跑工具 / 压缩中全都在。
+   8 格字符:■ = 已走过,⬝ = 还没到;一个 54 帧的循环从左边长出来、整段往右滑出、
+   倒下重走一遍、再空 ~1 秒(帧序在 app.js 的 progressCells 里,那边有逐帧对表测试)。
    颜色没有照抄 TUI —— 它是暗底(#0a0a0a)配 #5c9cf5 / #192434,搬到这个
    浅色主题上不成样子;这里改成面板自己的 --accent,空位用 --border 那种淡淡的。 */
 #progress { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 #progress[hidden] { display: none; }
+/* 展开时它是输入框下面单独一行(底板是竖排,它排在 .cinput 之后) */
+#composer > #progress { padding: 0 14px 8px; }
 .pbar { font-family: var(--mono); font-size: 0.9em; line-height: 1; }
 .pbar i { display: inline-block; width: 0.7em; text-align: center; font-style: normal; }
 .pbar i::before { content: '⬝'; color: var(--border); }
@@ -1016,7 +1040,7 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
 .phint b { font-weight: 400; color: var(--fg); }
 /* 手机上没 Esc 键:只留那条走动的格子,中断入口是输入框边上的「■ 中断」按钮 */
 html.narrow .phint { display: none; }
-/* 窄屏标题行里挤着「‹ 会话 + 标题 + ● 运行中 + 状态条」,间距收一点给标题留地方 */
+/* 窄屏标题行里挤着「‹ 会话 + 标题 + ● 运行中」,间距收一点给标题留地方 */
 html.narrow .chline { gap: 6px; }
 
 /* 流式消息:左侧色条做一个轻微的呼吸,提示内容在增长 */
@@ -1089,7 +1113,10 @@ html.narrow .resizer { display: none; }                    /* 分栏条与折叠
 /* 二选一。默认(没有 view-chat)= 列表,这样首屏不会闪出两个 pane;
    选中会话 → syncNarrowView() 加上 view-chat。 */
 html.narrow #chatpane { display: none; }
-html.narrow.view-chat #chatpane { display: flex; }
+/* 列位也得跟着改:窄屏只剩一列,而桌面那份是 grid-column: 3 —— 留着它会撑出两个
+   隐式列,对话区就只按【内容宽度】落位:会话里最长一行短的时候(比如刚建、只有一句
+   短消息,或者底板收成细边),右侧那条分栏槽会白出来,细边也不铺满。 */
+html.narrow.view-chat #chatpane { display: flex; grid-column: 1; }
 html.narrow.view-chat #listpane { display: none; }
 
 /* ---- 会话列表:<table> 变卡片行 ---- */

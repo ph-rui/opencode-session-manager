@@ -16,7 +16,7 @@
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">
       <div id="chatHeader">
-        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span><span id="progress" hidden><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span></div>
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
         <div id="chatMeta"></div>
         <div id="chatOps" hidden>
           <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
@@ -34,6 +34,7 @@
           <button type="button" id="interrupt" hidden>■ 中断</button>
         </div>
         <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
+        <span id="progress" hidden><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
       </div>
     </section>
   </main>
@@ -149,8 +150,10 @@
 
       /* ---------------- 运行中的状态条:TUI 同款 8 格字符条 ---------------- */
       T('有状态条元素', !!q('#progress'));
-      T('状态条在标题行里(和「● 运行中」同一行,不额外占高度)',
-        q('#progress') && q('#progress').parentElement === q('.chline'));
+      T('状态条在输入区里(照 TUI 的 prompt.footer:对话框下面那一行)',
+        q('#progress') && q('#progress').parentElement === q('#composer'));
+      T('状态条排在输入框后面(在对话框下面,不占标题行)',
+        q('#progress') && q('#progress').previousElementSibling === q('.cinput'));
       T('运行中状态条露出来', q('#progress') && q('#progress').hidden === false);
       T('运行中不带 retry 类', q('#progress') && !q('#progress').classList.contains('retry'));
       T('8 个格子', q('#progress .pbar') && q('#progress .pbar').children.length === 8,
@@ -158,21 +161,30 @@
       T('带着 TUI 那句 esc interrupt',
         (q('#progress .phint') || {}).textContent.replace(/\s+/g, ' ').trim() === 'esc interrupt',
         (q('#progress .phint') || {}).textContent);
-      // 逐帧对表:TUI 实测到的 14 帧,一格都不能错
+      var cells = function (k) {
+        return progressCells(k).map(function (on) { return on ? '■' : '⬝'; }).join('');
+      };
+      // 逐帧对表:前半圈这 14 个形状是 TUI 实测到的,一格都不能错
       var PBAR_WANT = ['■⬝⬝⬝⬝⬝⬝⬝', '■■⬝⬝⬝⬝⬝⬝', '■■■⬝⬝⬝⬝⬝', '■■■■⬝⬝⬝⬝', '■■■■■⬝⬝⬝', '■■■■■■⬝⬝',
                        '⬝■■■■■■⬝', '⬝⬝■■■■■■', '⬝⬝⬝■■■■■', '⬝⬝⬝⬝■■■■', '⬝⬝⬝⬝⬝■■■', '⬝⬝⬝⬝⬝⬝■■', '⬝⬝⬝⬝⬝⬝⬝■', '⬝⬝⬝⬝⬝⬝⬝⬝'];
       var PBAR_GOT = [];
-      for (var pf = 0; pf < 14; pf++) {
-        PBAR_GOT.push(progressCells(pf).map(function (on) { return on ? '■' : '⬝'; }).join(''));
-      }
-      T('14 帧逐帧与 TUI 实测一致', PBAR_GOT.join(' ') === PBAR_WANT.join(' '), PBAR_GOT.join(' '));
-      T('第 15 帧绕回第 1 帧(循环)', progressCells(14).join() === progressCells(0).join());
-      T('负数帧也当作循环内(不越界)', progressCells(-1).length === 8 && progressCells(-1).join() === progressCells(13).join());
+      for (var pf = 0; pf < 14; pf++) PBAR_GOT.push(cells(pf));
+      T('前半圈 14 帧逐帧与 TUI 实测一致', PBAR_GOT.join(' ') === PBAR_WANT.join(' '), PBAR_GOT.join(' '));
+      // 整圈是 54 帧(ptyscreencast + 反编译 bs({style:"blocks",holdStart:30,holdEnd:9}) 两边对得上):
+      //   0..13 正着走一遍 → 14..16 空三拍 → 17..29 倒着重走一遍 → 30..53 长空 ~1 秒
+      var EMPTY = '⬝⬝⬝⬝⬝⬝⬝⬝';
+      T('14..16 帧空三拍', cells(14) === EMPTY && cells(15) === EMPTY && cells(16) === EMPTY);
+      T('17 帧接着倒着重走(第 12 个形状,不是第 0 个)',
+        cells(17) === PBAR_WANT[12] && cells(17) !== PBAR_WANT[0], cells(17));
+      T('29 帧正好倒回到第 0 个形状', cells(29) === PBAR_WANT[0], cells(29));
+      T('30..53 帧长空(照 TUI 那 ~1 秒的空档)', cells(30) === EMPTY && cells(53) === EMPTY);
+      T('54 帧绕回第 0 帧(一圈 2.16 秒)', cells(54) === cells(0));
+      T('负数帧也当作循环内(不越界)', progressCells(-1).length === 8 && cells(-1) === cells(53));
       T('开头写的就是第 0 帧(只有第一格实心)',
         q('#progress .pbar').children[0].classList.contains('on') &&
         !q('#progress .pbar').children[1].classList.contains('on'));
-      T('状态条按 TUI 的节奏在推(挂了 90ms 的表)',
-        window.__intervalMs().indexOf(90) >= 0, window.__intervalMs());
+      T('状态条按 TUI 的节奏在推(挂了 40ms 的表)',
+        window.__intervalMs().indexOf(40) >= 0, window.__intervalMs());
       window.__tick();
       T('推一帧后变成第 1 帧(前两格实心)',
         q('#progress .pbar').children[1].classList.contains('on') &&
@@ -185,7 +197,7 @@
       window.matchMedia = function (qy) { return { matches: /reduced-motion/.test(qy), addEventListener: function () {}, addListener: function () {} }; };
       window.__intervals.length = 0;
       paintProgressBar('run');
-      T('系统要求减少动画时也照样挂表(不再钉住)', window.__intervalMs().indexOf(90) >= 0, window.__intervalMs());
+      T('系统要求减少动画时也照样挂表(不再钉住)', window.__intervalMs().indexOf(40) >= 0, window.__intervalMs());
       window.__tick();
       T('减少动画时也推得动(第 1 帧:前两格实心)',
         q('#progress .pbar').children[1].classList.contains('on') &&
@@ -193,7 +205,7 @@
       window.matchMedia = _mm;
       paintProgressBar(false);
       updateChatStatus();
-      T('复位后又是正常在跑(90ms 的表挂回来了)', window.__intervalMs().indexOf(90) >= 0, window.__intervalMs());
+      T('复位后又是正常在跑(40ms 的表挂回来了)', window.__intervalMs().indexOf(40) >= 0, window.__intervalMs());
 
       /* ---------------- text.started + deltas:只刷局部 ---------------- */
       var r2 = handleStreamEvent(ev('session.text.started', { sessionID: 'ses_a', assistantMessageID: AID, ordinal: 0 }));
@@ -483,6 +495,77 @@
       window.__timeouts.length = 0;
       feed('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', id: 'c9', name: 'read' });
       T('工具事件排一次对账重取', window.__pending(150) === 1, window.__timeouts);
+
+      /* ---------------- 压缩上下文:状态条也得亮,消息流里画成一块 ---------------- */
+      // 实测(真面板 + 真压缩):压缩期 /api/session/active 会空一拍 —— 压缩跑到一半
+      // 那个会话就不在 active 里了,只认它的话状态条会中途灭掉。所以面板自己按
+      // session.compaction.* 记一笔;消息列表里最新那条还是 running 也算兜底。
+      store.live.clear();
+      store.active.clear();
+      store.compacting.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      renderMessages();
+      T('干净状态下状态条是收着的(基线)', q('#progress').hidden === true);
+
+      feed('session.compaction.started', { sessionID: 'ses_a', reason: 'auto' });
+      T('compaction.started 记在案', store.compacting.has('ses_a'));
+      T('压缩中也算「这个会话在跑」(列表徽标/排队判定共用)', isRunning('ses_a'));
+      T('压缩中状态条亮起来', q('#progress').hidden === false);
+      T('压缩中头部也写「● 运行中」', q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
+      T('压缩也按 40ms 推条', __intervalMs().indexOf(40) >= 0, __intervalMs());
+      feed('session.compaction.ended', { sessionID: 'ses_a', reason: 'auto', text: '摘要正文' });
+      T('compaction.ended 收工', !store.compacting.has('ses_a'));
+      T('收工后不再算在跑', !isRunning('ses_a'));
+      T('收工后状态条收起来', q('#progress').hidden === true);
+
+      // 压缩消息:照 TUI 的 Compaction 块画(原来是「· compaction」一句没什么信息的话)
+      store.messages.set('msg_cp', {
+        id: 'msg_cp', type: 'compaction', time: { created: 300 }, status: 'running', reason: 'auto',
+      });
+      renderMessages();
+      var cpEl = q('#messages .msg.compaction');
+      T('压缩消息渲染成独立的块(不再是「· compaction」)', !!cpEl);
+      T('块头写着「上下文压缩」',
+        !!cpEl.querySelector('.who') && cpEl.querySelector('.who').textContent === '上下文压缩');
+      T('压缩中块头带「进行中」',
+        !!cpEl.querySelector('.live-tag') && cpEl.querySelector('.live-tag').textContent === '进行中');
+      T('压缩中行首标记是会转的盲文 spinner', !!cpEl.querySelector('.tmark.spin'));
+      T('压缩中块也挂上 80ms 的 spinner 表', __intervalMs().indexOf(80) >= 0, __intervalMs());
+      T('消息说在压缩 → 又算在跑(刷新页面后的兜底)', isRunning('ses_a'));
+      T('消息说在压缩 → 状态条又亮起来', q('#progress').hidden === false);
+
+      store.messages.set('msg_cp', {
+        id: 'msg_cp', type: 'compaction', time: { created: 300 }, status: 'completed', reason: 'auto',
+        summary: '# 摘要\n\n- 一\n- 二', tokens: { input: 12, output: 3 },
+      });
+      renderMessages();
+      cpEl = q('#messages .msg.compaction');
+      T('压缩完成后行首标记回到静态 ⏺',
+        !!cpEl.querySelector('.turn-head .marker') && cpEl.querySelector('.turn-head .marker').textContent === '⏺');
+      T('压缩完成后不再有 spinner', !cpEl.querySelector('.tmark.spin'));
+      T('压缩完成后给出 tokens', cpEl.textContent.indexOf('15 tokens') >= 0, cpEl.textContent.slice(0, 60));
+      T('摘要折在 details 里(默认不展开 —— 一份摘要常有几 KB)',
+        !!cpEl.querySelector('details.compact') && !cpEl.querySelector('details.compact').hasAttribute('open'));
+      T('摘要正文按 Markdown 渲染', !!cpEl.querySelector('details.compact .content li'));
+      T('压缩完成后不算在跑', !isRunning('ses_a'));
+      T('压缩完成后状态条收起来', q('#progress').hidden === true);
+
+      store.messages.set('msg_cp', {
+        id: 'msg_cp', type: 'compaction', time: { created: 300 }, status: 'failed', reason: 'auto',
+        error: { type: 'aborted' },
+      });
+      renderMessages();
+      cpEl = q('#messages .msg.compaction');
+      T('被取消的压缩标出「已取消」',
+        !!cpEl.querySelector('.live-tag') && cpEl.querySelector('.live-tag').textContent === '已取消');
+      T('被取消时行首是 ✗', cpEl.querySelector('.turn-head .marker').textContent === '✗');
+      T('被取消的压缩不算在跑', !isRunning('ses_a'));
+      store.messages.clear();
+      store.compacting.clear();
+      renderMessages();
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

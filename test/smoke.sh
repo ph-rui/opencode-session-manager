@@ -541,11 +541,67 @@ if has "$CSS" 'ocs-sweep'; then
 else
   echo "PASS: 旧的平滑扫动已清除(只剩 TUI 那套 8 格)"; pass=$((pass + 1))
 fi
-# 帧表本身:8 格、14 帧。逐帧对表在 test/ui-stream.html 里测。
-if has "$APPJS" 'const PBAR_CELLS = 8' && has "$APPJS" 'const PBAR_FRAMES = 14'; then
-  echo "PASS: app.js 里是 8 格 14 帧(和 TUI 实测的一致)"; pass=$((pass + 1))
+# 帧表本身:8 格、54 帧、40ms(TUI 的 bs({style:"blocks",holdStart:30,holdEnd:9}) + pty 抓屏实测)。
+# 逐帧对表在 test/ui-stream.html 里测。
+if has "$APPJS" 'const PBAR_CELLS = 8' && has "$APPJS" 'const PBAR_FRAMES = 54' && has "$APPJS" 'const PBAR_MS = 40'; then
+  echo "PASS: app.js 里是 8 格 54 帧 40ms(和 TUI 实测的一致)"; pass=$((pass + 1))
 else
-  echo "FAIL: app.js 缺 PBAR_CELLS=8 / PBAR_FRAMES=14"; fail=$((fail + 1))
+  echo "FAIL: app.js 缺 PBAR_CELLS=8 / PBAR_FRAMES=54 / PBAR_MS=40"; fail=$((fail + 1))
+fi
+# 位置:必须照 TUI 的 prompt.footer 放在【输入框下面】,不再是聊天头部那一行
+CHATLINE=$(printf '%s' "$HOME_HTML" | grep -o 'class="chline".*' | head -1)
+if printf '%s' "$CHATLINE" | grep -q 'id="progress"'; then
+  echo "FAIL: 状态条还挂在聊天标题行里(TUI 是在输入框下面)"; fail=$((fail + 1))
+else
+  echo "PASS: 聊天标题行里没有状态条了(只剩「‹ 会话 + 标题 + ● 运行中」)"; pass=$((pass + 1))
+fi
+# #progress 夹在输入框(.cinput)后面、而且在 #composer 里面 = 对话框下面那一行
+HTML_FLAT=$(printf '%s' "$HOME_HTML" | tr -d '\n')
+CINPUT_AT=$(printf '%s' "$HTML_FLAT" | grep -bo '<div class="cinput">' | head -1 | cut -d: -f1)
+PROG_AT=$(printf '%s' "$HTML_FLAT" | grep -bo '<span id="progress" hidden' | head -1 | cut -d: -f1)
+COMPOSER_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="composer"' | head -1 | cut -d: -f1)
+if [ -n "$COMPOSER_AT" ] && [ -n "$CINPUT_AT" ] && [ -n "$PROG_AT" ] &&
+   [ "$COMPOSER_AT" -lt "$CINPUT_AT" ] && [ "$CINPUT_AT" -lt "$PROG_AT" ]; then
+  echo "PASS: 状态条排在输入框(.cinput)后面 —— 对话框下面那一行"; pass=$((pass + 1))
+else
+  echo "FAIL: 状态条不在输入框后面(位置没照 TUI 搬:composer=$COMPOSER_AT cinput=$CINPUT_AT progress=$PROG_AT)"; fail=$((fail + 1))
+fi
+if has "$CSS" '#composer > #progress'; then
+  echo "PASS: styles.css 给了「输入框下面那一行」的版式"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 #composer > #progress 的版式"; fail=$((fail + 1))
+fi
+# 收起成细边时也要看得见(手机默认就是收起的):order:-1 排最左,和 ■ 中断 同一条细边
+if has "$CSS" '#composer.collapsed #progress { order: -1;' && has "$CSS" '#composer.collapsed .phint { display: none; }'; then
+  echo "PASS: 收起态细边上也带着状态条(不额外长高)"; pass=$((pass + 1))
+else
+  echo "FAIL: 收起态没安排状态条的位置(手机上收起就看不见了)"; fail=$((fail + 1))
+fi
+# 压缩上下文:面板要自己认这个状态(实测压缩期 /api/session/active 会空一拍)
+if has "$APPJS" "t === 'session.compaction.started'" && has "$APPJS" 'store.compacting.add(sid)'; then
+  echo "PASS: app.js 消费 session.compaction.*(压缩中状态条不会中途灭)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 没消费 session.compaction.*"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function compactionRunning(' && has "$APPJS" 'store.compacting.has(sid)'; then
+  echo "PASS: 「在压缩」有单一判定(SSE 事件 + 消息状态兜底)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺 compactionRunning()"; fail=$((fail + 1))
+fi
+if has "$APPJS" "m.type === 'compaction'" && has "$APPJS" '上下文压缩'; then
+  echo "PASS: 压缩消息画成 TUI 那种一块(不再是「· compaction」)"; pass=$((pass + 1))
+else
+  echo "FAIL: 压缩消息还是老样子(· compaction 垃圾行)"; fail=$((fail + 1))
+fi
+if has "$CSS" '.msg.compaction' && has "$CSS" '.msg.compaction .tmark.spin'; then
+  echo "PASS: styles.css 有压缩块的样式(行首 spinner 定宽)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 .msg.compaction 的样式"; fail=$((fail + 1))
+fi
+if has "$APPJS" '<details class="compact"><summary>摘要</summary>'; then
+  echo "PASS: 压缩摘要折在 details 里(一份摘要常有几 KB,手机上别刷屏)"; pass=$((pass + 1))
+else
+  echo "FAIL: 压缩摘要没有折起来"; fail=$((fail + 1))
 fi
 # 显示与否仍然只由 updateChatStatus() 一处决定:它调 paintProgressBar(),
 # 而 paintProgressBar 在 app.js 里只应该出现两次(定义 1 次 + 被调 1 次)。

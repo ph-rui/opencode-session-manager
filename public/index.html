@@ -77,8 +77,6 @@
           <button type="button" id="backList" class="chip" aria-label="返回会话列表">‹ 会话</button>
           <span id="chatTitle">未选择会话</span>
           <span id="chatState" class="state"></span>
-          <!-- 运行中的状态条,照 TUI 那条「■⬝⬝⬝⬝⬝⬝⬝ esc interrupt」做的(帧序见 app.js 的 progressCells) -->
-          <span id="progress" hidden title="正在执行 · 按 Esc 中断"><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
         </div>
         <div id="chatMeta" class="meta"></div>
         <div id="chatOps" hidden>
@@ -125,6 +123,9 @@
           <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行);/ 命令,@ 可补全工程内的文件"></textarea>
           <button id="send">发送</button>
         </div>
+        <!-- 运行中的状态条:照 TUI 的 prompt.footer 放在输入框【下面】(帧序见 app.js 的
+             progressCells)。收起成细边时它也在(排在 ■ 中断 左边),见 styles.css。 -->
+        <span id="progress" hidden title="正在执行 · 按 Esc 中断"><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
         <div id="mentions" hidden role="listbox" aria-label="文件补全"></div>
         <div id="cmds" hidden role="listbox" aria-label="命令补全"></div>
         <input type="file" id="filePick" multiple hidden>

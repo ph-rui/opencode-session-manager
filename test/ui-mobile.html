@@ -317,6 +317,16 @@
         cs(q('#input')).fontSize === '16px', cs(q('#input')).fontSize);
       T('C7 窄屏:#send 命中区 ≥44', box(q('#send')).height >= 44, box(q('#send')).height);
       T('C8 窄屏:📎 命中区 ≥44', box(q('#btnAttach')).height >= 44, box(q('#btnAttach')).height);
+      /* 窄屏只剩一列:对话区必须钉在这唯一一列上。桌面那份是 grid-column:3,留着它会
+         撑出两个隐式列 —— 会话里最长一行不够宽时(刚建的会话、底板收成细边),对话区就只
+         按内容宽度落位,右边白出一条,细边也不铺满。 */
+      T('C8a 窄屏:对话区钉在第 1 列', cs(q('#chatpane')).gridColumnStart === '1',
+        cs(q('#chatpane')).gridColumnStart);
+      T('C8b 窄屏:对话区铺满整宽(不按内容宽度缩着)',
+        Math.abs(box(q('#chatpane')).width - window.innerWidth) <= 1,
+        [box(q('#chatpane')).width, window.innerWidth]);
+      T('C8c 窄屏:对话区左沿贴边(不被隐式列顶开)',
+        Math.abs(box(q('#chatpane')).left) <= 1, box(q('#chatpane')).left);
 
       /* 对话框:基础样式 min-width:420px,在 393px 的屏上必然溢出 */
       openPick({ title: '宽度检查', items: [{ key: 'a', label: '甲' }] });

@@ -64,6 +64,7 @@
           <textarea id="input" rows="2" placeholder="输入消息,Enter 发送(Shift+Enter 换行);/ 命令,@ 可补全工程内的文件"></textarea>
           <button id="send">发送</button>
         </div>
+        <span id="progress" hidden title="正在执行 · 按 Esc 中断"><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
         <div id="mentions" hidden role="listbox" aria-label="文件补全"></div>
         <div id="cmds" hidden role="listbox" aria-label="命令补全"></div>
         <input type="file" id="filePick" multiple hidden>
@@ -381,6 +382,28 @@
       q('#interrupt').dispatchEvent(new MouseEvent('click', { bubbles: true }));
       T('H4 运行中收起点「中断」:不该顺手把底板展开', collapsed());
       T('H5 点中断后中断按钮还在细边上', vis(q('#interrupt')));
+
+      /* 细边上的状态条:照 TUI 的 prompt.footer —— 条在输入框下面,收起成细边时排在最左,
+         ■ 中断 紧跟在它右边(与 TUI 的「条 + esc interrupt」一个次序)。 */
+      updateChatStatus();
+      T('H6 收起成细边时状态条也看得见(手机默认就是收起的,不能一收就没)',
+        vis(q('#progress')) && !q('#progress').hidden);
+      T('H7 细边上状态条排在最左(■ 中断 在它右边)',
+        box(q('#progress')).left < box(q('#interrupt')).left,
+        [box(q('#progress')).left, box(q('#interrupt')).left]);
+      T('H8 细边左侧那点留白照 TUI(一格:14px)',
+        Math.abs(box(q('#progress')).left - box(q('#composer')).left - 14) <= 1,
+        [box(q('#progress')).left, box(q('#composer')).left]);
+      T('H9 细边不额外长高(还是那一条,≤48+边距)',
+        box(q('#composer')).height <= 56, box(q('#composer')).height);
+      T('H10 细边上不再重复教 Esc(■ 中断 就在旁边)',
+        cs(q('#progress .phint')).display === 'none', cs(q('#progress .phint')).display);
+      T('H11 细边仍然铺满整宽(不再被内容宽度带着走)',
+        Math.abs(box(q('#composer')).width - box(q('#chatpane')).width) <= 1,
+        [box(q('#composer')).width, box(q('#chatpane')).width]);
+      store.running = false;
+      updateChatStatus();
+      T('H12 收工后细边上的状态条也收起来', q('#progress').hidden === true);
       store.running = false;
       updateComposerControls();
 
