@@ -4625,10 +4625,10 @@ function setupListToggle() {
  * 指针已经不在槽里,再动一下就被判成「挪进对话区」,列表再也拉不回来 —— 想「删完这个
  * 接着删下一个」都做不到。
  *
- * 所以动手之前先武装一段宽限期:这 3 秒里【谁来都不收】(mouseleave 与 mousemove 两条
+ * 所以动手之前先武装一段宽限期:这几秒里【谁来都不收】(mouseleave 与 mousemove 两条
  * 路径都挡),到点再按「指针最后一次真实移动停在哪」复查一遍 —— 还在槽里就继续留着,
  * 已经挪进对话区就收掉。真实意图只被推迟几秒,不会被吃掉。 */
-const PEEK_HOLD_MS = 3000;
+const PEEK_HOLD_MS = 5000; // 用户实测后定的:5 秒左右自己收
 let peekHoldUntil = 0; // > Date.now():宽限期里,谁也别想把它收掉
 let peekHoldTimer = 0;
 let peekLastX = -1; // 指针最后一次真实 mousemove 停在哪

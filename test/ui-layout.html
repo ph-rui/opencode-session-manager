@@ -299,7 +299,7 @@
           .forEach(function (t) { try { t.fn(); } catch (e) {} });
         window.__timers = window.__timers.filter(function (t) { return t.ms !== ms; });
       };
-      // 时间是按 Date.now() 算的,测试里不真等 3 秒:把到点时间拨到过去再点那个回调
+      // 时间是按 Date.now() 算的,测试里不真等 5 秒:把到点时间拨到过去再点那个回调
       var expireNow = function () { peekHoldUntil = Date.now() - 1; fireTimers(PEEK_HOLD_MS + 30); };
       localStorage.setItem('ocs.listHidden', '1');
       setupListToggle();
