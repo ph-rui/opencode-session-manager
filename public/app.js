@@ -38,6 +38,7 @@ const store = {
   restoreScroll: null, // 刷新恢复时要还原的滚动锚点(只由 restoreFromHash 设置,renderMessages 消费)
   live: new Map(), // assistantMessageID -> 流式本地缓冲(见「逐 token 流式」)
   uploadDir: '', // 附件暂存目录(来自 /__health)
+  home: '', // 机器 home 目录(来自 /__health),提示栏拿它把路径缩成 ~/...(照 TUI 的 cm)
   attachments: [], // 待发送的附件:[{ id, name, size, mime, path, uri }]
   mentionHits: new Map(), // @ 补全里确认过的条目:'相对路径' -> 绝对路径(H 组 6 A)
   mentionItems: [], // 当前补全列表
@@ -130,6 +131,10 @@ async function health() {
   try {
     const j = await api('/__health');
     if (j && j.uploadDir) store.uploadDir = j.uploadDir; // 附件的落盘目录(H 组 6)
+    if (j && j.home && store.home !== j.home) {
+      store.home = j.home; // 提示栏把工程路径缩成 ~/...(照 TUI 的 cm)
+      if (store.selected) paintContextUsage();
+    }
     if (j.ok) {
       el.className = 'status ok';
       el.textContent = '已连接 ' + (j.base || '');
@@ -1457,15 +1462,7 @@ async function selectSession(id) {
   store.mentionHits.clear();
   renderSessions();
   const s = store.sessions.get(id);
-  $('#chatTitle').textContent = s ? s.title || '(无标题)' : id;
-  // 工程目录挪到了输入框下面的提示栏(#promptFooter)里 —— 跟 TUI 的 prompt.footer.location
-  // 一个位置,这里只留更新时间与项目号。
-  $('#chatMeta').textContent = [
-    s && s.time && s.time.updated ? '更新 ' + rel(s.time.updated) : '',
-    s && s.projectID ? s.projectID.slice(0, 8) : '',
-  ]
-    .filter(Boolean)
-    .join('  ·  ');
+  paintChatHeader(s);
   msgEls.clear();
   $('#messages').innerHTML = '';
   renderAsks();
@@ -1479,6 +1476,44 @@ async function selectSession(id) {
     loadInbox(id),
     renderControls(s),
   ]);
+  /* 深链(#<sid>)或很久以前的会话可能不在当前列表页里(列表只拉最近一页,这里拿不到
+   * 它的 location)。补拉一次会话本身 —— 工具栏的 agent/model、提示栏的工程路径都要它。
+   * 刻意不 await:不能让这条网络往返改掉选会话的时序(会跟列表刷新抢)。 */
+  if (!s) refreshSessionInfo(id);
+}
+
+/* 头部标题 + 更新时间/项目号。工程目录挪到了输入框下面的提示栏(#promptFooter)里 ——
+ * 跟 TUI 的 prompt.footer.location 一个位置,这里只留更新时间与项目号。 */
+function paintChatHeader(s) {
+  $('#chatTitle').textContent = s ? s.title || '(无标题)' : store.selected || '';
+  $('#chatMeta').textContent = [
+    s && s.time && s.time.updated ? '更新 ' + rel(s.time.updated) : '',
+    s && s.projectID ? s.projectID.slice(0, 8) : '',
+  ]
+    .filter(Boolean)
+    .join('  ·  ');
+}
+
+/* 列表页里没有这个会话时,单独问一次服务端把它补进 store,再补画用到它的几处。
+ * 只认「带 id 的对象」—— 服务端对不存在的会话返回的是空数组([]),照单全收会把
+ * 真会话冲成一个空壳。 */
+function refreshSessionInfo(id) {
+  api('/api/session/' + enc(id))
+    .then((j) => {
+      const info = j && j.data;
+      if (!info || typeof info !== 'object' || Array.isArray(info) || !info.id) return;
+      if (store.selected !== id) return; // 期间切走了
+      const merged = Object.assign({}, info);
+      if (!merged.location && merged.directory) merged.location = { directory: merged.directory };
+      store.sessions.set(id, merged);
+      renderSessions();
+      paintChatHeader(merged);
+      renderControls(merged);
+      paintContextUsage();
+    })
+    .catch(() => {
+      /* 拿不到就照旧按空处理 */
+    });
 }
 
 async function loadMessages(opts) {
@@ -2445,23 +2480,60 @@ function contextUsage(msgs, models, boundID) {
   return { tokens: total, percent: limit ? Math.round((total / limit) * 100) : undefined };
 }
 
+/* TUI 提示栏里的工程路径其实是「目录:分支」——`Co()` 先按 home 缩写,再拼
+ * `P.location.vcs.info(dir)?.branch.current`(见 §8.20)。分支要问一次服务端,按目录缓存:
+ * 问到之前先只印目录,回来再补上 `:分支`;不是 git 仓库就缓存一个空串,不再问。 */
+const branchCache = new Map(); // directory -> branch(空串 = 问过了,没有)
+const branchPending = new Set();
+
+function cachedBranch(dir) {
+  if (!dir) return '';
+  if (branchCache.has(dir)) return branchCache.get(dir);
+  if (branchPending.has(dir)) return '';
+  branchPending.add(dir);
+  api('/api/vcs?' + new URLSearchParams({ 'location[directory]': dir }).toString())
+    .then((j) => {
+      const b = (j && j.data && j.data.branch && j.data.branch.current) || '';
+      branchCache.set(dir, b);
+    })
+    .catch(() => { branchCache.set(dir, ''); })
+    .finally(() => {
+      branchPending.delete(dir);
+      // 回来了补画一次(仍在同一个会话 / 同一个目录上才有意义)
+      if (store.selected) paintContextUsage();
+    });
+  return '';
+}
+
+/* TUI 的 `cm(path, home)`:在 home 下面的路径缩成 `~/...`,正好是 home 就是 `~`,
+ * 其余(比如挂在 /media 上的工程)原样返回。home 由 /__health 告知(浏览器看不到本机 home)。 */
+function abbrevHome(dir) {
+  const home = store.home;
+  if (!home || !dir) return dir;
+  if (dir === home) return '~';
+  if (dir.indexOf(home + '/') === 0) return '~/' + dir.slice(home.length + 1);
+  return dir;
+}
+
 /* 提示栏(#promptFooter,照 TUI 的 prompt.footer 放在输入框下面)左边那格:工程路径。
- * 路径太长由 CSS 截断,title 里给全路径;整条只在选中会话时露出来(没会话时它整个收着)。
- * 用量那格(#ctxInfo)由下面的 paintContextUsage() 管。 */
+ * 显示照 TUI:`目录`(按 home 缩成 ~/...) + 有分支时 `:分支`(太长由 CSS 截断,
+ * title 里给全路径)。整条只在选中会话时露出来(没会话时它整个收着)。用量那格
+ * (#ctxInfo)由下面的 paintContextUsage() 管。 */
 function paintPromptFooter(show, dir) {
   const foot = $('#promptFooter');
   if (!foot) return; // 测试页可能没这条
   foot.hidden = !show;
   const d = $('#chatDir');
   if (!d) return;
-  const text = dir || '(未指定工程目录)';
+  const branch = show ? cachedBranch(dir) : '';
+  const text = dir ? abbrevHome(dir) + (branch ? ':' + branch : '') : '(未指定工程目录)';
   if (d.textContent !== text) d.textContent = text;
   if (d.title !== dir) d.title = dir;
 }
 
 /* 提示栏里那个数字:全量文案 + 窄屏文案一起写进去,CSS 按 html.narrow 显示哪一个。
  * 拿不到用量(还没跑过一轮 / 模型不在表里给不出百分比)就收起来 —— 但提示栏本身
- * (路径 + ctrl+p commands)照旧。 */
+ * (路径 + ctrl+p commands)照旧。费用照 TUI 的提示栏:> 0 时在用量后面接 ` · $x.xx`。 */
 function paintContextUsage() {
   const sid = store.selected;
   const s = sid ? store.sessions.get(sid) : null;
@@ -2469,17 +2541,20 @@ function paintContextUsage() {
   paintPromptFooter(!!sid, dir);
   const el = $('#ctxInfo');
   if (!el) return; // 测试页可能没这个元素
+  const costStr = fmtCost(s && s.cost);
   const u = sid
     ? contextUsage(currentMessages(), store.models.get(dir), (s && s.revert && s.revert.messageID) || '')
     : null;
-  if (!u) {
+  if (!u && !costStr) {
     el.hidden = true;
     el.removeAttribute('title');
     return;
   }
-  const size = fmtSize(u.tokens);
-  const full = u.percent === undefined ? size : size + ' (' + u.percent + '%)';
-  const compact = u.percent === undefined ? size : u.percent + '% ctx';
+  const size = u ? fmtSize(u.tokens) : '';
+  const tokFull = !u ? '' : u.percent === undefined ? size : size + ' (' + u.percent + '%)';
+  const tokCompact = !u ? '' : u.percent === undefined ? size : u.percent + '% ctx';
+  const full = [tokFull, costStr].filter(Boolean).join(' · ');
+  const compact = [tokCompact, costStr].filter(Boolean).join(' · ');
   const f = el.querySelector('.ctxFull');
   const c = el.querySelector('.ctxCompact');
   if (f && c) {
@@ -2489,8 +2564,11 @@ function paintContextUsage() {
     el.textContent = full; // 没有两档子节点(老结构)时的兜底
   }
   const title =
-    '上下文用量 ' + u.tokens.toLocaleString() + ' tokens' +
-    (u.percent === undefined ? '' : '(' + u.percent + '%)');
+    (u
+      ? '上下文用量 ' + u.tokens.toLocaleString() + ' tokens' +
+        (u.percent === undefined ? '' : '(' + u.percent + '%)')
+      : '本会话费用') +
+    (costStr ? ' · ' + costStr : '');
   if (el.title !== title) el.title = title;
   el.hidden = false;
 }
@@ -4210,6 +4288,15 @@ async function cycleAgent() {
 // Esc 的优先级:命令面板 → @ 补全 → 中断(照 TUI:session.interrupt 要按两下,
 // 第一下只是「上膛」,见 requestInterrupt)
 function setupTuiKeys() {
+  // 提示栏里的「⇧tab agents」点了就切下一个智能体(对应 TUI 的 agent.cycle)
+  const ahint = $('#agentHint');
+  if (ahint && ahint.dataset.wired !== '1') {
+    ahint.dataset.wired = '1';
+    ahint.addEventListener('click', () => {
+      if (anyDialogOpen()) return;
+      cycleAgent();
+    });
+  }
   // 提示栏里的「ctrl+p commands」点了也开命令面板(手机上没 Ctrl 键,这行提示就是入口)
   const hint = $('#cmdHint');
   if (hint && hint.dataset.wired !== '1') {

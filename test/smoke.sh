@@ -1141,11 +1141,49 @@ if has "$HOME_HTML" 'id="chatDir"' && has "$HOME_HTML" 'id="cmdHint"' &&
 else
   echo "FAIL: 提示栏缺 #chatDir / #cmdHint 或两档提示文案"; fail=$((fail + 1))
 fi
+# TUI 的提示栏在 ctrl+p commands 前面还有一个 agent.cycle 提示(面板里绑的是 Shift+Tab)
+if has "$HOME_HTML" 'id="agentHint"' && has "$HOME_HTML" '⇧tab agents' &&
+   has "$CSS" 'html.narrow #agentHint { display: none; }' &&
+   has "$APPJS" 'ahint.addEventListener'; then
+  echo "PASS: 还有 «⇧tab agents» 提示(照 TUI agent.cycle,桌面显示/手机收起,点了切智能体)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏缺 #agentHint(或没接线/没在手机上收起)"; fail=$((fail + 1))
+fi
 if has "$CSS" 'html.narrow #cmdHint .hFull { display: none; }' &&
    has "$CSS" 'html.narrow #cmdHint .hNarrow { display: inline; }'; then
   echo "PASS: 手机那档提示由 CSS 换成 «/ 命令»(手机没有 Ctrl 键)"; pass=$((pass + 1))
 else
   echo "FAIL: styles.css 缺提示栏窄屏切档规则"; fail=$((fail + 1))
+fi
+# 同一条里四格的顺序照 TUI 的 prompt.footer:路径 → 用量 → ⇧tab agents → ctrl+p commands
+DIR_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="chatDir"' | head -1 | cut -d: -f1)
+AGENT_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="agentHint"' | head -1 | cut -d: -f1)
+HINT_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="cmdHint"' | head -1 | cut -d: -f1)
+if [ -n "$DIR_AT" ] && [ -n "$AGENT_AT" ] && [ -n "$HINT_AT" ] &&
+   [ "$DIR_AT" -lt "$CTX_AT" ] && [ "$CTX_AT" -lt "$AGENT_AT" ] && [ "$AGENT_AT" -lt "$HINT_AT" ]; then
+  echo "PASS: 提示栏顺序是 路径 → 用量 → ⇧tab agents → ctrl+p commands(照 TUI)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏顺序不对(dir=$DIR_AT ctx=$CTX_AT agent=$AGENT_AT hint=$HINT_AT)"; fail=$((fail + 1))
+fi
+# TUI 提示栏在用量后面还会接费用(`XN` 出来的 usage 与 `session.cost` 用 · 连起来,>0 才印)
+if has "$APPJS" 'fmtCost(s && s.cost)' && has "$APPJS" "[tokFull, costStr].filter(Boolean).join(' · ')"; then
+  echo "PASS: 用量后面接费用(TUI 的 usage · cost,>0 才印)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏没接 session.cost / 没按 TUI 用 · 连起来"; fail=$((fail + 1))
+fi
+# TUI 的路径是「目录:分支」(`Co()`:先按 home 缩成 ~/...,再拼 location.vcs.info()?.branch.current)
+if has "$APPJS" 'function cachedBranch(' && has "$APPJS" "'/api/vcs?'" &&
+   has "$APPJS" 'branch.current' && has "$APPJS" "abbrevHome(dir) + (branch ? ':' + branch : '')"; then
+  echo "PASS: 工程路径照 TUI 拼上 «:git 分支»(按目录缓存,回来自动补画)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏的路径没拼分支/没走 /api/vcs"; fail=$((fail + 1))
+fi
+# TUI 的 `cm(path, home)`:home 下面的路径缩成 ~/...;home 通过 /__health 告知浏览器
+if has "$SERVERJS" 'home: os.homedir()' && has "$APPJS" 'function abbrevHome(' &&
+   has "$APPJS" "dir.indexOf(home + '/') === 0" && has "$APPJS" "store.home = j.home;"; then
+  echo "PASS: 工程路径照 TUI 按 home 缩成 ~/…(/__health 提供 home)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺少 home 缩写(server 的 /__health 或 abbrevHome)"; fail=$((fail + 1))
 fi
 if has "$HOME_HTML" 'class="ctxFull"' && has "$HOME_HTML" 'class="ctxCompact"'; then
   echo "PASS: 全量 / 窄屏两档文案都在 DOM 里(窄屏那档就是 TUI 的 compact)"; pass=$((pass + 1))
@@ -1180,8 +1218,8 @@ else
 fi
 CTX_CALLS=$(printf '%s' "$APPJS" | grep -oF 'paintContextUsage();' | wc -l)
 if has "$APPJS" 'function paintContextUsage(' && has "$APPJS" 'function currentMessages(' &&
-   [ "$CTX_CALLS" = 3 ]; then
-  echo "PASS: paintContextUsage 三个调用点(updateChatStatus 两分支 + renderControls),口径与渲染共用 currentMessages()"; pass=$((pass + 1))
+   [ "$CTX_CALLS" = 6 ]; then
+  echo "PASS: paintContextUsage 六个调用点(updateChatStatus 两分支 + renderControls + 分支回来补画 + /__health 给 home 后补画 + 深链补拉会话后补画),口径与渲染共用 currentMessages()"; pass=$((pass + 1))
 else
   echo "FAIL: paintContextUsage 的接线不对(got $CTX_CALLS 个调用点)"; fail=$((fail + 1))
 fi
@@ -1189,6 +1227,14 @@ if has "$(cat "$(dirname "$0")/ui-stream.html")" "#ctxInfo"; then
   echo "PASS: ui-stream.html 里有上下文用量的断言"; pass=$((pass + 1))
 else
   echo "FAIL: ui-stream.html 里没有上下文用量的断言"; fail=$((fail + 1))
+fi
+# 深链/旧会话不在当前列表页时,单独补拉一次会话本身(工具栏与提示栏的工程路径要用它的 location)。
+# 只认带 id 的对象,别把服务端给不存在会话返回的空数组当成会话。
+if has "$APPJS" 'function refreshSessionInfo(' && has "$APPJS" 'if (!s) refreshSessionInfo(id);' &&
+   has "$APPJS" 'Array.isArray(info)'; then
+  echo "PASS: 列表页里没有的会话按需补拉一次(照 TUI:location 总是有的),并挡住空数组"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺少深链会话的补拉 / 没挡住空数组响应"; fail=$((fail + 1))
 fi
 # 提示栏由 paintContextUsage 那一个同步点一起画(路径 + 整条显隐),点 «ctrl+p commands» 也开命令面板。
 if has "$APPJS" 'function paintPromptFooter(' && has "$APPJS" 'paintPromptFooter(!!sid, dir)' &&

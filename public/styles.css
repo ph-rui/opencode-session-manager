@@ -235,6 +235,7 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 #promptFooter[hidden] { display: none; }
 #chatDir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#agentHint,
 #cmdHint {
   flex: none;
   padding: 0;
@@ -245,7 +246,10 @@ table#list { width: 100%; border-collapse: collapse; }
   color: inherit;
   cursor: pointer;
 }
+#agentHint:hover,
 #cmdHint:hover { color: var(--fg); }
+/* 智能体提示是键盘提示:手机没键盘(工具栏上就有下拉),收起来 */
+html.narrow #agentHint { display: none; }
 /* 提示也分两档:桌面是 TUI 原样的「ctrl+p commands」,手机没 Ctrl 键就写「/ 命令」 */
 #cmdHint .hNarrow { display: none; }
 html.narrow #cmdHint .hFull { display: none; }

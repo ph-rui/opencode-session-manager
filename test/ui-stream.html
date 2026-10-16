@@ -36,7 +36,7 @@
         <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
         <span id="progress" hidden><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
       </div>
-      <div id="promptFooter" hidden><span id="chatDir"></span><button type="button" id="cmdHint"><span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span></button><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span></div>
+      <div id="promptFooter" hidden><span id="chatDir"></span><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span><button type="button" id="agentHint">⇧tab agents</button><button type="button" id="cmdHint"><span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span></button></div>
     </section>
   </main>
   <div id="toast" hidden></div>
@@ -744,6 +744,10 @@
       T('命令提示两档都在 DOM 里(桌面 ctrl+p / 手机 / 命令)',
         q('#cmdHint .hFull').textContent === 'ctrl+p commands' &&
         q('#cmdHint .hNarrow').textContent === '/ 命令');
+      T('提示栏里还有 ⇧tab agents(照 TUI agent.cycle;面板的键是 Shift+Tab)',
+        q('#agentHint').textContent === '⇧tab agents' &&
+        q('#promptFooter').contains(q('#agentHint')),
+        q('#agentHint').textContent);
 
       var CTX_M1 = {
         id: 'm1', type: 'assistant', time: { created: 100, completed: 101 },
@@ -804,6 +808,34 @@
         q('#ctxInfo .ctxCompact').textContent === '1.5K' &&
         q('#ctxInfo').title.indexOf('%') < 0,
         q('#ctxInfo .ctxFull').textContent + ' / ' + q('#ctxInfo').title);
+
+      /* 费用:照 TUI 的提示栏,用量后面接 ` · $x.xx`(> 0 才印;TUI 的 usage · cost) */
+      store.sessions.get('ses_a').cost = 0.42;
+      renderMessages();
+      T('费用接在用量后面(TUI 的 usage · cost,>0 才印)',
+        q('#ctxInfo .ctxFull').textContent === '1.5K · $0.42', q('#ctxInfo .ctxFull').textContent);
+      store.sessions.get('ses_a').cost = 0;
+      renderMessages();
+      T('费用为 0 时照 TUI 不印',
+        q('#ctxInfo .ctxFull').textContent === '1.5K' && q('#ctxInfo .ctxCompact').textContent === '1.5K',
+        q('#ctxInfo .ctxFull').textContent);
+
+      /* 路径照 TUI 的 Co():目录 + 「:分支」 */
+      branchCache.set('/proj/a', 'main');
+      paintContextUsage();
+      T('工程路径拼上 git 分支(照 TUI 的 Co())',
+        q('#chatDir').textContent === '/proj/a:main', q('#chatDir').textContent);
+      T('title 仍是纯目录(悬浮看全路径)',
+        q('#chatDir').title === '/proj/a', q('#chatDir').title);
+      branchCache.delete('/proj/a');
+
+      /* 路径按 home 缩写(照 TUI 的 cm(path, home)) */
+      store.home = '/home/u';
+      T('home 下面的路径缩成 ~/…', abbrevHome('/home/u/x/y') === '~/x/y', abbrevHome('/home/u/x/y'));
+      T('正好是 home 缩成 ~', abbrevHome('/home/u') === '~', abbrevHome('/home/u'));
+      T('不在 home 下面的原样返回', abbrevHome('/proj/a') === '/proj/a', abbrevHome('/proj/a'));
+      T('home 未知时不缩写', (function () { const h = store.home; store.home = ''; const r = abbrevHome('/home/u/x'); store.home = h; return r === '/home/u/x'; })());
+      store.home = '';
 
       /* 流式那一轮:step.ended 把 tokens 打上,不必等服务端把消息落盘 */
       store.messages.clear();

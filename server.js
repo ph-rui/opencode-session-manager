@@ -459,6 +459,7 @@ async function health(res) {
     hasPassword: !!state.password,
     configDir: CONFIG_DIR,
     uploadDir: UPLOAD_DIR,
+    home: os.homedir(), // 提示栏把工程路径缩成 ~/...(照 TUI 的 cm(path, home))
     detail,
   });
 }
