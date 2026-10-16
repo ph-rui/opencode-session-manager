@@ -1370,13 +1370,16 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 | 窄屏 | `html.narrow #chatAgent .agModel { display: none }`，宽度上限 32% → 40%（模型收走后瓶颈不在它身上）。两格都还在 DOM 里，横屏转回来就露出来；模型名照旧留在整条的 `title` 里 |
 | 「加载更旧消息」 | `#older` 是块级盒，跟着 `#chatOps`（`display: flex`）就只能落到下一行。`#chatOps` 改 `inline-flex`、`#older` 是 `inline-block` —— 两个行内盒自然共一行；一行放不下时 `#older` 自己换行（还是原来那样）|
 | 尺寸 | `#older` 的 padding / 字号对齐 `.chip`；窄屏 `html.narrow #older { min-height: 40px }` 跟旁边几个 chip 一样高 |
+| 顺手修的 | `clearSelection()` 原来只清 `store.messages`，没管 `#older` 与 `store.msgOlderCursor`：清掉选中后那一格会一直露在头部（**探针实测**：`#chatOps.hidden true` 而 `#older.hidden false`），点了也没用（`loadMessages` 没选中直接返回）；游标还会把上一个会话的页码带进下一个会话的第一页回来之前的空档。现在两样一起清 |
 
 **验证**：393×894 四个 chip（导出 / 在 TUI 打开 / 归档 / 加载更旧消息）一行放得下（`#chatOps` 右沿 205、
 `#older` 左沿 208 —— 中间那道 3px 是行内盒之间的空白）；1366×900 桌面同样是这一行。截图
-`/tmp/ocsm-probe/perf/narrow-explore-393.png` 与 `-1366.png`。
+`/tmp/ocsm-probe/perf/narrow-explore-393.png` 与 `-1366.png`。清掉选中那一条用 `CLEAR=1`（探针点 `#backList`
+之后再量一轮）：改前 `#older.hidden false`、改后 `true`。
 
 **回归**：`smoke.sh` 239 → **243**（新 R3 组 4 项：拆两格 / 窄屏回收 + 宽度上限 / `#chatOps` 与 `#older`
 同排 / 窄屏 40px）；`ui-stream` 236 → **240**（窄屏收起来 / 宽屏露出来 / `.agName` 照旧 / `title` 里模型名没丢）；
+`ui-jump` 56 → **58**（清掉选中后 `#older` 收起 + 游标清掉）；
 `ui-mobile` 160、`ui-layout` 164 等全部不动；其余套件与 `e2e-*` 全 0 失败。
 
 ---
