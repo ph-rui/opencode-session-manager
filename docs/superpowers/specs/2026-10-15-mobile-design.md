@@ -606,6 +606,12 @@ CSS 上是个顺序活：`list-hidden`（用户记下来的选择）与 `list-pe
 `⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹` —— 10 个字形齐全、逐帧连续递增、约两圈；
 截图 `/tmp/ocsm-probe/spin/{desktop,phone}.png` 里运行中的两行在转，完成/出错仍是 `⏺`（手机竖屏也没折行）。
 
+又在**真服务 + 真面板**上复核过一遍（`/tmp/ocsm-probe/live2/shot-live2.js`：只加鉴权头的本地反代 +
+无头 Firefox 深链 `#会话id`；面板的数据是 `load` 之后才取的，所以反代往 HTML 里注入一张永不完成的
+1px 图挂住 `load`，等 `/api/session/<id>/message` 回来再放行 —— 否则只能拍到「连接中…」）。
+截图 `/tmp/ocsm-probe/live2/{phone2,desktop2}.png`：正在跑的工具行（就是那条命令本身）行首是**盲文点阵**，
+已完成的行仍是 `⏺`；手机 393×894 上头部 `● 运行中` + 8 格进度条与行首 spinner 同时在场。
+
 **回归**：`ui-tools` 102 → 110（新增 8 条：帧表与间隔照抄 `dots`、运行中行首换 spinner 且不再画 `⏺`、
 完成/出错回到 `⏺`、`toolRunning()` 判定）、`ui-stream` 123 → 131（新增 8 条：DOM 里确实有 `.tmark.spin`、
 定时器 80ms、`__tick()` 走一帧换到下一个字形、重绘不回跳相位、没有运行中的工具后定时器停掉）、
