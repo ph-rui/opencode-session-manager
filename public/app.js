@@ -2840,9 +2840,16 @@ function paintFooterAgent() {
   const model = (m && m.selectedIndex >= 0 && (m.options[m.selectedIndex] || {}).text) || '';
   const vsel = $('#variantSel');
   const variant = (vsel && vsel.value) || '';
-  let text = [agent, model].filter(Boolean).join(' · ');
-  if (variant && variant !== 'default') text += ' · ' + variant;
-  if (el.textContent !== text) el.textContent = text;
+  // 拆成两格:智能体(.agName)和「 · 模型 · 变体」(.agModel)。手机上模型名最长、又是三格里
+  // 最不常看的,窄屏那格直接收起来,把宽度让给工程路径(见 styles.css 的 html.narrow 档)。
+  // 整条 textContent 仍是「智能体 · 模型 · 变体」,拿它当变更判据照旧。
+  const tail = [model, variant && variant !== 'default' ? variant : ''].filter(Boolean).join(' · ');
+  const text = [agent, tail].filter(Boolean).join(' · ');
+  if (el.textContent !== text) {
+    el.innerHTML = agent
+      ? '<span class="agName">' + esc(agent) + '</span>' + (tail ? '<span class="agModel"> · ' + esc(tail) + '</span>' : '')
+      : '';
+  }
   el.hidden = !text;
   if (el.title !== text) el.title = text;
 }

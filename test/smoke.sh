@@ -1404,6 +1404,29 @@ else
   echo "FAIL: 时长格式跟 TUI 的 Locale.duration 对不上"; fail=$((fail + 1))
 fi
 
+# ---- R3 组:窄屏优化(提示栏第一格 / 会话操作那一行) ----
+if has "$APPJS" 'el.innerHTML = agent' && has "$APPJS" 'class="agName"' && has "$APPJS" 'class="agModel"'; then
+  echo "PASS: 提示栏第一格拆成 .agName / .agModel 两格"; pass=$((pass + 1))
+else
+  echo "FAIL: #chatAgent 没拆成两格"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #chatAgent .agModel { display: none; }' &&
+   has "$CSS" 'html.narrow #chatAgent { max-width: 40%; }'; then
+  echo "PASS: 窄屏收掉模型·变体那格,把宽度让给工程路径"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏没收 .agModel / 宽度上限没跟着改"; fail=$((fail + 1))
+fi
+if has "$CSS" '#chatOps { display: inline-flex' && has "$CSS" '#older { width: auto; margin: 8px 0 0;'; then
+  echo "PASS: #chatOps 改 inline-flex,「加载更旧消息」落在会话操作同一行"; pass=$((pass + 1))
+else
+  echo "FAIL: 「加载更旧消息」还是自己占一整行"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #older { min-height: 40px; }'; then
+  echo "PASS: 手机上「加载更旧消息」跟旁边几个 chip 一样高(40px)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏下 #older 的触摸高度没对齐"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

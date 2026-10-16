@@ -235,8 +235,11 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 #promptFooter[hidden] { display: none; }
 #chatAgent { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
-/* 手机上「智能体 · 模型」让一让:模型名(显示名)比 TUI 的 model id 长,别把工程路径挤没 */
-html.narrow #chatAgent { max-width: 32%; }
+/* 手机上「智能体 · 模型 · 变体」里模型名(显示名)最长,又是三格里最不常看的,别把工程路径
+   挤没:窄屏只留智能体那格,`.agModel`(连它前面那个 ` · `)整格收起来 —— 两格都还在 DOM 里,
+   横屏转回来(html.narrow 掉了)就露出来。模型名照旧在 #chatAgent 的 title 里。 */
+html.narrow #chatAgent { max-width: 40%; }
+html.narrow #chatAgent .agModel { display: none; }
 #chatAgent[hidden] { display: none; }
 #chatDir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #agentHint,
@@ -273,7 +276,10 @@ html.narrow #cmdHint .hNarrow { display: inline; }
 html.narrow #ctxInfo .ctxFull { display: none; }
 html.narrow #ctxInfo .ctxCompact { display: inline; }
 #chatMeta { font-size: 0.88em; color: var(--muted); margin-top: 3px; word-break: break-all; }
-#older { width: auto; margin-top: 8px; padding: 4px 10px; font-size: 0.96em; }
+/* 「加载更旧消息」跟着上面那排会话操作(导出 / 在 TUI 打开 / 归档)排在同一行 —— #chatOps
+   是 inline-flex,#older 是 inline-block,两个行内盒自然共一行;顶到右边界时 #older 自己
+   换到下一行(还是原来那样占一整行)。尺寸照 .chip(手机上再对齐那个 40px 的触摸高度)。 */
+#older { width: auto; margin: 8px 0 0; padding: 2px 10px; font-size: 0.92em; vertical-align: middle; }
 
 #messages {
   flex: 1;
@@ -1020,7 +1026,9 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 
 /* --------------------------- 会话操作(聊天头部) --------------------------- */
 
-#chatOps { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+/* 会话操作(聊天头部)。inline-flex 而不是 flex:让紧跟其后的「加载更旧消息」(#older,
+   inline-block)落在同一行上 —— 见过 flex 的话它是块级盒,会把 #older 顶到下一行去。 */
+#chatOps { display: inline-flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; vertical-align: middle; }
 #chatOps[hidden] { display: none; }
 #chatOps .chip { background: var(--panel2); }
 
@@ -1254,6 +1262,7 @@ html.narrow #chatHeader { padding: 8px 10px; }
 html.narrow .chline { gap: 8px; }
 html.narrow #chatMeta { font-size: 11.5px; }
 html.narrow #chatOps .chip { min-height: 40px; }
+html.narrow #older { min-height: 40px; }
 
 /* ---- 输入区 ---- */
 html.narrow #ctoolbar { gap: 8px; padding: 7px 10px 0; }

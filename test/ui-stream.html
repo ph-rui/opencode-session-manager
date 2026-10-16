@@ -772,6 +772,22 @@
       T('非默认变体接着印在模型后面(照 TUI 的 · variant)',
         q('#chatAgent').textContent === 'Build · DeepSeek V4 Flash · thinking',
         q('#chatAgent').textContent);
+      /* 窄屏优化:这格拆成 .agName(智能体)/ .agModel( · 模型 · 变体)两格,窄屏把 .agModel
+       * 收起来,把宽度让给工程路径 —— 两格都还在 DOM 里,横屏回去就露出来(见 styles.css)。 */
+      document.documentElement.classList.add('narrow');
+      T('窄屏:模型·变体那格(.agModel)收起来,让位给工程路径',
+        getComputedStyle(q('#chatAgent .agModel')).display === 'none',
+        getComputedStyle(q('#chatAgent .agModel')).display);
+      T('窄屏:智能体那格(.agName)照旧露着',
+        getComputedStyle(q('#chatAgent .agName')).display !== 'none' &&
+        q('#chatAgent .agName').textContent === 'Build');
+      T('窄屏:整条的 title 里模型名照旧给着(收起来但没丢)',
+        q('#chatAgent').title === 'Build · DeepSeek V4 Flash · thinking', q('#chatAgent').title);
+      document.documentElement.classList.remove('narrow');
+      T('宽屏:模型·变体那格回来看得见',
+        getComputedStyle(q('#chatAgent .agModel')).display !== 'none' &&
+        q('#chatAgent .agModel').textContent === ' · DeepSeek V4 Flash · thinking',
+        q('#chatAgent .agModel').textContent);
       q('#ctoolbar').hidden = true;
       paintFooterAgent();
       T('工具栏收起(没会话)时,智能体·模型那格也跟着收', q('#chatAgent').hidden === true);
