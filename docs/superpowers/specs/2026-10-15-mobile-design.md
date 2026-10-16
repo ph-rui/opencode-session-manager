@@ -1501,6 +1501,42 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.29 追加：用户消息照 TUI（抬起底色块 + skill / file 徽标）
+
+**起因**：用户「一切往 TUI 的方向靠拢」，四条默认里的第③条后半 —— 用户消息的底色块与 skill/file 徽标。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/routes/session/index.tsx:2214` 的 `UserMessage`）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 整条包在一个盒子里：`border={["left"]}` + `backgroundColor: theme.background.raised.base` | `2241-2246` 行 |
+| 左边那条边的颜色 = **会话当前智能体**的色（`local.agent.color(session.agent)`）；**待投递**的消息另用中性边色 | `2229` / `2243` 行 |
+| 正文那格再抬一层：`paddingLeft={2}`、上下各 1 行、hover 时 `decrease(raised)` | `2248-2287` 行 |
+| `skills[]`：另起一行，每颗是「` skill ` 加粗反白徽标 + ` 名字 ` 稍暗那格」 | `2289-2310` 行 |
+| `files[]`：另起一行，徽标按 mime 分 ` file ` / ` dir `（`application/x-directory` 才是 dir），名字取 `name ?? source.uri ?? "attachment"` | `2311-2336` 行 |
+| 正文、files、skills 全空的消息整条不渲染 | `2240` 行 |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 底色块 | `.msg.user` 加 `background: var(--panel)`（照 `background.raised.base`）+ 圆角与内边距；原来那条 3px 左边框留着 |
+| 左边框颜色 | **不跟 agent 走** —— 服务端 `/api/agent` 不下发颜色（TUI 是在本地 context 里按 agent id 算的），面板保留自己那条蓝；这一条在设计文档里记着，将来若要跟 agent 走，得先给面板一张配色表 |
+| skill 徽标 | `.ref-skill` 里改成 `<span class="rBadge">skill</span><span class="rName">名字</span>`；外层不再自带黄底框（颜色由里面两格给，照 TUI） |
+| file 徽标 | `.att-name` 里改成 `<span class="rBadge">file|dir</span><span class="rName">名字</span>`；`📎` 那个 emoji 换成 TUI 的徽标（名字来源不变：`name ?? 路径末段 ?? 附件`） |
+| 保留的面板自有物 | 正文/提及/附件仍是**三个条件追加的子块**（`turn-head` / `content` / `refs` / `atts`，顺序与层级一个没动，老断言照旧）、`att-meta`（mime · 大小）、`att-src`（来源路径）、`att-img`（图片缩略图）、以及 `@agent` 那颗蓝 chip（TUI 的用户消息里没有这个东西）|
+
+**验证**：`footer-audit.js` 探针加了用户消息一栏。393×894 实拍：`.msg.user` 的 `backgroundColor: rgb(243,243,243)`、
+`borderLeftColor: rgb(0,122,204)`、`borderRadius: 3px`，截图里那条 `❯ 你 / git push` 已经是抬起来的块
+（`/tmp/ocsm-probe/perf/footer-audit-393x894.png`）。徽标那两格在这两条会话的最后几条用户消息里没有命中
+（那几条既没 skill 也没附件），靠单测覆盖。
+
+**回归**：`smoke.sh` 新 R6 组 3 项（skill 与 file/dir 徽标、底色块与徽标样式、skill 外层不带框）；
+`ui-attach` 132 → **133**（3 条改成徽标断言 + 新增 dir 徽标那条）；`ui-tools` 199 不动（`#name` 那条改成徽标断言）。
+`README.md` 里「📎 名字」那几处一并改写。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |

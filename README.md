@@ -153,6 +153,9 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 - **`/sessions` `/models` `/agents` 弹选择框让你选**:不是把焦点丢给顶栏下拉(浏览器不会因此展开原生 `<select>`),而是弹出列表 —— `↑`/`↓` 环绕、`Enter` 选中、`Esc` 关闭、可过滤、可点选;选有推理档位的模型会接着追问一次档位(见下文「选择框」)
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」;相邻的**探索类工具行**(`read` / `glob` / `grep` / `webfetch` / `websearch`)折成一行 `→ Explored: 1 read`(照 TUI 的 exploration 分组:计数与复数、跑着时换 `Exploring` + spinner、默认折着,点开就是原来那些工具行),**思考块**的行头照 TUI 的 reasoning 分组行(`Thought: <标题> · N steps · 4.7s` / 跑着时 `Thinking: <标题>`;标题取正文最前面那段加粗、折着才印,展开就收起来,时长是组内各段之和,格式照 TUI 的 `Locale.duration`),相邻的思考段并成一块,见移动端设计 §8.24 / §8.28
+- **用户消息照 TUI**:整块抬起来(raised 底色 + 左边一条色边,照 `UserMessage` 的 `background.raised.base` 与
+  `border={["left"]}`);`skills[]` 与 `files[]` 各画成「徽标 + 名字」两格(` skill ` / ` file ` / ` dir `),
+  名字那格取 `name ?? 路径末段 ?? 附件`(见移动端设计 §8.29)
 - **会话操作那一行**:聊天头部依次是 `导出` / `在 TUI 打开` / `归档`;还有更早的消息时「**加载更旧消息**」跟着排在**同一行**(一行放不下才自己换行)。手机上提示栏只留智能体那一格(模型·变体收起来、整条 `title` 里照旧),把宽度让给工程路径 —— 393px 竖屏上路径那格 145 → 234px(见移动端设计 §8.25)。它原来**一次都没成功过**:翻页请求把 `order` 与游标一起发,服务端 `400 InvalidCursorError: Cursor cannot be combined with order`,`api()` 抛出又被静默 `catch` —— 现在首屏带 `order=desc`、翻页**只**带游标(见移动端设计 §8.26)
 - **助手消息脚注**(照 TUI 的 `AssistantFooter`):每条助手消息**收工后**在底部印一行 `Build · DeepSeek V4 Flash · 4.7s · 42.1 tok/s`(智能体首字母大写、模型名先去模型表查 `name`,时长 = 本步完成时间 − **本轮**输入消息的时间,速度 = 本轮各步 `output+reasoning` 之和 ÷ 各步活跃时长之和);中断时尾巴接 `· interrupted`,出错时上面另起一行 `Error: <原因>`,重试时 `⚠ Retrying in Ns · attempt K · <原因>`(每秒重算)。**模型名不再印在头部**,照 TUI 挪到这里(见移动端设计 §8.27)
 - **会话控制**(输入框上方的工具栏):
@@ -348,7 +351,8 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
     落盘只是「让服务端能读到」的临时中转,消息里已存了 base64,所以文件被清掉也不影响历史回看。
   - 单个文件上限 32MB;超限直接拒,不浪费一次上传。
   - 拖放只接在输入区上(拦了 `dragover`),否则浏览器会直接把文件当页面打开。
-- **消息流里怎么显示**:用户消息正文下方逐条列出 `📎 名字 mime · 大小 来源路径`;
+- **消息流里怎么显示**:用户消息正文下方逐条列出「徽标 + 名字」两格(照 TUI 的 `UserMessage`:` file ` / ` dir `
+  加粗反白、名字那格稍暗),后面接 `mime · 大小 来源路径`;
   `image/*` 且带 `data` 的直接内联成缩略图(`data:` URL),不需要额外请求。
   - 大小是按 base64 长度反算的(服务端不回 `size`);`source.type === 'uri'` 时才显示来源路径,
     `inline` 的没路径可显示就省略。
@@ -459,7 +463,7 @@ node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(3
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:251 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:256 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、**打开网页时列表一律展开**(`paint(false)`、不再读写 `ocs.listHidden`)与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -554,7 +558,9 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
      出错 / 重试 / 中断三种情形齐(中断单独认,不算出错)、模型名从头部挪到脚注(头部不再印)、
      重试倒计时每秒重算、脚注样式(智能体绿 + 出错灰 + `Error` / 重试两行);
      R5 组的 2 项(翻页游标,见移动端设计 §8.26):首屏带 `order=desc`、翻页只带游标,
-     以及「不再出现 order 与游标一起发」的那种写法。
+     以及「不再出现 order 与游标一起发」的那种写法;
+     R6 组的 3 项(用户消息照 TUI,见移动端设计 §8.29):skill 与 file / dir 徽标、抬起底色块与徽标两格的样式、
+     skill 那颗外层不带边框(颜色由里面两格给)。
      真面板探针是 `/tmp/ocsm-probe/perf/narrow-audit.js`(dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / 越界的元素,并截图)、
      `/tmp/ocsm-probe/perf/footer-audit.js`(dump 最后几条助手消息的头部与脚注各格)、
      `/tmp/ocsm-probe/perf/older-audit.js`(点一下 `#older` 看条数涨不涨、抓请求 URL)。
@@ -586,7 +592,8 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   另有 5 项锁**翻页请求的 query**(见移动端设计 §8.26):首屏带 `order=desc`、首屏不带游标、翻页带 `cursor`、**翻页不带 `order`**(带了两样服务端就 `400 InvalidCursorError`,这正是「点了没反应」的原因)、没有游标时压根不发请求。
 
 - `e2e-attach.sh`:32 项。只用临时会话与临时文件,结束时全部删除;验证①代理建好暂存目录并把 `uploadDir` 通过 `/__health` 告知前端、②`POST /api/experimental/fs/write?path=<绝对路径>` 原始字节写盘且内容逐字节一致、③`GET /api/fs/find` 给出相对工程目录的路径与基准目录、④提示词里的附件只认 `file:` URI(服务端自己补 `data`/`mime`,`name`/`mention` 原样落库)、⑤裸绝对路径/相对路径/`https` 三种非法 uri 都被 `400` 拒且原因可辨、⑥面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了附件功能。
-- `ui-attach-run.js`:132 项浏览器内断言,覆盖路径与大小的纯函数(`fileURI`/`baseName`/`joinDir`/`humanSize`/`uploadName`/`uploadPathFor`/`b64Size`)、`userFilesHtml`(uri 来源显示路径、inline 不显示、图片内联缩略图、按 base64 反算大小、缺 `name`/`mime` 兜底、转义、在 `renderMessage` 里的位置与「没有附件就不产生空行」)、`resolveMentions`(只认补全确认过的路径、锚点 `start/end/text` 切出来正好是那一段、多引用、中文里紧跟标点、邮箱里的 `@` 不算)、`@` 补全(光标前 token 的提取边界、请求参数含 `location[directory]` 的 deepObject 写法、目录名与文件名分列、上下键环绕、Enter 消费按键并插入+记忆绝对路径、Esc 关闭、点选、无匹配的空态)、附件排队(上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、超限拒绝、上传失败回滚、拖放/粘贴/文件框三条入口)、以及 `send()` 的请求体(上传文件与 `@` 引用合并进 `files[]`、`mention` 锚点、成功才清空待发送列表、失败保留可重发、切会话清空并关掉补全、没选中会话时按钮禁用、暂存目录未知时先问 `/__health`)。
+- `ui-attach-run.js`:133 项浏览器内断言,覆盖路径与大小的纯函数(`fileURI`/`baseName`/`joinDir`/`humanSize`/`uploadName`/`uploadPathFor`/`b64Size`)、`userFilesHtml`(uri 来源显示路径、inline 不显示、图片内联缩略图、按 base64 反算大小、缺 `name`/`mime` 兜底、转义、在 `renderMessage` 里的位置与「没有附件就不产生空行」)、`resolveMentions`(只认补全确认过的路径、锚点 `start/end/text` 切出来正好是那一段、多引用、中文里紧跟标点、邮箱里的 `@` 不算)、`@` 补全(光标前 token 的提取边界、请求参数含 `location[directory]` 的 deepObject 写法、目录名与文件名分列、上下键环绕、Enter 消费按键并插入+记忆绝对路径、Esc 关闭、点选、无匹配的空态)、附件排队(上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、超限拒绝、上传失败回滚、拖放/粘贴/文件框三条入口)、以及 `send()` 的请求体(上传文件与 `@` 引用合并进 `files[]`、`mention` 锚点、成功才清空待发送列表、失败保留可重发、切会话清空并关掉补全、没选中会话时按钮禁用、暂存目录未知时先问 `/__health`)。
+  其中 H 组那几项跟着 §8.29 改成「徽标 + 名字」两格:skill / file / dir 三款徽标、图片仍内联缩略图、名字缺省时用路径末段兜底。
 - `e2e-commands.sh`:40 项。只用临时会话与 `/tmp` 临时工程目录,结束时全部删除;验证①`GET /api/command` 带回查询用的 `location.directory`、列表是数组且每项有 `name`、内置 `init`/`review` 与工程无关,②全新工程目录的命令表会被惰性建立起来(首次查询可能为空,所以要轮询),③工程内 `.opencode/commands/hello.md` 出现在该工程的列表里、换个目录就看不到(命令确实随 `location` 走),④未知命令回 `404 CommandNotFoundError` 且**不落任何消息**,⑤缺 `text` 回 `400 InvalidRequestError`(所以前端一律带 `text:''`)且同样不落消息,⑥真命令 `POST /command` 回 `204` 并把模板展开成**一条普通用户提示词**(`说 $ARGUMENTS 好` + `世界` → `说 世界 好`,只多出这一条消息 —— 这条正是面板走的路),⑦`POST /compact` 回 `200` 且带 `type: compaction`,⑧`POST /revert/stage` 与 `DELETE /revert` 存在,会话忙时回 `409 SessionBusyError`(面板据此提示「正在运行」而不是报错),⑨面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了命令面板、全局键位与快捷键对话框。
 - `ui-commands-run.js`:171 项浏览器内断言,覆盖①`cmdQuery`(行首判定、词中间的 `/` 不弹、换行后的行首照弹、嵌套命令名 `team/review`、只看光标之前、没有 `/` 或只剩空白时为 `null`),②`mergedCommands`(服务端命令排前、面板项带标记、同名时服务端优先、没有服务端命令时面板动作照旧),③`parseCommand`(带参数 / 无参数 / 多个空格后的参数整体保留 / 大小写不敏感但取表里的写法 / 非行首不当命令 / 未命中不静默失败 / 嵌套命令),④`loadCommands`(按目录缓存、换目录重新请求、目录为空直接返回),⑤`openCommands`(非 `/` 开头不开、按查询词过滤、前缀命中排前面、面板项渲染「面板」标签、无匹配的空态而不是不显示、`force` 供 `Ctrl+P`、条目数受 `CMD_LIMIT` 截断、没选中会话不开),⑥`commandKey`/`acceptCommand`(上下键环绕、`Tab`/`Enter` 选中且 `preventDefault`、补全成 `/名字 ` 并留出参数位、保留光标之后已有的正文、`Esc` 关掉并标记已消费、面板关着或没有条目时不吃按键),⑦`send()` 的命令分流(命中服务端命令走 `POST /command` 而不是 `/prompt`、`name`/`text` 分开、不忙时不带 `delivery`、忙时带上默认的「插话」、能带 `@` 引用附件且成功后才清空、失败弹 toast 不当普通消息补发、未命中的 `/foo` 照旧当普通消息),⑧面板动作(`/compact` 的 `{}`、`/undo` 取最后一条用户消息并带 `files:true`、会话在跑时先拦住不请求、`/redo` 的 `DELETE` 与 `409` 的「没有可重做的撤销」、`/rename` 的 `PATCH`、`/archive` 的 metadata 读-改-写、`/clear` 不发请求、`/help` 的小节标题跨满两列不错位、`/sessions`/`/models`/`/agents` 从「只聚焦」改成弹出选择框),⑨输入历史(`pushHistory` 连续重复只记一次、`↑` 进最新再往上、到头吞键不动、`↓` 退回草稿、不在历史里 `↓` 不接管、没有历史 `↑` 不接管、多行时按首行/末行判定接管与否、切会话归位、普通消息也记历史),⑩全局键位(`Esc` 优先关命令面板、其次关 `@` 补全;**都不开且在跑时第一下只上膛** —— 不发请求、状态条那句提示换成 `esc again to interrupt`、补一句 toast,`5 秒归零定时器`抓下来手动触发即收回,**第二下才真发中断请求**且提示收回原文(`.armed` 也挂上/摘掉,照 TUI 的 `showDetails`);输入框一有动静就把上膛撤掉、撤掉之后那一下只是重新上膛不攒数、回合结束时把上膛收掉;没在跑不动、`<dialog>` 打开时不抢键、已被别人 `preventDefault` 的 Esc 跳过;`Ctrl+P` 打开且不动输入内容、带 `Shift`/`Alt` 或对话框打开时不算;`Shift+Tab` 切智能体、跳过空值的「默认」、到头绕回、命令面板开着或对话框打开时不抢键),以及⑪输入框内的按键优先级(面板开着时方向键给面板而不落到历史、面板没开时给历史、`Enter` 仍然发送;**无 Shift 的 `Tab` 在输入框里也切智能体**(照 TUI 的 `agent.cycle`,且命令面板开着时先给面板)),⑫`exactCommand`「完整命令名 + `Enter` 直接执行」(`/models` 一下就到选择框、面板已关、输入框被清空而不是停在 `/models `;只敲 `/mod` 时 `Enter` 仍然只是补全成 `/models ` 且不执行;高亮用 `↓` 移到 `/re` 列表里的别的命令时,`Enter` 补全成**那个**命令而不是执行输入框里的名字)。
 - `ui-picks-run.js`:87 项浏览器内断言,覆盖①通用选择框 `openPick`/`renderPick`(标题、`current` 默认高亮、`current` 不在列表里时停在第一条、`filter=false` 藏过滤框 / `filter=true` 露出来并清空、分组标题每组只出现一次、`sub` 写进 `.pi-sub`、无匹配给空态且不崩高亮),②过滤 `pickVisible`(没查询词=全部、按 label、按 sub、大小写不敏感、纯空白等于没过滤、无匹配返回空),③键位 `pickKey`(↑/↓ 环绕、方向键与 Enter 都 `preventDefault`、不认识的键不管、框关着时不管、空列表不吞键、点「关闭」按钮的 Enter 不抢),④选中 `pickChoose`(回调拿到 key、关框后才回调、`disabled` 项点不动),⑤接线 `setupPick`(过滤框输入即过滤、换查询词把高亮归位、过滤框里 ↓ 交给选择框、点条目选中、关掉后焦点回输入框),⑥`/sessions`(标题、列的就是左栏那批且同序、标题作 label、副文案含目录名、当前会话高亮、打开「显示已归档」后也在、按顶部排序走、选中即切过去),⑦`/models`(按 provider 分组、key/label/sub 的来源、`enabled=false` 的与工具栏一致地不出现、当前模型高亮、当前模型不在列表里时补一条「当前」、有变体就追问且当前档位高亮、选档位带 `variant`、选「默认」不带 `variant`、没有变体就直接切、换模型后追问的是新模型的变体、空 key 只提示不发请求、列表里没有的 key 也能按 `providerID/modelID` 拆开),⑧`/agents`(`hidden` 与 `subagent` 被滤掉、label/sub 来源、当前智能体高亮、不提供「默认」空选项、选中即切、当前智能体不在列表里时补一条),⑨没选中会话时三条都不开,以及⑩三条面板命令仍在、说明已不再写「跳到…」、`focusEl` 这个旧做法已经不存在。
