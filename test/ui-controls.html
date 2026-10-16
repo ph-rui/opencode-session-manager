@@ -429,6 +429,27 @@
       flash('提示内容', 'bad');
       T('toast 展示内容与样式', q('#toast').hidden === false && q('#toast').textContent === '提示内容' && q('#toast').className === 'bad');
 
+      /* ---------------- 选中的会话不在列表页里:工具栏不许跟着消失(§8.39) ----------------
+         改前这里是 `if (!s || !store.selected) bar.hidden = true`,于是手机上
+         「列表请求 / 深链补拉任一条没回来」时,细边上「■ 中断」的家整条就没了。 */
+      store.sessions.set(SESSION.id, SESSION);
+      store.selected = SESSION.id;
+      await renderControls(SESSION);
+      T('(前置)正常选中时选择器填着值', q('#agentSel').options.length > 0 && q('#modelSel').options.length > 0);
+
+      store.selected = 'ses_ghost'; // 不在 store.sessions 里
+      await renderControls(undefined);
+      T('会话不在列表页里时工具栏照样在', q('#ctoolbar').hidden === false);
+      T('会话不在列表页里时选择器空着(不拿上一个会话的值冒充)',
+        q('#agentSel').options.length === 0 && q('#modelSel').options.length === 0,
+        q('#agentSel').options.length + '/' + q('#modelSel').options.length);
+      T('会话不在列表页里时变体选择也收起来', q('#variantWrap').hidden === true);
+
+      store.selected = null;
+      await renderControls(undefined);
+      T('未选中会话时工具栏才收起', q('#ctoolbar').hidden === true);
+      T('未选中会话时选择器不留残值', q('#agentSel').options.length === 0, q('#agentSel').options.length);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

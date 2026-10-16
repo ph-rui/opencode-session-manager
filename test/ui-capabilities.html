@@ -261,6 +261,15 @@
       renderChatOps();
       T('未选会话时隐藏操作区', q('#chatOps').hidden === true);
 
+      /* 选中了、但这个会话不在 store.sessions 里(深链 / 列表那一页还没送到它):
+         这一栏照样得在 —— 改前它会整排永远藏起来(§8.39) */
+      store.selected = 'ses_ghost';
+      renderChatOps();
+      T('选中会话不在列表页里也显示操作区', q('#chatOps').hidden === false);
+      T('拿不到会话信息时先按「归档」画(等 refreshSessionInfo 校正)', q('#opArchive').textContent === '归档',
+        q('#opArchive').textContent);
+      T('拿不到会话信息时清掉上一个会话的「已归档」高亮', q('#opArchive').classList.contains('arch-on') === false);
+
       /* ---------------- 新建会话 ---------------- */
       q('#newDir').value = '/proj/a';
       await fillNewSelectors();

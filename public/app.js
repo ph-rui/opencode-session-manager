@@ -367,11 +367,40 @@ function ctrlKeyOf(s) {
   return JSON.stringify([(s && s.agent) || '', (s && s.model) || null]);
 }
 
+/* 选择器清空。会话信息还没到手(深链进来 / 列表那一页还没把它送过来)时宁可空着,
+ * 也不许拿上一个会话的 agent/model 冒充 —— 提示栏那几格照 TUI 也是「知道了才印」。 */
+function blankControls() {
+  const a = $('#agentSel');
+  const m = $('#modelSel');
+  const vw = $('#variantWrap');
+  const v = $('#variantSel');
+  if (a) a.innerHTML = '';
+  if (m) m.innerHTML = '';
+  if (v) v.innerHTML = '';
+  if (vw) vw.hidden = true;
+}
+
 async function renderControls(s) {
   const bar = $('#ctoolbar');
   if (!bar) return;
-  if (!s || !store.selected) {
+  if (!store.selected) {
     bar.hidden = true;
+    store.ctrlKey = '';
+    blankControls();
+    updateComposerControls();
+    return;
+  }
+  /* 先亮出来,再拉选择器要的数据。这条工具栏是细边上 ■ 中断 的家(收起时细边只剩它),
+     下面那两个网络往返慢、失败,或者会话信息还没送到,都不许把它整条藏回去(§8.39)。
+     选中的会话不在 store.sessions 里(深链 / 列表那一页没送它过来)时就先只亮骨架,
+     真值由 refreshSessionInfo() 补画 —— 那些按钮都按会话 id 干活,不依赖这里的选择器。 */
+  bar.hidden = false;
+  const key = s ? ctrlKeyOf(s) : '';
+  if (key !== store.ctrlKey) blankControls(); // 屏上挂着的还是上一个会话的值:先空掉
+  if (!s) {
+    /* 会话信息还没到:选择器一律空着(连 index.html 里那个占位的「默认」也不留),
+     * 免得把「默认」当成这个会话真在用的 —— 真值等 refreshSessionInfo() 补画。 */
+    blankControls();
     store.ctrlKey = '';
     updateComposerControls();
     return;
@@ -403,8 +432,7 @@ async function renderControls(s) {
   paintVariant(varWrap, varSel, curModel);
   varSel.value = (s.model && s.model.variant) || '';
 
-  bar.hidden = false;
-  store.ctrlKey = ctrlKeyOf(s);
+  store.ctrlKey = key;
   /* 模型表刚拉回来,上下文用量的百分比这时才算得出来(updateChatStatus 早于这里跑过一遍) */
   paintContextUsage();
   updateComposerControls();
@@ -828,7 +856,13 @@ async function setArchived(id, on) {
 
 async function toggleArchive(id) {
   const s = id && store.sessions.get(id);
-  if (!s) return;
+  if (!s) {
+    /* 这一栏现在「选中就有」(§8.39),所以会话信息还没到时也可能被按到。归档得先知道
+     * 当前状态,补拉一次并明说一声 —— 别让这一下按了跟没按一样。 */
+    if (id) refreshSessionInfo(id);
+    flash('会话信息还没到,稍等一下再按', 'warn');
+    return;
+  }
   const on = !isArchived(s);
   if (on && !confirm('归档后该会话默认从列表隐藏(仅本面板记录,OpenCode 本身不感知)。继续?')) return;
   try {
@@ -842,15 +876,17 @@ async function toggleArchive(id) {
   flash(on ? '已归档(勾选左栏「显示已归档」可查看)' : '已取消归档', 'ok');
 }
 
+/* 头部那一排操作(导出 / 在 TUI 打开 / 归档)+ 紧跟其后的「加载更旧消息」。
+ * 判据只有「有没有选中会话」—— 深链进来、或列表那一页还没把这个会话送过来时,它照样得在:
+ * 以前这里查 store.sessions,于是列表 / 会话信息任何一次网络往返没回来,整排就永远藏着
+ * (手机上看到的就是「导出那一栏不见了」,见 §8.39)。归档的文案拿不准时先按未归档画,
+ * refreshSessionInfo() 拿到会话信息后会重画一次校正。 */
 function renderChatOps() {
   const bar = $('#chatOps');
   if (!bar) return;
-  const s = store.selected ? store.sessions.get(store.selected) : null;
-  if (!s) {
-    bar.hidden = true;
-    return;
-  }
-  bar.hidden = false;
+  bar.hidden = !store.selected;
+  if (!store.selected) return;
+  const s = store.sessions.get(store.selected);
   const on = isArchived(s);
   const ab = $('#opArchive');
   ab.textContent = on ? '取消归档' : '归档';
@@ -1669,16 +1705,18 @@ async function selectSession(id) {
   renderChatOps();
   updateChatStatus();
   syncNarrowView();
+  /* 深链(#<sid>)或很久以前的会话可能不在当前列表页里(列表只拉最近一页,这里拿不到
+   * 它的 location)。补拉一次会话本身 —— 工具栏的 agent/model、提示栏的工程路径都要它,
+   * 头部那排操作也要拿它把「归档 / 取消归档」校正过来(§8.39)。
+   * 刻意不 await:不能让这条网络往返改掉选会话的时序(会跟列表刷新抢);
+   * 也刻意排在下面那组【之前】——那组里任何一个卡住,都不该把这条一起拖住。 */
+  if (!s) refreshSessionInfo(id);
   await Promise.all([
     loadMessages({ older: false }),
     loadAsks(id),
     loadInbox(id),
     renderControls(s),
   ]);
-  /* 深链(#<sid>)或很久以前的会话可能不在当前列表页里(列表只拉最近一页,这里拿不到
-   * 它的 location)。补拉一次会话本身 —— 工具栏的 agent/model、提示栏的工程路径都要它。
-   * 刻意不 await:不能让这条网络往返改掉选会话的时序(会跟列表刷新抢)。 */
-  if (!s) refreshSessionInfo(id);
 }
 
 /* 头部标题 + 更新时间/项目号。工程目录挪到了输入框下面的提示栏(#promptFooter)里 ——
@@ -1707,6 +1745,7 @@ function refreshSessionInfo(id) {
       store.sessions.set(id, merged);
       renderSessions();
       paintChatHeader(merged);
+      renderChatOps(); // 「归档 / 取消归档」的文案要拿会话信息才准(§8.39)
       renderControls(merged);
       paintContextUsage();
     })

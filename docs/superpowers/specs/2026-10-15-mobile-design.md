@@ -1936,6 +1936,66 @@ PASS 窄屏列表照旧可见(不会被那份记忆压住)
 那条锁换成「记在 `sessionStorage` 且老键谁也不碰」+「没记过 = 展开、存储被禁也不炸」两条）。
 其余套件与 6 个 `e2e-*` 全 0 失败。
 
+### 8.39 选中的会话不在列表页里时，头部操作条与底板工具栏整条消失
+
+**起因**：用户——「手机端不显示对话框下面的内容（除了进度条）」+「手机端也不显示：
+导出、在TUI打开、归档、加载更旧信息那一栏」。
+
+两处**同时**没，只可能是一个原因：那两排的显示判据都是「选中的会话在不在
+`store.sessions` 里」，而 `store.sessions` 只装**当前筛选/分页的那一页**。
+
+**复现**（真 Chromium，393×894，`isMobile`，`/tmp/ocsm-probe/pw/deeplink.js`）：
+把 `GET /api/session?...`（列表）与 `GET /api/session/<id>`（深链补拉）两条都掐掉，
+再冷启动到 `/#<sessionID>` —— 即「列表还没把这个会话送过来 / 补拉也没回来」：
+
+```
+改前：#chatOps=hidden  #ctoolbar=hidden  #chatAgent=hidden
+      #progress 13px 在、#interrupt hidden   消息 29 条照旧
+改后：#chatOps 40px    #ctoolbar 48px    #interrupt 44px 在   消息 30 条
+```
+
+改前那一屏就是用户报的：头部只剩标题 + 「加载更旧消息」的位置空着，
+底板细边上**只剩那条进度条**（`■ 中断` 是 `#ctoolbar` 的孩子，跟着一起没了）。
+
+**根因（三处，都在 `public/app.js`）**：
+
+| 位置 | 改前 | 后果 |
+|---|---|---|
+| `renderChatOps()` | `const s = …; if (!s) { bar.hidden = true; return; }` | 列表没送到 → 操作条永远藏着 |
+| `renderControls(s)` | `if (!s \|\| !store.selected) { bar.hidden = true; … }` | 工具栏是细边上 `■ 中断` 的家，一起藏（还与 `ui-composer` I5 的注释「`#ctoolbar` 的 hidden 只由有没有选中会话决定」相违）|
+| `selectSession()` | `refreshSessionInfo(id)` 排在 `await Promise.all([…])` **之后** | 那组里任何一条卡住/挂住，补拉就不再执行；`refreshSessionInfo()` 自己也漏了重画 `#chatOps` |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| `renderChatOps()` | 判据回到 `bar.hidden = !store.selected`；归档文案拿不到会话信息时先按未归档画，`refreshSessionInfo()` 到了再校正（同时清掉上一个会话的 `arch-on`）|
+| `renderControls(s)` | **先 `bar.hidden = false` 再拉数据** —— 下面两个网络往返慢/失败都不许把条藏回去；选中的会话不在 `store.sessions` 里时只亮骨架，选择器走新的 `blankControls()` 清空（连 `index.html` 里那个占位的「默认」也不留），不拿上一个会话的 agent/model 冒充 |
+| 屏上还是上一个会话的值 | `ctrlKeyOf(s) !== store.ctrlKey` 时先清空：没变就不闪，变了不冒充 |
+| `selectSession()` | `if (!s) refreshSessionInfo(id);` 提到 `await Promise.all([…])` **之前** —— 那组里任何一条卡住都拖不住它（`await Promise.all` 成了函数最后一句，它就算 reject 也丢不掉东西）|
+| `refreshSessionInfo()` | 补 `renderChatOps()`（归档/取消归档的文案靠它校正）|
+| `toggleArchive(id)` | 会话信息还没到时不再无声返回：补拉一次 + `flash('会话信息还没到,稍等一下再按','warn')` |
+
+**刻意没做**（留着看用户要不要）：补拉一直拿不到时，提示栏那格会先印
+`(未指定工程目录)`（照 `paintPromptFooter` 的既有语义），而真值其实「还不知道」；
+要改成「空着不印」得给 `paintPromptFooter` 加第三个参数，等真报上再动。
+
+**验证**（真 Chromium，`/tmp/ocsm-probe/pw/deeplink.js`）：E 组（只掐列表）与
+F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interrupt` / 提示栏全在，
+消息照旧；`/tmp/ocsm-probe/pw/desktop.js` 确认正常路径（列表里有这个会话）没被改坏：
+两个会话切换后选择器分别填成 `build / company/deepseek-v4-flash` 与
+`build(当前) / company/deepseek-v4-flash`，提示栏工程路径照旧。
+
+**回归**：`smoke.sh` 288 → **290**（新增 R15：判据只有「有没有选中会话」+
+`blankControls` 在、以及「补拉排在 `Promise.all` 之前」的源码顺序锁）；
+`ui-layout` 172 → **184**（新增第 12 组：幽灵会话 = 列表页里没有但消息拿得到 ——
+消息照旧、补拉照发、操作条与工具栏照在、选择器空着不冒充、拿到后标题/归档文案/
+选择器校正、以及「辅助请求卡住时补拉照样发得出去」）；
+`ui-capabilities` 71 → **74**（`renderChatOps()` 在会话不在 `store.sessions` 时也显示、
+先按「归档」画、清掉上一个会话的高亮）；
+`ui-controls` 96 → **102**（`renderControls(undefined)` 时工具栏在、选择器空、
+变体收着；未选中才收起）。其余套件与 6 个 `e2e-*` 全 0 失败。
+
 ---
 
 ## 9. 取舍与理由
@@ -1973,5 +2033,9 @@ PASS 窄屏列表照旧可见(不会被那份记忆压住)
 8. **流式事件里可能也背着同一批 `data:` 图**（§8.37 只摘了「消息列表」那一条）：
    面板在 `session.tool.success` 上写着 `p.state.content = d.content`，若某次工具真的
    返回图，那一个 SSE 事件就是 600KB 级（不是「打开会话慢」，而是「这一下卡一下」）。
+9. **拉会话列表失败仍然只在控制台**（`loadSessions` 的 `catch` 只 `console.error`）：
+   §8.39 已经把「列表没回来 → 聊天区两排跟着消失」这条连锁反应掐掉了，但左栏自己
+   仍然会安静地停在旧数据/「共 0 个会话」上，与 §8.34「失败不许一声不响」不一致 ——
+   要不要照 §8.34 那样给一条可见的话（例如角标 + 重试），等真遇上再定。
    未实测（要等真有一次读图的回合）。真出现再摘：得按 SSE 的 `data:` 行逐个改，
    比消息列表风险高，所以没提前做

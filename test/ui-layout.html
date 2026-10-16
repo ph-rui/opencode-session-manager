@@ -71,6 +71,10 @@
       'ses_b': [
         { id: 'msg_b1', type: 'user', time: { created: 100 }, text: '会话 B 的第一问' },
       ],
+      /* §8.39:一个「列表页里没有它、但消息拿得到」的会话(深链进来 / 列表那一页没送到它) */
+      'ses_ghost': [
+        { id: 'msg_g1', type: 'user', time: { created: 100 }, text: '幽灵会话的第一问' },
+      ],
     };
 
     /* 会话内滚动位置要一个够长的会话(短消息撑不出滚动条) */
@@ -95,10 +99,15 @@
       window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
       var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
       if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (window.HANG_INBOX && /\/inbox/.test(u)) return new Promise(function () {}); // 卡住不动的那条往返(§8.39)
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
       if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
+      /* 深链补拉:GET /api/session/<id>(不带子路径)。默认「拿不到」(空数组 → 面板不认),
+         测试要用时往 window.SESSION_INFO 里塞。 */
+      var mg = u.match(/^\/api\/session\/([^/?]+)$/);
+      if (mg) return json({ data: (window.SESSION_INFO || {})[decodeURIComponent(mg[1])] || [] });
       if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
       return json({ data: [] });
     };
@@ -638,6 +647,70 @@
       })(), localStorage.getItem('ocs.q.search'));
       T('存的是 localStorage 而不是 sessionStorage(跨标签/跨次启动都记得)',
         sessionStorage.getItem('ocs.q.search') === null);
+
+      /* ============ 12. 选中的会话不在列表页里:那两排不许跟着消失(§8.39) ============
+         手机上看到的是:头部「导出 / 在 TUI 打开 / 归档 / 加载更旧消息」整排没了、底板细边
+         只剩进度条(「■ 中断」是随 #ctoolbar 一起走的)。根因是这几条的显示判据写成
+         「选中的会话在不在 store.sessions 里」,而 store.sessions 只装当前筛选/分页那一页 ——
+         列表请求或深链补拉任何一条没回来,它们就永远藏着,刷新页面之前回不来。
+         这里锁住修好后的三条:①判据只看「有没有选中会话」;②补拉照发;③拿不到也不许收回。 */
+      localStorage.clear();
+      history.replaceState(null, '', location.pathname + location.search);
+      window.SESSION_INFO = {}; // 服务端没给这个会话(拿不到)
+      store.sessions.delete('ses_ghost');
+      window.calls.length = 0;
+      await selectSession('ses_ghost');
+      T('(前置)这个会话确实不在列表页里', !store.sessions.has('ses_ghost'));
+      T('(前置)消息照旧拉得到(所以用户看到的是「消息在、那两排没了」)',
+        q('#messages').textContent.indexOf('幽灵会话的第一问') >= 0, q('#messages').textContent.slice(0, 60));
+      T('补拉了一次会话本身', window.calls.some(function (c) { return /^\/api\/session\/ses_ghost$/.test(c.url); }),
+        JSON.stringify(window.calls.map(function (c) { return c.url; })));
+      T('头部操作条照样在(改前这里是 bar.hidden = true)', q('#chatOps').hidden === false);
+      T('底板工具栏照样在 —— 细边上「■ 中断」的家', q('#ctoolbar').hidden === false);
+      T('会话信息没到手时选择器空着,不拿上一个会话的值冒充',
+        q('#agentSel').options.length === 0 && q('#modelSel').options.length === 0,
+        q('#agentSel').options.length + '/' + q('#modelSel').options.length);
+      T('拿不到会话信息时归档文案先按未归档画', q('#opArchive').textContent === '归档', q('#opArchive').textContent);
+
+      /* 会话信息到得了时:标题、归档文案、选择器、提示栏都要校正过来
+         (改前 refreshSessionInfo() 漏了 renderChatOps,归档文案会一直停在错的档) */
+      window.SESSION_INFO = {
+        'ses_ghost': {
+          id: 'ses_ghost', title: '幽灵会话',
+          metadata: { ocs: { archived: 1 } },
+          agent: 'build', model: { id: 'deepseek-v4-flash', providerID: 'company' },
+          location: { directory: '/proj/ghost' },
+        },
+      };
+      store.sessions.delete('ses_ghost');
+      clearSelection();
+      history.replaceState(null, '', location.pathname + location.search);
+      await selectSession('ses_ghost');
+      await settle(function () { return q('#chatTitle').textContent === '幽灵会话'; });
+      T('补拉拿到后标题用真标题覆盖掉原始 id', q('#chatTitle').textContent === '幽灵会话', q('#chatTitle').textContent);
+      T('补拉拿到后归档文案校正成「取消归档」', q('#opArchive').textContent === '取消归档', q('#opArchive').textContent);
+      T('补拉拿到后选择器填上这个会话的 agent/model',
+        q('#agentSel').value === 'build' && q('#modelSel').value === 'company/deepseek-v4-flash',
+        q('#agentSel').value + ' / ' + q('#modelSel').value);
+
+      /* 辅助请求卡住不动时,补拉也得照样发出去(§8.39 把它提到了 Promise.all 之前) */
+      window.SESSION_INFO = {};
+      store.sessions.delete('ses_ghost');
+      clearSelection();
+      history.replaceState(null, '', location.pathname + location.search);
+      window.calls.length = 0;
+      window.HANG_INBOX = true; // /inbox 永远不返回 → Promise.all 永远不 resolve
+      var stuck = selectSession('ses_ghost'); // 刻意不 await:它正被那条卡住的往返拖着
+      await settle(function () {
+        return window.calls.some(function (c) { return /^\/api\/session\/ses_ghost$/.test(c.url); });
+      });
+      T('辅助请求卡着不动,会话信息的补拉还是发出去了',
+        window.calls.some(function (c) { return /^\/api\/session\/ses_ghost$/.test(c.url); }),
+        JSON.stringify(window.calls.map(function (c) { return c.url; })));
+      T('卡住期间头部操作条与底板工具栏也已经亮着',
+        q('#chatOps').hidden === false && q('#ctoolbar').hidden === false);
+      window.HANG_INBOX = false;
+      stuck.catch(function () {}); // 别留下未处理的 rejection
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

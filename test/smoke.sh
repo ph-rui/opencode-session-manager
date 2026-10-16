@@ -1720,6 +1720,26 @@ else
   echo "FAIL: 缺 test/strip-run.js(或它没断言 omitted / 真图)"; fail=$((fail + 1))
 fi
 
+# ---- R15 组:选中的会话不在列表页里时,头部操作条与底板工具栏不许整条消失(§8.39)----
+# 手机上这两处会「一起没」:两排的显示判据都写着「选中的会话在不在 store.sessions 里」,
+# 而 store.sessions 只装当前筛选/分页那一页 —— 列表请求或深链补拉任何一条没回来,它们就永远
+# 藏着,刷新之前回不来(细边上的「■ 中断」在 #ctoolbar 里,跟着一起没)。行为断言在
+# ui-layout(含一条「辅助请求卡住时补拉照发」)、ui-controls、ui-capabilities 里,这里钉住判据本身。
+if has "$APPJS" 'bar.hidden = !store.selected' && has "$APPJS" 'function blankControls()' &&
+   has "$APPJS" 'renderChatOps(); // 「归档 / 取消归档」的文案要拿会话信息才准(§8.39)'; then
+  echo "PASS: 这两排的判据只有「有没有选中会话」,会话信息没到手时选择器先空着,归档文案到了再校正"; pass=$((pass + 1))
+else
+  echo "FAIL: #chatOps/#ctoolbar 又按 store.sessions 判显隐,或缺 blankControls / renderChatOps 补画"; fail=$((fail + 1))
+fi
+CK_SEL=$(sed -n '/^async function selectSession/,/^}$/p' <<< "$APPJS")
+CK_L1=$(awk '/if \(!s\) refreshSessionInfo\(id\);/{print NR}' <<< "$CK_SEL")
+CK_L2=$(awk '/await Promise\.all\(\[/{print NR}' <<< "$CK_SEL")
+if [ -n "${CK_L1:-}" ] && [ -n "${CK_L2:-}" ] && [ "$CK_L1" -lt "$CK_L2" ]; then
+  echo "PASS: 会话信息的补拉排在 Promise.all 之前(那组里任何一条卡住都拖不住它)"; pass=$((pass + 1))
+else
+  echo "FAIL: refreshSessionInfo 又排回 Promise.all 后面了(got ${CK_L1:-?}/${CK_L2:-?})"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
