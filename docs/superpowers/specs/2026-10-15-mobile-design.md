@@ -427,10 +427,10 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 187 |
+| `smoke.sh` | 189 |
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 141 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 162 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 183 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
@@ -667,6 +667,89 @@ CSS 上是个顺序活：`list-hidden`（用户记下来的选择）与 `list-pe
 （+7 条细边上的状态条）、`ui-mobile` 154 → 160（+3 条窄屏列位，两个视口各跑一遍）、
 `smoke.sh` 178 → 187（J 组 11 → 20）；`ui-*` 其余与 `e2e-*` 全部 0 失败。
 `test/ui-composer.html` 的夹具也补上了 `#progress`（与 `public/index.html` 的底板段保持一致）。
+
+---
+
+### 8.11 追加：压缩时面板假死、概要也不印（`session.compaction.delta`）
+
+**起因**：用户两条反馈 —— ①「上下文压缩的时候，网页版崩溃无响应了」；②「上下文压缩，打印的概要之类的，网页版也不打印」。
+
+#### 先把 TUI 的事实抓准
+
+`/tmp/ocsm-probe/tui/cap-compact.py`（pty 跑真 TUI、发 `/compact`、每秒存一张屏 + raw 字节）看到的：
+
+| 事实 | 来源 |
+|---|---|
+| 压缩块是一条**整宽横线 + 盲文 spinner + 「Compaction」**：`───────── ⠋ Compaction ─────────` | raw 里的重绘帧 |
+| **概要正文边压边印**（流式）在块里，**摊开、不折**（`Objective` / `Requirements` / `Work state` … 原样铺在会话流里） | t=20.1s 抓屏 |
+| 发 `/compact` 时先给一句回执 `◇ Compaction queued` | raw |
+| 去 ANSI 后 raw 里只有 5 处 `Compaction`（都是重绘），没有「摘要」这一层折叠 | raw 统计 |
+
+服务端这边（真 SSE 抓包，`curl -N /api/event` 对着一次真压缩）：
+
+| 事实 | 数据 |
+|---|---|
+| 概要正文是流式的：`session.compaction.delta`，`data = { sessionID, text }` | 一份 519 字摘要来了 **140 条**，666ms 内（≈**5ms 一条**） |
+| `.started` 载荷带 `sessionID/reason/inputID`（`inputID` 就是那条压缩消息的 id） | 抓包 |
+| `.ended` 载荷带 `reason/model/text/tokens`（`text` 就是完整摘要） | 抓包 |
+
+#### 病根：`.delta` 被当成「收工」
+
+老代码是 `session.compaction.` 前缀**一把抓**：
+
+```js
+if (sid) {
+  if (t === 'session.compaction.started') store.compacting.add(sid);
+  else store.compacting.delete(sid);   // ← .delta 也落进这里
+  dirty = true;                        // ← 于是每条 delta 都 dirty 一次
+}
+```
+
+`dirty = true` 的后果是 `renderSessions()`（整个左栏重建）+ `updateChatStatus()`。
+实测（`/tmp/ocsm-probe/perf/live-compact.js`：真面板 + 真压缩 + 包住 `renderSessions` 计数）：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 一次压缩里的 `renderSessions()` | **142 次**（≈140 条 delta 逐条触发，整段 0.7s） | **10 次**（整段 14s 里的全部事件，含两次压缩起止） |
+| 主线程最大停顿 | 连续被占满（页面假死） | **54ms** |
+| 压缩中概要是否上屏 | 否（delta 全丢） | 是（正文 0 → 2 → 63 → 168 → 212 → 280 字一路长上来） |
+
+也就是说：**用户报的「崩溃无响应」和「概要也不打印」是同一个 bug 的两面** —— 那条流式正文被丢了，
+而它带来的事件风暴把面板顶死了。
+
+#### 改法（`public/app.js`）
+
+| 点 | 决定 |
+|---|---|
+| 三种事件分开 | `.started` 开工（清上一次正文）；`.delta` 只攒正文 + 节流重画**对话区**，不碰左栏；`.ended`/`.failed` 才收工（并把载荷里的完整摘要写上，不等消息列表对账） |
+| 立刻出块 | `.started` 的 `inputID` 就是那条压缩消息的 id → 直接往 `store.messages` 里放一块 `status:'running'` 的占位，真消息一到同 id 覆盖。这样不用干等那次对账拉取（正文流得快时 `msgTimer` 会被逐条推后，等不到） |
+| 正文缓冲 | `store.compactText: Map<sid, string>`，`.delta` 一段段追加（最多留 8 个会话） |
+| 取值 | `compactionBody(m)`：服务端给了 `m.summary` 就用它（权威），还在跑就用流式缓冲 |
+| 上屏节流 | `paintCompactStream()`：前沿节流 120ms（~8 次/秒），且只画用户正看着的会话；正文并进 `view.summary` 再算渲染签名，签名才会跟着长 |
+| 印出来 | `<details class="compact" open>` + `md(body)` —— 照 TUI 摊开印着，外层 `details` 只当折叠抓手 |
+| 不跟用户抢 | `syncDetailsOpen()`：签名变就整块换元素，只把「用户折起来过」这一种状态搬过去（反方向不搬 —— 流式思考块的「开」是渲染按 `m.live` 决定的，回合结束该自己回落，`ui-stream` 有断言锁着） |
+
+#### 验证（真服务）
+
+对真会话发 `/compact`，无头 Firefox 打开真面板（深链到该会话）逐 150ms 拍时间线：
+
+```
+t=4620  ● 运行中  live=True  open=None  正文=  0  ⠙上下文压缩进行中
+t=5674  ● 运行中  live=True  open=True  正文=  2  ⠸上下文压缩进行中
+t=5830  ● 运行中  live=True  open=True  正文= 63  ⠴上下文压缩进行中
+t=5980  ● 运行中  live=True  open=True  正文=168  ⠧上下文压缩进行中
+t=6280  ● 运行中  live=True  open=True  正文=280  ⠙上下文压缩进行中
+t=6587  空闲      live=False open=True  正文=336  ⏺上下文压缩692 tokens
+```
+
+中间那一拍还截了图：块头 `⠋ 上下文压缩 [进行中]` 下面 `▾ 摘要` **摊开**、正文正在一行行长出来；
+收工后同一块变成 `⏺ 上下文压缩 692 tokens` + 完整摘要（仍是摊开）。
+页面异常 `[]`、主线程最大停顿 54ms、左栏整段只重画 10 次。
+
+**回归**：`ui-stream` 162 → 183（+21 条：`.started` 占位、三条 delta 只画一次且不重画左栏、不抹压缩标记、
+正文攒缓冲、压缩中摊开印出、用户折起不被顶开、`.ended` 就地收工写摘要）、`smoke.sh` 187 → 189
+（+2 条源码锁：`.delta` 单独处理 + `paintCompactStream()/compactionBody()`；压缩摘要那条断言从「折起」改成「摊开」）；
+`ui-*` 其余与 `e2e-*` 全部 0 失败。
 
 ---
 
