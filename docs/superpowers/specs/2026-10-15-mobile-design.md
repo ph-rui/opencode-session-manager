@@ -427,10 +427,10 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 194 |
+| `smoke.sh` | 202 |
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 160 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 87 / 71 / 183 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 87 / 71 / 195 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 166 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
@@ -933,6 +933,54 @@ PASS 它自己跑起来了(回合又转起来)
 `ui-controls` 83 → 87（中断请求的 URL 带 `resume=true`，以及「只推排队项、不碰插话项与控制项」）；
 `ui-layout` / `ui-stream` / `ui-composer` / `ui-mobile` / `ui-jump` / `ui-tools` / `ui-asks` /
 `ui-capabilities` / `ui-attach` / `ui-picks` / `netallow` 与 `e2e-*` 全部 0 失败。
+
+### 8.15 追加：会话头部显示上下文用量（TUI 提示栏那个 `155.6K (78%)`）
+
+**起因**：用户——「网页版不显示 155.6K (78%)」。TUI 提示栏右边一直有这个数，面板没有。
+
+**TUI 的权威实现**（同一份二进制里抠出来的原文）：
+
+```js
+// 最后一条带 tokens 的 assistant 消息，且必须在「最后一次【已完成】压缩」之后
+function Us(t, n) { let i = n ? t.findIndex((a) => a.id === n) : -1;
+  if (n && i === -1) return; let s = i === -1 ? t.length : i,
+    o = t.findLastIndex((a, c) => a.type === "compaction" && a.status === "completed" && c < s);
+  return t.findLast((a, c) => a.type === "assistant" && a.tokens !== void 0 && c > o && c < s) }
+function XN(t, n, i) { let s = Us(t, i); if (!s) return;
+  let o = s.tokens.input + s.tokens.output + s.tokens.reasoning + s.tokens.cache.read + s.tokens.cache.write;
+  if (o <= 0) return; let a = n?.find((c) => c.providerID === s.model.providerID && c.id === s.model.id);
+  return { tokens: o, percent: a?.limit.context ? Math.round(o / a.limit.context * 100) : void 0 } }
+function d4(t, n) { let i = zN(t); return n === void 0 ? i : `${i} (${n}%)` }
+zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFixed(1) + "K" : String(e)
+```
+
+`ge = () => usage?.tokens > 0 ? d4(usage.tokens, usage.percent) : ""`，由提示栏的 `context` 字段挑档：
+百分比已知 → 窄屏 `78% ctx`、宽屏 `155.6K (78%)`；拿不到百分比 → 两边都只印 token 数。
+
+**决定**：
+
+| 点 | 决定 | 理由 |
+|---|---|---|
+| 位置 | **聊天头部标题行**右侧（新 `#ctxInfo`，在 `#chatState` 之后）| TUI 在提示栏（输入框下面那行），但面板那个位置是 `#progress`，只在运行中才露出来；头部标题行**窄屏一直看得见**（底板收起时也在），符合「看一眼」的主力用途 |
+| 算法 | **每次现算**，不另存 | 照 TUI 的 `Us`/`XN`/`d4` 原样搬（同一份口径也喂给渲染：`currentMessages()`）|
+| 两档文案 | 全量 / 窄屏两份都写进 DOM，CSS 按 `html.narrow` 切 | 横竖屏来回转不用重画，也不用 JS 判宽度（照 TUI 的 `compact` / `full`）|
+| 模型表 | 用**该 location 的模型表**（`store.models.get(dir)`），不用全局索引 | 某个模型可能在某个目录被 `enabled:false` 关掉；TUI 用的就是 `location.model.list`。查不到就退化成只印 token 数 |
+| 空态 | 压缩后还没回话 / 还没跑过任何一轮 → 整块收起 | `Us` 返回 `undefined` 时 TUI 也不印 |
+| 刷新时机 | 挂在 `updateChatStatus()`（step.ended / 消息落盘 / 切会话都会经过它）+ `renderControls()`（模型表回来之后补一次）| 一个同步点就够，不必给每个事件单开分支 |
+
+**顺带修掉一个真 bug**（探针撞出来的）：切到一个刚建的空会话时，`store.messages` 里躺着**上一个会话的 49 条**
+—— 「150ms 防抖对账」的 `loadMessages()` 在切换之后才回来，而它**没有按会话复查**。现在 `await` 之后
+按 `id` 比对 `store.selected`，变了就整份丢弃。上下文用量跟着这个消息表走，所以这条必须先修。
+
+**验证**（真面板 + 真服务，`/tmp/ocsm-probe/perf/live-ctxusage.js`，视口 393×894 → `html.narrow`）：
+探针自己拉 `/api/session/:id/message` 与 `/api/model` 用**独立的 TUI 算法实现**复算期望值，再和面板 DOM 比
+（`ses_demo… 47%`、`ses_demo… 45%`、`ses_demo… 60%+`、目录已删的那个只印 token 数；
+至少一个被测会话带「已完成压缩」，压缩分支真跑到了）。另外 4 条：两档文案的 CSS 切换（含临时摘掉
+`html.narrow` 验桌面档）、空会话整块收起。截图 `live-ctxusage.png` 里头部能看到 `65% ctx`。
+
+**回归**：`smoke.sh` 194 → 202（Q 组 8 条：`#ctxInfo` 在标题行里、两档文案、CSS 切档、压缩那一步、
+五路求和 + `limit.context`、`fmtSize`、窄屏文案、三个调用点 + 共用口径）；`ui-stream` 183 → 195
+（上下文用量 12 条，含压缩后重新起算、percent 可空、`step.ended` 立刻算出）；其余套件与 `e2e-*` 全 0 失败。
 
 ---
 
