@@ -162,7 +162,7 @@
       T('点击后箭头翻成「›」(露出 .ac)', arrow() === 'ac', arrow());
       T('点击后 aria-expanded=false', btn.getAttribute('aria-expanded') === 'false');
       T('点击后 aria-label 改成「展开会话列表」', btn.getAttribute('aria-label') === '展开会话列表', btn.getAttribute('aria-label'));
-      T('点击后本地存储记为收起', localStorage.getItem('ocs.listHidden') === '1');
+      T('点击后收起只落在 DOM 类上(localStorage 不再记它)', localStorage.getItem('ocs.listHidden') === null);
       T('收起时列表被 display:none', hiddenOf(listPane));
       /* 回归锁:分栏条是唯一的展开入口,收起后它【必须】还在 ——
          一旦跟着 display:none,列表就再也拉不回来了 */
@@ -183,12 +183,21 @@
       T('收起后仍是三列(第一列为 0)', getComputedStyle(main).gridTemplateColumns.split(' ').length === 3,
         getComputedStyle(main).gridTemplateColumns);
 
+      /* ============ 2b. 折叠【不跨刷新】:重新打开网页时列表一定是展开的 ============
+       * 用户要求「第一次打开网页时,应该展开对话列表」。收起和「鼠标靠左边缘临时拉出来」
+       * 一个性质 —— 只作用于当前这一屏,不是一条要一直生效的设置。 */
+      setupListToggle(); // 重新接线 = 模拟「重新打开网页」
+      T('重新打开网页时列表是展开的', !main.classList.contains('list-hidden'));
+      T('重新打开网页时箭头回到「‹」', arrow() === 'ao', arrow());
+      T('重新打开网页时列表可见', !hiddenOf(listPane));
+      main.classList.add('list-hidden'); // 回到收起态,接着验「收起了也还能点手柄展开」
+
       /* ============ 3. 收起态点手柄能重新展开(入口没丢) ============ */
       btn.click();
       T('收起态点手柄能重新展开', !main.classList.contains('list-hidden'));
       T('箭头回到「‹」', arrow() === 'ao', arrow());
       T('aria-expanded 回到 true', btn.getAttribute('aria-expanded') === 'true');
-      T('展开后本地存储清空', localStorage.getItem('ocs.listHidden') === null);
+      T('展开后 localStorage 里没有收起记录(不记忆)', localStorage.getItem('ocs.listHidden') === null);
       T('展开后列表回来了', !hiddenOf(listPane) && !hiddenOf(resizer));
       T('展开后自定义列宽没被吃掉', main.style.getPropertyValue('--list-w') === '420px',
         main.style.getPropertyValue('--list-w'));
@@ -225,8 +234,8 @@
       main.addEventListener = origAddPeek;
       T('重复接线不再挂监听', addCallsPeek === 0, addCallsPeek);
 
-      localStorage.setItem('ocs.listHidden', '1');
       setupListToggle();
+      main.classList.add('list-hidden'); // 收起态(等价于点一下手柄;现在这份状态不落 localStorage)
       T('(前置)列表已收起', main.classList.contains('list-hidden') && hiddenOf(listPane));
       var rzEdge = resizer.getBoundingClientRect().right;
       T('(前置)收起时分栏槽就贴在左边缘', rzEdge < 20, rzEdge);
@@ -238,7 +247,7 @@
       T('鼠标贴到左边缘 → 临时拉出来(list-peek)', main.classList.contains('list-peek'));
       T('临时拉出来时列表是看得见的', !hiddenOf(listPane));
       T('临时拉出来时不写记忆:list-hidden 还在', main.classList.contains('list-hidden'));
-      T('临时拉出来时不写记忆:localStorage 还是 1', localStorage.getItem('ocs.listHidden') === '1');
+      T('临时拉出来不改折叠状态:localStorage 里没有收起记录', localStorage.getItem('ocs.listHidden') === null);
       T('临时展开后分栏槽跟着列表挪到右边(不再是最左边那条)', resizer.getBoundingClientRect().right > rzEdge + 100,
         [rzEdge, resizer.getBoundingClientRect().right]);
       T('临时展开后对话区仍有宽度(不会整片变白)', chatPane.getBoundingClientRect().width > 100,
@@ -267,7 +276,7 @@
       T('(前置)此刻是临时展开', main.classList.contains('list-peek'));
       btn.click();
       T('临时展开期间点手柄 → 变成显式展开', !main.classList.contains('list-hidden'));
-      T('显式展开后记忆清空(下次启动还是展开)', localStorage.getItem('ocs.listHidden') === null);
+      T('显式展开后 localStorage 里没有收起记录(下次打开网页还是展开)', localStorage.getItem('ocs.listHidden') === null);
       T('显式展开后临时态也摘掉了', !main.classList.contains('list-peek'));
       mv(400);
       T('显式展开时鼠标乱动也不会冒临时态', !main.classList.contains('list-peek'));
@@ -275,13 +284,11 @@
 
       /* 窄屏不玩这一套 */
       document.documentElement.classList.add('narrow');
-      localStorage.setItem('ocs.listHidden', '1');
-      setupListToggle();
-      T('(前置)窄屏下重新收起', main.classList.contains('list-hidden'));
+      main.classList.add('list-hidden'); // 窄屏下也先收起来(桌面那份折叠态在窄屏由 CSS 复位)
+      T('(前置)窄屏下收着', main.classList.contains('list-hidden'));
       mv(5);
       T('窄屏不玩这一套(.resizer 本来就是 display:none)', !main.classList.contains('list-peek'));
       document.documentElement.classList.remove('narrow');
-      localStorage.removeItem('ocs.listHidden');
       setupListToggle();
       setupListPeek();
       T('(收尾)回到展开态、不留临时态',
@@ -301,8 +308,8 @@
       };
       // 时间是按 Date.now() 算的,测试里不真等 5 秒:把到点时间拨到过去再点那个回调
       var expireNow = function () { peekHoldUntil = Date.now() - 1; fireTimers(PEEK_HOLD_MS + 30); };
-      localStorage.setItem('ocs.listHidden', '1');
       setupListToggle();
+      main.classList.add('list-hidden');
       setupListPeek();
       mv(5);
       T('(前置)临时展开着', main.classList.contains('list-peek'));
@@ -330,20 +337,23 @@
       mv(resizer.getBoundingClientRect().right + 5);
       T('宽限期过了之后,挪进对话区照旧立刻收', !main.classList.contains('list-peek'));
 
-      localStorage.removeItem('ocs.listHidden');
-      setupListToggle();
+      setupListToggle(); // 回到展开态
       setupListPeek();
       await onAction('del', 'ses_e'); // 列表好好开着的时候动手
       T('列表本来就开着时不武装(别把正常的收回也挡了)', peekHoldUntil === 0, peekHoldUntil);
 
-      /* ============ 4. 折叠状态被记住(模拟刷新后重新接线) ============ */
-      localStorage.setItem('ocs.listHidden', '1');
-      setupListToggle(); // 重复接线:只按存储重画,不应重复挂监听
-      T('重新接线后按存储进入收起态', main.classList.contains('list-hidden'));
-      T('重新接线后箭头为「›」', arrow() === 'ac', arrow());
+      /* ============ 4. 折叠【不跨刷新】(用户要求:打开网页时列表应该是展开的) ============ */
+      btn.click(); // 先收起来
+      T('(前置)收起了', main.classList.contains('list-hidden'));
+      setupListToggle(); // 重复接线 = 模拟「重新打开网页」:只重画,不应重复挂监听
+      T('重新打开网页时列表是展开的', !main.classList.contains('list-hidden'));
+      T('重新打开网页时箭头为「‹」', arrow() === 'ao', arrow());
+      T('重新打开网页时列表可见', !hiddenOf(listPane));
+      T('收起态没被存进 localStorage(没人在读它)', localStorage.getItem('ocs.listHidden') === null);
       btn.click();
-      T('重复接线后单击只切换一次(不会一次点两下)', !main.classList.contains('list-hidden'));
-      T('展开后不残留收起状态', localStorage.getItem('ocs.listHidden') === null);
+      T('重复接线后单击只切换一次(不会一次点两下)', main.classList.contains('list-hidden'));
+      btn.click();
+      T('(收尾)再点一下回到展开', !main.classList.contains('list-hidden'));
 
       /* ============ 5. hash 解析(hashToID) ============ */
       T('hashToID:#ses_a → ses_a', hashToID('#ses_a') === 'ses_a');

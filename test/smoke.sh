@@ -227,12 +227,15 @@ else
   echo "PASS: 收起时不隐藏分栏条(展开入口不会丢)"; pass=$((pass + 1))
 fi
 
-# 前端逻辑:折叠状态要能被记住,选中会话要写进 URL hash
+# 前端逻辑:打开网页时列表【一定】是展开的(用户要求「第一次打开网页时应该展开对话列表」)
+# → 折叠不跨刷新:setupListToggle 一律 paint(false),不再读写 localStorage 里的 ocs.listHidden
 APPJS=$(curl -s "${AUTH[@]}" "$PROXY/app.js")
-if has "$APPJS" 'ocs.listHidden'; then
-  echo "PASS: app.js 记住列表折叠状态(ocs.listHidden)"; pass=$((pass + 1))
+if has "$APPJS" 'paint(false); // 打开网页时一定是展开的' &&
+   ! has "$APPJS" "localStorage.getItem('ocs.listHidden')" &&
+   ! has "$APPJS" "localStorage.setItem('ocs.listHidden')"; then
+  echo "PASS: app.js 打开网页时列表一律展开(折叠不跨刷新,不再读写 ocs.listHidden)"; pass=$((pass + 1))
 else
-  echo "FAIL: app.js 未记住列表折叠状态"; fail=$((fail + 1))
+  echo "FAIL: app.js 仍会恢复 localStorage 里的收起态(打开网页时列表不是展开的)"; fail=$((fail + 1))
 fi
 if has "$APPJS" 'history.replaceState' && has "$APPJS" 'restoreFromHash'; then
   echo "PASS: app.js 把选中会话写进 URL hash 并在加载时恢复"; pass=$((pass + 1))

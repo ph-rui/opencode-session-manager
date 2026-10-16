@@ -4592,7 +4592,12 @@ function setupResizers() {
 /* 会话列表整列收起 / 展开。
  * 入口就是分栏条顶部那个手柄(#btnList 在 #resizer-mid 里):收起后分栏条本身
  * 会保留成一条 16px 窄槽,所以手柄不会跟着消失,列表随时能拉回来。
- * 收起状态记在 localStorage,与列宽 ocs.listW 并列。 */
+ *
+ * 「收起」【不跨刷新记忆】(用户要求:打开网页时列表应该是展开的)。它和「鼠标靠左边缘
+ * 临时拉出来」是同一个性质 —— 只作用于当前这一屏(给对话区让地方),不是一条要一直
+ * 生效的设置。所以这里既不写 localStorage 也不读它:每次页面加载一律 paint(false)。
+ * 想再收起来点手柄,想临时瞥一眼把鼠标贴到左边缘;列宽 ocs.listW 照旧记忆。
+ * (曾经记过 ocs.listHidden,现在留着那个键也没人读 —— 别被老存储里的值误导。) */
 function setupListToggle() {
   const main = document.querySelector('main');
   const btn = document.getElementById('btnList');
@@ -4605,17 +4610,12 @@ function setupListToggle() {
     btn.title = hidden ? '展开会话列表(分栏条上拖动可改宽度)' : '收起会话列表(分栏条上拖动可改宽度)';
   };
 
-  const stored = () => localStorage.getItem('ocs.listHidden') === '1';
-  paint(stored());
-  // 重复接线只重画(按当前存储),不重复挂监听 —— 否则点一下会触发两次、看起来没反应
+  paint(false); // 打开网页时一定是展开的
+  // 重复接线只重画(回到展开),不重复挂监听 —— 否则点一下会触发两次、看起来没反应
   if (btn.dataset.wired === '1') return;
   btn.dataset.wired = '1';
-  btn.addEventListener('click', () => {
-    const next = !stored();
-    if (next) localStorage.setItem('ocs.listHidden', '1');
-    else localStorage.removeItem('ocs.listHidden');
-    paint(next);
-  });
+  // 以 DOM 上的类为准(别再引一份可能对不上的状态):点一下就是「现在收着就展开、开着就收起」
+  btn.addEventListener('click', () => paint(!main.classList.contains('list-hidden')));
 }
 
 /* 临时展开的「宽限期」:动手(改名/移动/删除/归档)会弹原生 confirm/prompt。原生弹窗期间
@@ -4639,8 +4639,8 @@ let listPeekHold = null; // 由列表临时展开那段接线装上,onAction() �
  * 靠上去就把列表临时拉出来,移开就收回去 —— 省掉「点手柄 → 看一眼 → 再点回去」。
  *
  * 三件事刻意不碰:
- *   1. 记忆(ocs.listHidden)不动。这是「路过看一眼」,不是改设置;
- *      点手柄才算显式展开(setupListToggle 照旧写记忆),那时顺手把临时态摘掉,列表就保持住了。
+ *   1. 「是不是收起着」这份状态不动。这是「路过看一眼」,不是改设置;
+ *      点手柄才算显式展开(setupListToggle 把 list-hidden 摘掉),那时顺手把临时态摘掉,列表就保持住了。
  *   2. 收回的判定不用 mouseleave + relatedTarget:临时展开会把分栏槽从光标底下挪走
  *      (收起时它在 x=0,展开后跑到列表右边),光标底下换元素时 relatedTarget 在浏览器之间不可靠,
  *      换来换去就是闪。改成「按分栏槽右沿判定」:收起时右沿=16(贴到左边缘就展开),
