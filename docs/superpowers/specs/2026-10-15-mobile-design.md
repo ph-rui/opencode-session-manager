@@ -427,10 +427,10 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 175 |
+| `smoke.sh` | 178 |
 | `netallow-run.js`（新）| 74 |
-| `ui-layout` / `ui-tools` / `ui-asks` | 141 / 102 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 123 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 141 / 110 / 57 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 131 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
 | `ui-mobile`（新）| 154 |
 | `ui-composer`（新，见 §8.4）| 84 |
@@ -482,6 +482,10 @@ html.narrow #list td { display: block; border: none; }
 **实测**：手机 393×894 上工具行从「`⏺ bash ← … ● 运行中`（折两行）」变成干净的「`⏺ bash ← …`」
 （一行,尾部什么标记都没有;中间那版只删字留点,看过一眼仍然碍眼,于是点也去掉了）。
 回归：`ui-tools` 94 → 102（新增 8 条锁这条），`smoke.sh` 的 N 组 +4 条（150 → 154）。
+
+> 后记（§8.9）：本条删的是**行尾那个重复的状态文字**。行首那个标记后来照 TUI 补了动效
+> （运行中 `⏺` 变成盲文 spinner），两条不冲突 —— 位置不同，性质也不同：那不是重复的状态文字，
+> 而是「这一行在跑」的动效，头部那套回答不了这个问题。
 
 ### 8.6 追加：一键回底（TUI 的 `Jump to latest`）
 
@@ -572,6 +576,40 @@ CSS 上是个顺序活：`list-hidden`（用户记下来的选择）与 `list-pe
 
 **回归**：`ui-asks` 39 → 57（新增 10 条钉住 `question` 工具的真实形状 + 8 条 string 单选的取值/互斥）、
 `e2e-asks` 13 → 15（`string+options` 收字符串答案 + `Expect` 不卡死）；`smoke` 175、`netallow` 74 与其余套件全部 0 失败。
+
+### 8.9 追加：运行中的工具行，行首标记照 TUI 转起来
+
+**起因**：用户反馈「TUI 在命令前面有一个进度指示（转正方形的），网页版没有实现」。网页版此前只有标题行
+那条 8 格进度条在动，工具行行首的 `⏺` 一直是死的。注意这与 §8.5 删掉的东西**不在同一个位置**：§8.5 删的是
+行尾那个重复的状态文字，这里补的是**行首标记的动效**。
+
+先把 TUI 的事实抓准（pty 里跑真 TUI 并让它自己执行一条 `sleep 12` 的 bash，见
+`/tmp/ocsm-probe/tui/cap2.py`，再解原始终端流）：
+
+| 事实 | 来源 |
+|---|---|
+| 行首标记 `$` 在 running 时变成盲文 spinner，命令紧随其后（同一行：`⠋ sleep 12`） | 原始流 `\e[10;6H⠋\e[0m\e[10;8Hsleep 12` |
+| 帧集合是 `Tz.dots` 的 `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`，**80ms 一帧、10 帧一循环** | 抓到 152 帧、每帧约 15 次，正好对上 `sleep 12` 秒 |
+| 颜色就是正文色，不是装饰色；跑完回到静态标记 | 同一份抓屏 |
+| 「转正方形的」指的就是这组盲文（等宽字里恰好占一个方形字符位），不是 `quadrants`/`arcs`/`line` | 全流统计：`quadrants`/`arcs` 0 次，盲文 10/10 帧各约 155 次（默认 `spinner` 就是 `dots`）|
+
+| 点 | 决定 | 理由 |
+|---|---|---|
+| 落在哪 | 行首那个标记（`.tmark`）：运行中由 `⏺` 换成 spinner，完成/出错回到 `⏺`；行尾的 `✓`/`✗ 出错` 不动 | TUI 换的就是行首槽位；行尾保持 §8.5 的结论，两处不重叠 |
+| 帧与节奏 | 逐字照抄 TUI 的 `dots`：`SPIN_FRAMES` 10 帧 + `SPIN_MS = 80`；**一条** `setInterval` 喂所有行 | 与 TUI 一致；全局同一相位，多行不会各转各的 |
+| 实现方式 | JS 逐帧改 `textContent`（不用 CSS 动画），`syncSpin()` 在渲染后的同步点按需起停、已在走就不重启 | 和标题行进度条同一套；重启会把相位拽回第一帧，看着像卡住 |
+| `prefers-reduced-motion` | 不让路，永远逐帧动 | 照抄的是终端动效，终端里没有这个概念；与进度条同一条规矩 |
+| 布局稳定 | `.tmark.spin` 定宽 `min-width: 1em` + 居中 | 逐帧换字形时这一行不抖 |
+
+**实测**：`/tmp/ocsm-probe/spin/shot.js` —— 真 `index.html` + 真 `app.js`/`styles.css`，挡住 `init()`
+只渲染四行（运行中 bash / 运行中 edit / 完成 / 出错），页内每 80ms 采一帧字形并画进页面。采到的序列
+`⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹` —— 10 个字形齐全、逐帧连续递增、约两圈；
+截图 `/tmp/ocsm-probe/spin/{desktop,phone}.png` 里运行中的两行在转，完成/出错仍是 `⏺`（手机竖屏也没折行）。
+
+**回归**：`ui-tools` 102 → 110（新增 8 条：帧表与间隔照抄 `dots`、运行中行首换 spinner 且不再画 `⏺`、
+完成/出错回到 `⏺`、`toolRunning()` 判定）、`ui-stream` 123 → 131（新增 8 条：DOM 里确实有 `.tmark.spin`、
+定时器 80ms、`__tick()` 走一帧换到下一个字形、重绘不回跳相位、没有运行中的工具后定时器停掉）、
+`smoke.sh` 的 N 组 +3 条（175 → 178）；其余套件与 `e2e-*` 全部 0 失败。
 
 ---
 

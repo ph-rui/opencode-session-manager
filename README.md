@@ -153,7 +153,7 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 - **逐 token 流式**:回复边生成边显示(正文按 Markdown 实时重排、光标闪烁、思考块自动展开、工具调用实时出现),见下文「流式渲染」
 - **工具卡片对齐 TUI**:`edit`/`patch` 直接显示彩色 diff(行号 + `+N -M`,默认展开),`write` 显示写入的正文,诊断行跟在 diff 下方,`question` 已答时列「问题 → 答案」,见下文「工具卡片」
 - **会话控制**(输入框上方的工具栏):
-  - **运行状态**:**只说一遍** —— 列表行与标题栏显示 `● 运行中` / `◌ 重试中`,数据来自 `GET /api/session/active` 与 `session.status` / `session.idle` 事件;消息流里**正在跑的工具行不画任何状态标记**(字和点都不画:手机竖屏上那个「运行中」会被挤成「● 运」「行中」两行,比不写还难看;`✓`/`✗ 出错` 仍照旧画);标题行里还有一条**跟 TUI 同款的 8 格字符进度条**(`■⬝⬝⬝⬝⬝⬝⬝ esc interrupt`)—— 8 格、14 帧一循环(从左边长到 6 格 → 整段往右滑出 → 空一拍),重试中换琥珀色;手机上只留那 8 格,藏掉 `esc interrupt`(手机上没这个键)
+  - **运行状态**:**只说一遍** —— 列表行与标题栏显示 `● 运行中` / `◌ 重试中`,数据来自 `GET /api/session/active` 与 `session.status` / `session.idle` 事件;消息流里**正在跑的工具行行尾不画状态标记**(字和点都不画:手机竖屏上那个「运行中」会被挤成「● 运」「行中」两行,比不写还难看;`✓`/`✗ 出错` 仍照旧画),但**行首那个标记会转** —— 运行中的工具行,行首的 `⏺` 照 TUI 换成盲文 spinner(`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`,80ms 一帧、10 帧一循环,位置也照 TUI 放在命令前面),跑完或出错回到 `⏺`;标题行里还有一条**跟 TUI 同款的 8 格字符进度条**(`■⬝⬝⬝⬝⬝⬝⬝ esc interrupt`)—— 8 格、14 帧一循环(从左边长到 6 格 → 整段往右滑出 → 空一拍),重试中换琥珀色;手机上只留那 8 格,藏掉 `esc interrupt`(手机上没这个键)
   - **中断**:运行中才出现 `■ 中断`,调用 `POST /api/session/:id/interrupt`
   - **投递方式**:运行中发送消息可选「排队」(当前回合结束后执行)或「插话」(立即并入当前回合),对应 `prompt` 的 `delivery: queue|steer`
   - **待发送队列**:展示已入队但尚未执行的消息,可「改为排队/改为插话」(`PATCH .../inbox/:id`)或「取消」(`DELETE .../inbox/:id`)
@@ -446,7 +446,7 @@ node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(3
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:175 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:178 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -476,10 +476,12 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
      `renderAttachments()` 会同步细边提示、drop 处理器里会 `expandComposer()`、
      `setupComposerToggle()` 接进 `init()` 且只有一次,以及两个测试文件都在。
      真正的行为验证在 `ui-composer-run.js`。
-   - N 组的 4 项(运行中的工具行不画状态标记):`statusInfo` 的 `running`/`streaming` 两条
+   - N 组的 6 项(运行中的工具行**行尾**不画状态标记、**行首**那个标记要动起来):`statusInfo` 的 `running`/`streaming` 两条
      **图标与标签都是空的**、`toolHead` 见两者皆空就整个 `<span>` 都不输出(不留空壳)、
-     对话头部那句 `● 运行中` 还在、`✓`/`✗ 出错` 这两个可读标记没被顺手删掉。
-     真正的行为验证在 `ui-tools-run.js`。
+     对话头部那句 `● 运行中` 还在、`✓`/`✗ 出错` 这两个可读标记没被顺手删掉;
+     另外行首 spinner 用的帧表与间隔跟 TUI 的 `dots` 组一致(`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` / 80ms)、
+     `toolHead` 按运行状态换行首标记、`.tmark.spin` 定宽占位。
+     真正的行为验证在 `ui-tools-run.js` 与 `ui-stream-run.js`。
    - O 组的 13 项(一键回底):`#jumpLatest` 在 `#messages` **里面**(只有滚动容器内部的
      `sticky` 才钉得住)、默认 `hidden`、文案 `跳到最新 ↓`、`position: sticky` + `bottom: 8px`、
      **显式写了 `#jumpLatest[hidden] { display: none }`**(id 选择器的 `display: block` 会压过
@@ -502,10 +504,10 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
 - `ui-asks-run.js`:57 项浏览器内断言(真实 `public/app.js`),覆盖字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装、本地校验分支、非 http(s) 链接不可点击;其中 10 项专门钉住 `question` 工具的真实字段形状(`type:"string" + options + custom:true` 必须画成**可点的选项行**、答案必须是字符串而不是数组、自填与选项互斥)。
 - `ui-controls-run.js`:83 项浏览器内断言,覆盖 agent/model 选择器的过滤与分组、切换请求体、变体显隐、中断/投递控件的显隐、运行状态文案与列表标记、待发送队列渲染与操作请求、发送时的 `delivery` 选择、事件到运行状态的映射。
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
-- `ui-stream-run.js`:123 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
+- `ui-stream-run.js`:131 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM;另有 8 项锁**运行中的工具行首 spinner**:DOM 里确实有 `.tmark.spin`、定时器是 80ms、`__tick()` 走一帧换到下一个字形、重绘不回跳相位、没有运行中的工具后定时器停掉。
   另有 21 项给**运行状态条**:元素与 8 格骨架、`progressCells()` **14 帧逐帧**与 TUI 实测序列一致(写错一格就红)、第 15 帧绕回第 0 帧、负数帧也当循环内、按 90ms 挂表、推一帧后格子跟着变、系统开了「减少动画」也照样逐帧推(**不看** `prefers-reduced-motion` —— 终端里没这个概念,当初为它让路的结果是「电脑上状态条不动、手机上正常」)、复位后又能推,以及空闲/重试/未选中三种收展。
   这套测试页把 `setInterval` 换成**记录下来但不真跑**(`__tick()` 手动驱动),所以帧序是确定的,不靠等。
-- `ui-tools-run.js`:102 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平)、`toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」,以及 `userRefsHtml`(agent `@` / skill `#` 标记、缺 `name` 用 `id` 兜底、都缺则跳过、名字转义、在 `renderMessage` 里的顺序与「没有提及时不产生空行」)。其中 8 项锁**运行中的工具行不画状态标记**(对话头部那套已经说过了,手机竖屏上那个「运行中」还会折成「● 运」「行中」两行):`toolHtml` 出来的 HTML 里既没有「运行中」也没有 `tstate`/`●`(整个 `<span>` 都不输出,不留空壳)、`running`/`streaming` 的 `icon` 与 `label` 都是空串、`cls` 仍是 `run`(别处按状态分类要用)、而完成与出错的 `✓`/`✗ 出错` 照旧在工具行上画。
+- `ui-tools-run.js`:110 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平)、`toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」,以及 `userRefsHtml`(agent `@` / skill `#` 标记、缺 `name` 用 `id` 兜底、都缺则跳过、名字转义、在 `renderMessage` 里的顺序与「没有提及时不产生空行」)。其中 8 项锁**运行中的工具行不画状态标记**(对话头部那套已经说过了,手机竖屏上那个「运行中」还会折成「● 运」「行中」两行):`toolHtml` 出来的 HTML 里既没有「运行中」也没有 `tstate`/`●`(整个 `<span>` 都不输出,不留空壳)、`running`/`streaming` 的 `icon` 与 `label` 都是空串、`cls` 仍是 `run`(别处按状态分类要用)、而完成与出错的 `✓`/`✗ 出错` 照旧在工具行上画。另有 8 项锁**运行中行首那个标记会转**(照 TUI 的 `dots` 组、80ms 一帧):帧表与间隔、运行中行首是 `.tmark.spin` 且不再画 `⏺`、完成/出错回到 `⏺`、`toolRunning()` 的判定。
 - `ui-layout-run.js`:141 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
   **鼠标靠左边缘临时拉出列表**(3c 组 27 项:贴到左边缘就 `list-peek` 且列表可见、记忆 `list-hidden`/`localStorage` 一个字都没动、分栏槽跟着列表挪到右边、对话区仍有宽度、用的是用户拖出来的 420px 列宽、列表上有一道阴影、在列表里挪动不算离开、挪进对话区收回、移开主区收回、临时展开期间点手柄转成显式展开并保持、显式展开时乱动也不冒临时态、窄屏不玩这一套),
   hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)、
@@ -577,6 +579,10 @@ journalctl --user -u opencode-session-manager.service -f
   `custom:false` 只接受选项值,否则 `400 FormInvalidAnswerError: Invalid option for form field: <key>`(两条都实测过)。
 - **代理必须吞掉 `Expect: 100-continue`**:curl 对 >1024 字节的 POST 会自动加这个头;原样转发给上游后两边都等对方的 `100 Continue`,
   请求永远不返回(实测 `HTTP 100` 之后 10s 零字节)。代理本来就把请求体读完再带 `content-length` 转发,不需要这个握手。
+- **TUI 的工具行 spinner**(反编译 `Tz` + pty 抓屏实测):运行中的工具行,行首那个标记由 `$` 变成盲文 spinner
+  `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`(**80ms 一帧、10 帧一循环**,颜色就是正文色),命令紧跟在它后面(`⠋ sleep 12`)。
+  默认的 `spinner` 就是这组 `dots`,另三组 `arcs` / `quadrants` / `line` 在真实 TUI 里一次都没出现。
+  面板照抄这一组与这个节奏(`SPIN_FRAMES` / `SPIN_MS`),位置也照 TUI 放在行首即命令前。
 - `GET /api/session/active` 返回 `{"data":{"ses_...":{"type":"running"}}}`(只表示该进程正在执行的会话,不含 `retry`)。
 - `POST /api/session/{id}/agent`、`POST /api/session/{id}/model` 都是 **204 空体**,且**不校验** agent/model 是否真实存在;唯一的结构校验是 `model` 必带 `providerID`(**400**)。
 - 发送消息时若不显式给 `delivery`,服务端会补成 `steer`;只有会话正在运行时 `queue` 才会真正滞留在 inbox 里(`turn` 结束后自动投递)。空闲会话即使传 `queue` 也会立即执行。
