@@ -1614,6 +1614,55 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.32 追加：其它消息种类照 TUI 的 SessionMessageView
+
+**起因**：用户「一切往 TUI 的方向靠拢」的清单第 6 项 —— `model-switched` / `agent-switched` /
+`location-switched` / `synthetic` / `skill` / `shell` 这些种类，面板原来一律画成一句
+`· <type>: <text>`（`renderMessage` 的兜底分支）。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/routes/session/index.tsx:1799` 的 `SessionMessageView`
+及其分派到的三个组件）：
+
+| 种类 | TUI 画法 | 证据 |
+|---|---|---|
+| `location-switched` | `↳ Moved to <location.directory>`（前缀 muted、目录 info 蓝），缩进 3 | `1936-1944` |
+| `agent-switched` | `Switched agent from <X> to <Y>`（两头 `Locale.titlecase`；`previous === agent` 时只写 `to <Y>`），整行 muted | `1946-1951` |
+| `model-switched` | `switchLabel(model, models, previous)` | `1952-1954` |
+| `switchLabel` | 同 `providerID`+`id`（只换档）→ `Switched variant to <档 ?? "default">`；模型表查得到 → `Switched model to <name>`（档不是 `default` 时补 ` (档)`）；查不到 → `Switched model to <providerID/id/档>` | `util/model.ts`，二进制原文核对过 |
+| `system` | InlineToolRow：`◈ <description ?? "Instructions updated">`，色 muted | `1963-2020` |
+| `synthetic`（无 `source`） | 同上，`◈ <description ?? "">` | 同上 |
+| `synthetic`（`metadata.source` 是 `subagent`/`shell`） | `↳ <Actor> <status> · <描述>`：`Actor` = `Shell` 或 `titlecase(metadata.agent ?? "Subagent")`；`completed` → `finished`、`error` → `failed`、其余原样；`completed` 用 `↳`、别的用 `!`；error 红、cancelled 琥珀、其余 info 蓝；shell 的描述先 `replace(/\s+/g," ")`；描述按剩余宽度 `truncateWidth` | `1970-1990` |
+| `skill` | InlineToolRow：`→ Skill <name>` | `2022-2029` |
+| `idle` | **不出行**（只拿来收轮） | `rows.ts:379-381` |
+| `synthetic` 没有 `description` | **整条跳过**（例如「上一条被打断，接着干」那条原始指令，正文是给模型看的） | `rows.ts:383` |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 切换类 | 新 `.swrow`（整行 muted、等宽），location 那行的目录单独一格 `.swPath` 走 info 蓝 —— 与 TUI 一样只给目录上色 |
+| `switchLabel` | 逐字照 TUI：先比 `previous.providerID`/`id`（只换档），再查 `store.modelIndex`（面板里就是「模型表」），查不到才退回 `providerID/id/档` |
+| 通知类 | `◈` 那行直接复用工具行的 `.toolrow` 结构（面板里工具行本来就是 InlineToolRow 的等价物），但 **`.notice .tmark` 改 muted** —— TUI 的 `◈` 是 muted，不是工具行那枚琥珀 |
+| 收工行 | 新 `.completion`：`display: flex` 一行不折，行头 `.cHead` 按状态着色，描述 `.cSuffix` 是 `flex: 1` + 省略号（对应 TUI 的 `truncateWidth`）。**第一版写成普通行内 span 时实测在 393 宽下「↳ Shell finished」和「· 命令」被折成两行**，`.cSuffix` 的 `white-space: nowrap` 让它整块换行又不裁切 —— 改 flex 后才是一行 |
+| 不出行的两种 | 新 `msgHidden()`；`renderMessages` 里 `if (!L && msgHidden(view)) continue` —— 连 DOM 带 `msgEls` 记录一起不建。这修掉一个现存外观问题：`idle` 原来会渲染成空壳，实测 `#messages .msg.idle` 是 **349×2、左边一条 `rgb(220,220,220)` 灰边**（`.msg` 的 `border-left` + `padding`），加 22px 下边距，一条会话里几十条就是几十处空隙 |
+| 签名 | `model-switched` 那行的模型名要查表，所以它也进 `fpExtra`（与 §8.27 的助手脚注同一个坑）。**实拍第一版就抓到了**：模型表晚到一步时那行永远停在 `Switched model to company/deepseek-v4-flash`，而 `store.modelIndex` 里明明有 `company/deepseek-v4-flash → DeepSeek V4 Flash` |
+| `shell`（消息种类） | 面板这一支在 §8.22 早就照 `ShellDisplay` 画好了，这轮不动 |
+
+**验证**：`footer-audit.js` 探针加了 `minor` 一栏（逐行 dump）+ `idleN`。三个会话实拍：
+
+- 探针会话：`idleN: 0`（原来 2）、`msg minor swrow` 两行 —— `Switched agent from Sisyphus - Ultraworker to Build` 与
+  `Switched model to DeepSeek V4 Flash`（签名修好后不再是退回形态）。
+- `ses_demo…`：`◈ Continuing after restart`（`synthetic` 有描述）、`◈ Instructions updated: core/codemode`（`system`）、
+  两行 `↳ Shell finished · <命令>`（`synthetic` source=shell）。
+- 393×894 截图里收工行是一行、行头 info 蓝、命令省略号收住（`/tmp/ocsm-probe/perf/footer-audit-393x894.png`）。
+
+**回归**：`smoke.sh` 新 R9 组 4 项；`ui-tools` 224 → **246**（22 项：`switchLabel` 四条分支、
+`model-switched` / `agent-switched`（两种）/ `location-switched`、通知类（`system` 含兜底、`synthetic` 的 `◈`、
+子会话与 shell 收工行的 actor 大小写 / 空白压平 / 三档颜色）、`skill` 消息、`msgHidden` 三种情形，
+以及走一趟真渲染确认那两种**压根不建元素**）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
