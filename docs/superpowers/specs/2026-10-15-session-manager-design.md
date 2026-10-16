@@ -273,6 +273,8 @@ opencode-session-manager/
     - **刻意不动 `--list-w`**:用户拖出来的列宽在收起 → 展开后原样还在(双击 `#resizer-mid` 复位宽度仍然有效)。
     - 状态记在 `localStorage['ocs.listHidden']`(与列宽 `ocs.listW` 并列);`setupListToggle()` 重复调用只按存储重画、
       不重复挂监听(否则点一下触发两次,看起来没反应)。
+      **后来改了**(见 `2026-10-15-mobile-design.md` §8.13):折叠**不再跨刷新记忆** —— 打开网页时列表一律
+      `paint(false)`,`ocs.listHidden` 既不读也不写(用户要求「第一次打开网页时应该展开对话列表」);列宽 `ocs.listW` 照旧记。
   - **刷新后回到刚才的会话**
     - 选中的 id 写进 URL hash(`#ses_xxx`,用 `history.replaceState` 而非 `pushState` —— 点会话不该把后退键灌满)。
       选 hash 而不是 localStorage:它是唯一「刷新 / 复制链接 / 书签 / 换标签打开」都成立的载体。
