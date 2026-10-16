@@ -340,6 +340,8 @@ table#list { width: 100%; border-collapse: collapse; }
 .toolrow { cursor: default; }
 .tool > summary::-webkit-details-marker { display: none; }
 .tool .tmark, .toolrow .tmark { color: #b0893a; }
+/* 运行中的行首标记(照 TUI 换成盲文 spinner):定宽,免得逐帧换字形把这一行抖起来 */
+.tool .tmark.spin, .toolrow .tmark.spin { display: inline-block; min-width: 1em; text-align: center; }
 .tool .tname, .toolrow .tname { color: var(--fg); }
 .tool .tstate, .toolrow .tstate { font-size: 0.88em; }
 .tstate.ok { color: #8bb08b; }

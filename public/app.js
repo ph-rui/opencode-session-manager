@@ -1644,8 +1644,12 @@ function inputSummary(input) {
 }
 
 function toolHead(p, s, desc, counts) {
+  // 行首标记:运行中时照 TUI 换成会转的 spinner(命令前面那个),其余时候还是 ⏺
+  const spin = toolRunning(p);
   return (
-    '<span class="tmark">⏺</span>' +
+    '<span class="tmark' + (spin ? ' spin' : '') + '">' +
+    (spin ? SPIN_FRAMES[spinFrame] : '⏺') +
+    '</span>' +
     '<span class="tname">' + esc(p.name || 'tool') + '</span>' +
     (desc ? '<span class="tdesc">' + esc(desc) + '</span>' : '') +
     (counts && counts.additions ? '<span class="tadd">+' + counts.additions + '</span>' : '') +
@@ -1989,7 +1993,60 @@ function paintProgressBar(mode) {
   pbarTimer = setInterval(drawProgressFrame, PBAR_MS);
 }
 
+/* ---------------- 运行中的工具行:行首标记转起来(TUI 同款) ----------------
+ *
+ * TUI 实测(pty 抓屏,见 §8.9):工具行行首那个标记在 running 时由 `$` 变成盲文
+ * spinner,80ms 一帧、10 帧一循环,跑完回到静态标记。TUI 的帧表 Tz 里 dots 就是这
+ * 一组(另有 quadrants / arcs / line,可选);q0 默认用的就是 dots。
+ *
+ * 注意这和 §8.5 删掉的「行尾 ● 运行中」不是一回事:那是一个**重复的状态文字**
+ * (头部已经说了,手机上还会折行);这里是**行首标记的动效**,回答的是「这一行在跑」
+ * 这个头部回答不了的问题,位置也照 TUI 放在命令前面。 */
+const SPIN_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPIN_MS = 80;
+
+let spinTimer = null;
+let spinFrame = 0;
+
+/* 与 statusInfo() 里 running/streaming 那两条走同一判定,免得两处各写一套。 */
+function toolRunning(p) {
+  const st = (p.state && p.state.status) || (p.executed ? 'completed' : 'running');
+  return st === 'running' || st === 'streaming';
+}
+
+function drawSpinFrame() {
+  const els = document.querySelectorAll('.tmark.spin');
+  if (!els.length) {
+    stopSpin();
+    return;
+  }
+  spinFrame = (spinFrame + 1) % SPIN_FRAMES.length;
+  const g = SPIN_FRAMES[spinFrame];
+  for (const el of els) if (el.textContent !== g) el.textContent = g;
+}
+
+function stopSpin() {
+  if (spinTimer !== null) {
+    clearInterval(spinTimer);
+    spinTimer = null;
+  }
+}
+
+/* 只由渲染后的同步点调(updateChatStatus ← renderMessages)。已经在走的时候【不重开】,
+ * 否则每来一个 SSE 事件都会跳回第一帧,看着像卡住 —— 和状态条同一个规矩。
+ * 【一律逐帧推】,不看 prefers-reduced-motion:这条是照 TUI 抄的,终端里没这个概念。 */
+function syncSpin() {
+  if (!document.querySelector('.tmark.spin')) {
+    stopSpin();
+    return;
+  }
+  if (spinTimer !== null) return;
+  spinTimer = setInterval(drawSpinFrame, SPIN_MS);
+}
+
 function updateChatStatus() {
+  // 工具行的行首标记跟着这次渲染一起同步(它只认 DOM 里的 .tmark.spin,自己会收敛)
+  syncSpin();
   const el = $('#chatState');
   // 文字状态与状态条一起画:两者永远同步,不会各写各的。
   // 第三个参数三态:false=收起,'run'=在跑,'retry'=重试中。

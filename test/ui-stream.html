@@ -258,6 +258,25 @@
       renderMessages();
       T('工具卡片出现且名为 shell', q('#messages .toolrow, #messages details.tool') && el(AID).textContent.indexOf('shell') >= 0);
       T('工具初始为运行中', statusInfo(view(AID).byKey['tool:call_1']).cls === 'run');
+
+      /* ---------------- 运行中的工具:行首标记转起来(TUI 同款) ---------------- */
+      var sp = el(AID).querySelector('.tmark.spin');
+      T('运行中的工具行首标记换成 spinner',
+        !!sp && SPIN_FRAMES.indexOf(sp.textContent) >= 0, sp && sp.textContent);
+      T('spinner 的定时器是 80ms(TUI 的 dots 组)', __intervalMs().indexOf(80) >= 0, __intervalMs());
+      T('不再画静态 ⏺', el(AID).querySelector('.tmark').textContent !== '⏺');
+      var f0 = sp.textContent;
+      window.__tick();
+      T('走一帧就换到下一个字形',
+        sp.textContent === SPIN_FRAMES[(SPIN_FRAMES.indexOf(f0) + 1) % SPIN_FRAMES.length],
+        f0 + ' -> ' + sp.textContent);
+      T('换的还是 spinner 里的字', SPIN_FRAMES.indexOf(sp.textContent) >= 0, sp.textContent);
+      // 反复渲染不该把相位拽回第一帧(和状态条同一个规矩)
+      var fBefore = sp.textContent;
+      renderMessages();
+      var sp2 = el(AID).querySelector('.tmark.spin');
+      T('重绘后相位不回跳', sp2.textContent === fBefore, fBefore + ' -> ' + sp2.textContent);
+
       var elBeforeTool = el(AID);
       feed('session.tool.called', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', input: { command: 'echo ONE' } });
       T('tool.called 写入 input', view(AID).byKey['tool:call_1'].state.input.command === 'echo ONE');
@@ -270,6 +289,11 @@
       T('tool.success 变为已完成', statusInfo(view(AID).byKey['tool:call_1']).cls === 'ok');
       T('工具输出进入 DOM', el(AID).textContent.indexOf('ONE') >= 0);
       T('完成后状态标记出现在 DOM', el(AID).querySelector('.tstate.ok') !== null && el(AID) !== elBeforeOk);
+      T('完成后行首回到 ⏺',
+        el(AID).querySelector('.tmark.spin') === null &&
+        el(AID).querySelector('.tmark').textContent === '⏺',
+        el(AID).querySelector('.tmark') && el(AID).querySelector('.tmark').textContent);
+      T('没有在跑的工具后 spinner 定时器停掉', __intervalMs().indexOf(80) < 0, __intervalMs());
 
       // progress 不改变结构,也不该造出卡片
       var before = view(AID).parts.length;

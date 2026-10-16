@@ -825,6 +825,27 @@ else
   echo "FAIL: 完成或出错的状态标记丢了"; fail=$((fail + 1))
 fi
 
+# ---- N2 组:行尾不画,但行首那个标记要动起来 ----
+# TUI 抓屏实测:工具行行首的标记在 running 时由 `$` 变成盲文 spinner
+# (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏,80ms 一帧、10 帧一循环)。这跟上面删掉的「行尾 ● 运行中」
+# 不是一回事:那是重复的状态文字,这是行首标记的动效(照 TUI 放在命令前面)。
+if has "$APPJS" "const SPIN_FRAMES = ['⠋', '⠙'" && has "$APPJS" 'const SPIN_MS = 80'; then
+  echo "PASS: 行首 spinner 用 TUI 的 dots 组、80ms 一帧"; pass=$((pass + 1))
+else
+  echo "FAIL: spinner 的帧表或间隔跟 TUI 对不上"; fail=$((fail + 1))
+fi
+if has "$TOOLHEAD_FN" 'toolRunning(p)' && has "$TOOLHEAD_FN" "spin ? ' spin' : ''"; then
+  echo "PASS: 运行中的工具行首标记换成 spinner"; pass=$((pass + 1))
+else
+  echo "FAIL: toolHead 没有按运行状态换行首标记"; fail=$((fail + 1))
+fi
+SPIN_CSS=$(printf '%s' "$CSS" | awk '/^\.tool \.tmark\.spin, \.toolrow \.tmark\.spin \{/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$SPIN_CSS" 'min-width: 1em'; then
+  echo "PASS: spinner 定宽占位(逐帧换字不抖行)"; pass=$((pass + 1))
+else
+  echo "FAIL: .tmark.spin 没定宽"; fail=$((fail + 1))
+fi
+
 # ---- O 组:一键回底(TUI 的 "Jump to latest ↓") ----
 # 往上翻走之后给一个一键回到最新的入口。它与「自动跟随」共用同一个「在不在底部」判定,
 # 所以两处必须同源(否则会出现「明明跟着跳到底了,按钮还杵在那儿」)。

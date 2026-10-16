@@ -272,6 +272,29 @@
         state: { status: 'completed', input: {}, content: [] } };
       T('toolHtml(通用):无入参无输出时是单行', toolHtml(bare).indexOf('class="toolrow"') >= 0);
 
+      /* ================= 运行中的工具:行首标记会转(TUI 同款) =================
+       * TUI 实测:行首标记 running 时由 `$` 变成盲文 spinner(dots 组,80ms 一帧)。 */
+      T('toolRunning:running / streaming 都算在跑',
+        toolRunning({ state: { status: 'running' } }) === true &&
+        toolRunning({ state: { status: 'streaming' } }) === true);
+      T('toolRunning:completed / error 不算在跑',
+        toolRunning({ state: { status: 'completed' } }) === false &&
+        toolRunning({ state: { status: 'error' } }) === false);
+      T('spinner 帧表与间隔照抄 TUI 的 dots 组',
+        SPIN_FRAMES.join('') === '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' && SPIN_MS === 80, SPIN_FRAMES.join('') + ' / ' + SPIN_MS);
+      var runPart = { type: 'tool', id: 'c12', name: 'bash',
+        state: { status: 'running', input: { command: 'sleep 12' }, metadata: {} } };
+      var rh = toolHtml(runPart);
+      T('toolHtml(运行中):行首标记是 spinner',
+        /class="tmark spin">[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]</.test(rh), rh.slice(0, 120));
+      T('toolHtml(运行中):不再画静态 ⏺', rh.indexOf('⏺') < 0, rh.slice(0, 120));
+      T('toolHtml(运行中):命令照常在(标记就贴在它前面)', rh.indexOf('→ sleep 12') >= 0, rh.slice(0, 200));
+      T('toolHtml(已完成):行首仍是 ⏺ 不是 spinner',
+        bh.indexOf('class="tmark">⏺<') >= 0 && bh.indexOf('tmark spin') < 0, bh.slice(0, 120));
+      T('toolHtml(出错):行首也回到 ⏺',
+        toolHtml({ type: 'tool', id: 'c13', name: 'bash',
+          state: { status: 'error', input: { command: 'x' }, content: [] } }).indexOf('class="tmark">⏺<') >= 0);
+
       /* ================= toolMetaSig ================= */
       T('toolMetaSig:无 metadata 为空', toolMetaSig({ state: {} }) === '');
       T('toolMetaSig:无 files 为空', toolMetaSig({ state: { metadata: { exit: 0 } } }) === '');
