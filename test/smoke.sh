@@ -1683,6 +1683,33 @@ else
   echo "FAIL: 采样没有停手条件,或 ui-jump.html 里没有这组断言"; fail=$((fail + 1))
 fi
 
+# ---- R14 组:消息列表里摘掉 data: 图(面板一个字节都不显示,却占 89% 的流量;§8.37)----
+if has "$SERVERJS" 'function stripToolUris(json)' && has "$SERVERJS" 'function isMessageListUrl(url, method, status, contentType)' &&
+   has "$SERVERJS" '/^\/api\/session\/[^/?]+\/message(\?|$)/'; then
+  echo "PASS: 代理有「消息列表摘图」这对纯函数,URL 形状只认 /api/session/<id>/message"; pass=$((pass + 1))
+else
+  echo "FAIL: 代理缺 stripToolUris / isMessageListUrl,或 URL 正则不对"; fail=$((fail + 1))
+fi
+if has "$SERVERJS" "if (isMessageListUrl(req.url, req.method, upstream.status, outHeaders['content-type']))" &&
+   has "$SERVERJS" 'if (stripToolUris(json)) out = Buffer.from(JSON.stringify(json));' &&
+   has "$SERVERJS" 'out = raw; // 不是 JSON / 结构不认识:原样发' && has "$SERVERJS" 'outHeaders['"'"'content-length'"'"'] = String(out.length);'; then
+  echo "PASS: 只有消息列表那一条走缓冲改写,解析失败一律原样发(代理不因为省流量弄坏面板)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缓冲区改写的接线不对(缺 URL 判定 / 摘到才重排 / 出错退回 / content-length)"; fail=$((fail + 1))
+fi
+if has "$SERVERJS" "it.uri.startsWith('data:')" && has "$SERVERJS" 'it.omitted = it.uri.length;' && has "$SERVERJS" "it.uri = '';" &&
+   has "$SERVERJS" 'nodeStream.pipe(res);' && has "$SERVERJS" 'stripToolUris,' && has "$SERVERJS" 'isMessageListUrl,'; then
+  echo "PASS: 只摘 data: 开头的 uri(留 name/mime + 字节数),其余(含 SSE)仍是原样流式透传,纯函数已导出"; pass=$((pass + 1))
+else
+  echo "FAIL: 摘图范围没收在 data: 上,或 SSE 的流式透传被动了,或没导出给测试"; fail=$((fail + 1))
+fi
+if [ -f "$(dirname "$0")/strip-run.js" ] && has "$(cat "$(dirname "$0")/strip-run.js")" 'omitted' &&
+   has "$(cat "$(dirname "$0")/strip-run.js")" 'data:image/png;base64,'; then
+  echo "PASS: 摘图这套有专门的纯函数断言(test/strip-run.js)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 test/strip-run.js(或它没断言 omitted / 真图)"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

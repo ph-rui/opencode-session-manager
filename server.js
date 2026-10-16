@@ -251,6 +251,63 @@ function allowStatusText() {
   return ALLOW_SPEC;
 }
 
+/* --------------------------- 挤掉白传的大块字节 ---------------------------
+ * 「会话消息列表」里塞着面板【一个字都不显示】的字节:MCP 工具返回的图,藏在
+ * state.content[].uri 的 data: URL 里(base64)。实测那条 PPT 会话
+ * (ses_demo):
+ *     手机一页 30 条   2.12 MB 里 1.89 MB 是这个(89%,3 张图,平均一张 630 KB)
+ *     桌面一页 100 条 12.90 MB 里 11.87 MB 是这个(92%)
+ * 而 public/app.js 的 toolOutputHtml() 只取 content[].text(连文件名都不显示),
+ * 也就是说这些字节传到手机上纯属白等 —— 手机上就是「十几秒」和「一秒」的差别。
+ *
+ * 这里在代理层摘掉:
+ *   - 只动 data: 开头的 uri(真的是字节);file:// 之类原样留着;
+ *   - 留 name / mime,另记一个字节数(omitted)—— 将来要做「点开看图」还知道有多大;
+ *   - 只摘 /api/session/<id>/message 这一条 200 JSON;
+ *   - SSE(/api/event)不碰:那是流式的,摘不了。
+ * 代价是这一次响应要整体过一遍 JSON.parse/stringify(几 MB ≈ 几十毫秒),
+ * 换来 9~13 倍的流量。任何一步出错都原样退回字节 —— 代理不许因为顺手省流量把面板弄坏。 */
+
+const MESSAGE_LIST_RE = /^\/api\/session\/[^/?]+\/message(\?|$)/;
+
+function isMessageListUrl(url, method, status, contentType) {
+  return (
+    method === 'GET' && status === 200 && MESSAGE_LIST_RE.test(url || '') && /json/i.test(contentType || '')
+  );
+}
+
+/* 就地摘掉消息里 data: 图的大块正文,返回摘掉几处(0 = 没动,调用方原样发)。 */
+function stripToolUris(json) {
+  const list = json && Array.isArray(json.data) ? json.data : null;
+  if (!list) return 0;
+  let n = 0;
+  for (const msg of list) {
+    if (!msg || !Array.isArray(msg.content)) continue;
+    for (const part of msg.content) {
+      const items = part && part.state && Array.isArray(part.state.content) ? part.state.content : null;
+      if (!items) continue;
+      for (const it of items) {
+        if (!it || typeof it.uri !== 'string' || !it.uri.startsWith('data:')) continue;
+        it.omitted = it.uri.length;
+        it.uri = '';
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
+/* 把上游的响应体整个读成一个 Buffer(读断了返回 null,由调用方收尾)。 */
+async function readAll(webBody) {
+  const chunks = [];
+  try {
+    for await (const c of Readable.fromWeb(webBody)) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+    return Buffer.concat(chunks);
+  } catch (_) {
+    return null;
+  }
+}
+
 /* ------------------------------- 代理 ------------------------------- */
 
 async function proxy(req, res, attempt) {
@@ -319,6 +376,29 @@ async function proxy(req, res, attempt) {
 
   // API 一律不缓存:会话/消息/状态是活的,别让浏览器(或中间的 http 缓存)拿旧的糊弄。
   outHeaders['cache-control'] = 'no-store';
+
+  /* 消息列表整体过一遍:摘掉面板不显示的 data: 图(见 stripToolUris)。这条响应为了省流量
+   * 要先整个读进来,所以走单独一条路;其余一切(含 SSE)仍然是原样的流式透传。 */
+  if (isMessageListUrl(req.url, req.method, upstream.status, outHeaders['content-type'])) {
+    const raw = await readAll(upstream.body);
+    if (raw == null) {
+      try {
+        res.end(); // 读到一半断了(多半是客户端已经走了),体已消费,收工
+      } catch (_) {}
+      return;
+    }
+    let out = raw;
+    try {
+      const json = JSON.parse(raw.toString('utf8'));
+      if (stripToolUris(json)) out = Buffer.from(JSON.stringify(json));
+    } catch (_) {
+      out = raw; // 不是 JSON / 结构不认识:原样发
+    }
+    outHeaders['content-length'] = String(out.length);
+    res.writeHead(upstream.status, outHeaders);
+    res.end(out);
+    return;
+  }
 
   res.writeHead(upstream.status, outHeaders);
   res.flushHeaders && res.flushHeaders();
@@ -552,4 +632,8 @@ module.exports = {
   matchAllowRule,
   sourceAllowed,
   allowStatusText,
+  // 消息列表里摘图(§8.37):纯函数,给 test/strip-run.js 直接断言
+  MESSAGE_LIST_RE,
+  isMessageListUrl,
+  stripToolUris,
 };
