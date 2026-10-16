@@ -429,13 +429,13 @@ html.narrow #list td { display: block; border: none; }
 |---|---|
 | `smoke.sh` | 175 |
 | `netallow-run.js`（新）| 74 |
-| `ui-layout` / `ui-tools` / `ui-asks` | 141 / 102 / 39 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 141 / 102 / 57 |
 | `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 123 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
 | `ui-mobile`（新）| 154 |
 | `ui-composer`（新，见 §8.4）| 84 |
 | `ui-jump`（新，见 §8.6）| 44 |
-| `e2e-asks` / `e2e-controls` / `e2e-capabilities` | 13 / 22（+1 跳）/ 26 |
+| `e2e-asks` / `e2e-controls` / `e2e-capabilities` | 15 / 22（+1 跳）/ 26 |
 | `e2e-stream` / `e2e-attach` / `e2e-commands` | 4（+1 跳）/ 32 / 40 |
 
 这套「窄屏覆写只发生在 `html.narrow` 下、新增元素一律桌面隐藏、原有 DOM 一个不删」
@@ -535,6 +535,43 @@ CSS 上是个顺序活：`list-hidden`（用户记下来的选择）与 `list-pe
 **实测**：桌面 1366×900 三态截图（展开 / 收起 / 鼠标靠左边缘），临时展开态探针
 `hidden=true peek=true slotRight=576 paneW=560` —— 记忆没动、列表拉出来了、槽跟着挪到了列表右边。
 回归：`ui-layout` 114 → 141（新增 3c 组 27 条），`smoke.sh` 的 P 组 +8 条（167 → 175）。
+
+---
+
+### 8.8 追加：问询卡的单选字段必须「看得见选项」
+
+**起因**：用户反馈「你问问题的时候，网页版有时不弹出选项让我选」。这是一个**渲染**问题，不是事件问题。
+
+复现方式（真服务 + 真面板 + 真浏览器，脚本 `/tmp/ocsm-probe/live/serve.js`）：
+建一个临时会话 → 按 `question` 工具的**逐字节相同形状**建一个真表单 → 浏览器带 `#会话id`
+打开真面板（面板自己 `restoreFromHash → selectSession → loadAsks`）→ 截图。
+
+| 事实 | 来源 |
+|---|---|
+| `question` 工具的单选问题是 `{type:"string", options:[...], custom:true}`，**多选**才是 `multiselect`；两者都不带 `required` | 反编译 `GD()` |
+| 面板旧渲染对 `custom:true` 给的是 `<input list=…>` + `<datalist>`：选项藏在输入法下拉里，手机上不打字根本看不到 | 旧 `fldCtlHtml()` + 截图 |
+| TUI 对同一字段是**选项列表**（`type==='string' && options` → 列表，`custom` 时追加「自己输入」） | 反编译 TUI 分派 |
+| 事件链路本身没坏：页面打开 2.5 秒后才建表单，卡片**原地**弹出（不刷新），列表行的 `⚑ 1` 徽标也正常 | 实测（`--live` 模式） |
+
+所以「有时」= 看问题类型：多选问题一直有选项可点，单选问题只有一个空输入框。
+
+| 点 | 决定 | 理由 |
+|---|---|---|
+| 单选渲染 | 带 `options` 的 `string` 一律画成**可点的选项行**（radio）；`custom:true` 时在其下再给「其它(自填)」，两者互斥 | 与 TUI 一致；手机上 44px 命中区；复用现成的 `.opts/.opt`（与多选题同一套视觉） |
+| 答案类型 | 单选提交**字符串**，多选才提交数组 | 服务端语义：`custom:true` 收任意字符串、`custom:false` 只收选项值（乱写 `400 Invalid option for form field`），两条都实测过 |
+| `custom:false` | 保持原生 `<select>` 不动 | 手机上系统选择器好用，且已有测试锁着；`question` 工具走不到这条分支，没有改的动机 |
+| 卡片本体 | 位置、堆叠、提交/取消一个字不动 | 问题不在「卡片出不出」，而在「选项看不看得见」 |
+
+顺带修掉一个**真 bug**（它把 e2e 测试直接卡死了）：代理把客户端的 `Expect: 100-continue`
+原样转发给上游，两边都等对方的 `100 Continue` → 请求永远不返回。curl 对 >1024 字节的 POST
+会自动加这个头（表单体刚好越过这条线），实测卡在 `HTTP 100` 之后 10 秒零字节。修法是代理**吞掉**
+这个头（它本来就先把体读完、带 `content-length` 转发，不需要握手）。
+
+**实测**：`/tmp/ocsm-probe/live/{pre,live}-{desktop,phone}.png` 四张对照截图 —— 修前单选是空长条、
+多选是勾选框；修后单选是三个可点的选项行 + 「其它(自填)」，多选不变。
+
+**回归**：`ui-asks` 39 → 57（新增 10 条钉住 `question` 工具的真实形状 + 8 条 string 单选的取值/互斥）、
+`e2e-asks` 13 → 15（`string+options` 收字符串答案 + `Expect` 不卡死）；`smoke` 175、`netallow` 74 与其余套件全部 0 失败。
 
 ---
 

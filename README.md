@@ -200,7 +200,8 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 - 触发两条路:① `/api/event` 的 `form.created` / `permission.asked` 实时到达;② 打开会话时兜底拉取 `GET /api/session/:sid/form` 与 `.../permission`。
 - 提交:表单 `POST /api/session/:sid/form/:fid/reply` body `{answer}`(值类型 `string | number | boolean | string[]`);取消 `DELETE .../form/:fid?message=`;权限 `POST .../permission/:rid/reply` body `{decision:"once"|"always"|"reject"}`。成功均为 `204`。
 - 与 TUI 对齐的细节:
-  - 字段 `default` 预填;`boolean` 用勾选框;`string` 带 `options` 时 `custom:true` 用可自填输入 + `datalist`,`custom:false` 用下拉选择。
+  - 字段 `default` 预填;`boolean` 用勾选框;**带 `options` 的 `string` 字段画成可点的单选行**(`custom:true` 时下面再给一个「其它(自填)」输入框,两者互斥);`custom:false` 用下拉选择。
+    - 这条是为了对齐 TUI:`question` 工具的单选问题正是 `type:"string" + options + custom:true`,TUI 会列出选项;面板曾经只画一个空输入框(选项藏在 `datalist` 里),手机上等于没有选项可点。
   - 条件字段 `when`(`{key,op:eq|neq,value}`,多条件为与)按实时答案显隐;未激活的字段**不参与提交**(服务端会以 `Form field is not active` 拒绝)。
   - `external` 字段必须确认(提交 `true`),否则服务端拒绝。
   - 提交前按 TUI 同样的规则本地校验(必填、`min/max`、`minLength/maxLength/pattern`、`email/uri/date` 格式、`minItems/maxItems`),失败在卡片内提示且不丢用户输入。
@@ -494,11 +495,11 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
      真正的行为验证在 `ui-layout-run.js` 的 3c 组。
      来源白名单那三条语义(默认值 / 空=不限制 / 配错=全拒)由 `netallow-run.js` 正面覆盖,这里不重复。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
-- `e2e-asks.sh`:13 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、重复应答 `409`、取消 `204`。
+- `e2e-asks.sh`:15 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、`string+options` 字段收**字符串**答案(`question` 工具的单选形状)、重复应答 `409`、带 `Expect: 100-continue` 的大请求不被代理卡死、取消 `204`。
 - `e2e-controls.sh`:22 项(开 `OCS_E2E_LLM=1` 为 31 项)。同样只用临时会话;验证 agent/model 切换持久化、`model` 缺字段 `400`、空闲中断 `interrupted=false`、inbox 负例,以及(可选)真实运行中的 `queue` 投递、改投递、取消、中断。
 - `e2e-capabilities.sh`:26 项。只用临时会话与 `/tmp` 临时目录,结束时全部删除;验证新建的字段落库、`PATCH metadata` 的整体替换语义、导出脱敏与否、导入的换 ID 与 `location` 重挂、以及 `409`/`400` 负例。
 - `e2e-stream.sh`:4 项(开 `OCS_E2E_LLM=1` 为 27 项)。默认部分只验证事件流形状(单行 `data:`、无 `event:` 行、首帧 `server.connected`、每帧合法 JSON);开了 LLM 后追加真实流式断言:出现 `step.started`、增量 `>= 5` 个且**累加严格等于** `ended.text`、事件顺序 `started→delta→ended`、`step.ended` 带 finish 与 output tokens、`execution.succeeded`,以及**流式期间服务端不提供半成品文本**(这正是前端必须自己消费增量的原因)。默认模型未必配好,可用 `OCS_E2E_MODEL=provider/modelID` 指定。
-- `ui-asks-run.js`:39 项浏览器内断言(真实 `public/app.js`),覆盖字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装、本地校验分支、非 http(s) 链接不可点击。
+- `ui-asks-run.js`:57 项浏览器内断言(真实 `public/app.js`),覆盖字段渲染、默认值预填、`when` 显隐、单选+自填互斥、答案组装、本地校验分支、非 http(s) 链接不可点击;其中 10 项专门钉住 `question` 工具的真实字段形状(`type:"string" + options + custom:true` 必须画成**可点的选项行**、答案必须是字符串而不是数组、自填与选项互斥)。
 - `ui-controls-run.js`:83 项浏览器内断言,覆盖 agent/model 选择器的过滤与分组、切换请求体、变体显隐、中断/投递控件的显隐、运行状态文案与列表标记、待发送队列渲染与操作请求、发送时的 `delivery` 选择、事件到运行状态的映射。
 - `ui-capabilities-run.js`:71 项浏览器内断言,覆盖归档判定与列表过滤、归档请求体的读-改-写、新建/导入的本地校验与请求体形状、`409` 重试、导出 URL 与下载内容、`tuiCommand` 的引号转义。
 - `ui-stream-run.js`:123 项浏览器内断言,覆盖增量累加、`ordinal` 按类型计、`*.ended` 权威覆盖、结构指纹不含文本长度(所以 delta 不触发整条重建)、节点 identity 保持(局部重绘)、多文本块序号映射、光标位置与思考块展开箭头、服务端半成品不覆盖本地文本、权威版本到达后回收缓冲且不重复渲染、非当前会话的缓冲不进入视图、陈旧缓冲回收,以及防抖对账的分流规则(有缓冲的 delta 不排重取、无缓冲的 delta 退回重取)。其中 6 项是工具卡片的回归锁:`tool.progress` 带来 `metadata.files` 时状态没变也要把 diff 重绘上屏,metadata 没变则不重建 DOM。
@@ -568,6 +569,14 @@ journalctl --user -u opencode-session-manager.service -f
 - SSE 事件行形如 `data: {"id":"evt_...","type":"...","data":{...}}`,并夹带 `: heartbeat` 心跳行。
 - 表单列表 `GET /api/session/{id}/form` 返回 `Form.Info`(**不含 `state`**);要判断 pending 需 `GET .../form/{fid}`(返回 `Form.Detail`,含 `state.status`)。故前端不能用 `state` 过滤列表项。
 - 表单应答/取消、权限应答成功均返回 **204 空体**;对已处理或不存在的对象返回 **404**;答案非法返回 **400**(如提交 `when` 未激活字段、`external` 不为 `true`、缺必填)。
+- **`question` 工具造字段的形状**(反编译 `GD()`):单选问题 → `{key:"q0", title, description, type:"string", options:[{value,label,description}], custom:true}`;
+  多选问题 → `type:"multiselect"` 同款;两者**都不带 `required`**。TUI 的分派是 `type==='string' && options` → 选项列表,
+  所以面板也按「**有 `options` 就是可点的单选行**」渲染(`custom:true` 时另给「其它(自填)」,与选项互斥)。
+  曾经这里画的是 `<input list=...> + <datalist>`:桌面上要点一下才出下拉,手机上等于**没有选项可点** —— 这就是「问问题时不弹选项」的根因。
+- 带 `options` 的 `string` 字段,答案类型是**字符串**(不是数组,数组是 `multiselect` 的)。服务端对 `custom:true` 接受任意字符串,
+  `custom:false` 只接受选项值,否则 `400 FormInvalidAnswerError: Invalid option for form field: <key>`(两条都实测过)。
+- **代理必须吞掉 `Expect: 100-continue`**:curl 对 >1024 字节的 POST 会自动加这个头;原样转发给上游后两边都等对方的 `100 Continue`,
+  请求永远不返回(实测 `HTTP 100` 之后 10s 零字节)。代理本来就把请求体读完再带 `content-length` 转发,不需要这个握手。
 - `GET /api/session/active` 返回 `{"data":{"ses_...":{"type":"running"}}}`(只表示该进程正在执行的会话,不含 `retry`)。
 - `POST /api/session/{id}/agent`、`POST /api/session/{id}/model` 都是 **204 空体**,且**不校验** agent/model 是否真实存在;唯一的结构校验是 `model` 必带 `providerID`(**400**)。
 - 发送消息时若不显式给 `delivery`,服务端会补成 `steer`;只有会话正在运行时 `queue` 才会真正滞留在 inbox 里(`turn` 结束后自动投递)。空闲会话即使传 `queue` 也会立即执行。
