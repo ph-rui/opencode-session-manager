@@ -53,6 +53,7 @@
   <dialog id="dlgPick" class="dlg"><div class="dlgform"><h3 id="pickTitle">选择</h3>
     <input id="pickFilter" class="pickfilter" type="text" autocomplete="off" hidden>
     <div id="pickList" class="picklist" role="listbox"></div>
+    <div class="dlgfoot" id="pickFoot"></div>
     <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div>
   </div></dialog>
   <pre id="results"></pre>
@@ -199,6 +200,50 @@
       T('renderPick:无匹配时给空态而不是空框', q('#pickList .pick-empty') !== null);
       T('renderPick:无匹配时 pickShown 为空', store.pickShown.length === 0);
       T('renderPick:无匹配时不崩高亮', store.pickAt <= 0, store.pickAt);
+
+      /* 当前值那枚 ●(照 TUI 的 DialogSelectRow);空着时那格也留着,条目名才对得齐 */
+      openPick({ title: 'c', current: 'b', items: [{ key: 'a', label: '甲' }, { key: 'b', label: '乙' }, { key: 'c', label: '丙' }] });
+      T('renderPick:current 那一条带 .current 且印 ●',
+        qa('#pickList .pick-item.current').length === 1 && q('#pickList .pick-item.current .pi-cur').textContent === '●',
+        qa('#pickList .pick-item.current').length);
+      T('renderPick:每条都占一枚 ● 的格子,但只有 current 印出来',
+        qa('#pickList .pi-cur').length === 3 &&
+        qa('#pickList .pi-cur').filter(function (e) { return e.textContent === '●'; }).length === 1);
+      T('renderPick:高亮(active)挪开之后 ● 还在(那是「当前」不是「高亮」)',
+        (function () {
+          store.pickAt = 2; renderPick();
+          return !!q('#pickList .pick-item.current') && q('#pickList .pick-item.active .pi-cur').textContent === '';
+        })());
+      T('renderPick:没给 current 就不印 ●(窄屏那个动作菜单)',
+        (function () {
+          openPick({ title: 'x', items: [{ key: 'a', label: '甲' }] });
+          return qa('#pickList .pi-cur').length === 1 && q('#pickList .pi-cur').textContent === '';
+        })());
+
+      /* 空态分两种(照 TUI 的 No items available / No results found) */
+      openPick({ title: 'e1', items: [] });
+      T('renderPick:压根没有条目写「没有可选项」', q('#pickList .pick-empty').textContent === '没有可选项',
+        q('#pickList .pick-empty').textContent);
+      openPick({ title: 'e2', filter: true, items: [{ key: 'a', label: '甲' }] });
+      store.pickFilter = 'zzz'; renderPick();
+      T('renderPick:过滤之后没匹配写「没有匹配项」', q('#pickList .pick-empty').textContent === '没有匹配项',
+        q('#pickList .pick-empty').textContent);
+
+      /* 底部那行动作 + 键位(照 TUI 的 DialogFooter;两档文案见 paintPickFoot) */
+      openPick({ title: 'f1', filter: true, items: [{ key: 'a', label: '甲' }] });
+      T('paintPickFoot:过滤开着时两档都先提「打字过滤」',
+        q('#pickFoot .hFull').textContent.indexOf('打字过滤') === 0 &&
+        q('#pickFoot .hNarrow').textContent.indexOf('打字过滤') === 0,
+        q('#pickFoot .hFull').textContent);
+      T('paintPickFoot:桌面那档写键位、手机那档写点条目的说法',
+        q('#pickFoot .hFull').textContent.indexOf('Enter 选中') > 0 &&
+        q('#pickFoot .hNarrow').textContent.indexOf('点条目选中') > 0,
+        q('#pickFoot .hNarrow').textContent);
+      openPick({ title: 'f2', filter: false, items: [{ key: 'a', label: '甲' }] });
+      T('paintPickFoot:没有过滤框就不提打字',
+        q('#pickFoot .hFull').textContent.indexOf('打字过滤') < 0 &&
+        q('#pickFoot .hFull').textContent.indexOf('Esc 关闭') > 0,
+        q('#pickFoot .hFull').textContent);
 
       /* ================= 过滤:pickVisible ================= */
       store.pickItems = [

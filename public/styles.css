@@ -1070,6 +1070,8 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .pick-item + .pick-item { border-top: 1px solid #f1f1f1; }
 .pick-item.active { background: #eef6ff; }
 .pick-item.disabled { opacity: 0.5; cursor: default; }
+/* 「当前值」那枚 ●(照 TUI 的 DialogSelectRow):空着也占一格,条目名才对得齐 */
+.pick-item .pi-cur { flex: none; width: 1em; color: var(--accent); }
 .pick-item .pi-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-item .pi-sub { flex: none; color: var(--muted); }
 .pick-item.active .pi-label { color: var(--accent); }
@@ -1081,6 +1083,12 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   background: var(--panel);
 }
 .pick-empty { padding: 8px 10px; color: var(--muted); }
+/* 对话框底部那行动作 + 键位(照 TUI 的 DialogFooter)。键位那截等宽、稍暗;手机那档由
+   html.narrow 挑(与 #cmdHint 同一套路子,那份规则是 #cmdHint 专属的,这里单写)。 */
+.dlgfoot { margin-top: 2px; color: var(--muted); font-size: 0.86em; }
+.dlgfoot .hNarrow { display: none; }
+html.narrow .dlgfoot .hFull { display: none; }
+html.narrow .dlgfoot .hNarrow { display: inline; }
 
 /* 列表中的运行中标记 */
 .run-badge { color: var(--accent); font-size: 11px; white-space: nowrap; }

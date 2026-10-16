@@ -1573,6 +1573,31 @@ else
   echo "FAIL: 这些行的样式缺"; fail=$((fail + 1))
 fi
 
+# ---- R10 组:选择框的细节(照 TUI 的 DialogSelect,§8.33)----
+if has "$APPJS" 'store.pickCurrent = opts.current;' && has "$APPJS" "'<span class=\"pi-cur\">'" &&
+   has "$APPJS" "(cur ? ' current' : '')"; then
+  echo "PASS: 「当前值」那一条钉一枚 ●(照 DialogSelectRow;高亮挪开也认得出)"; pass=$((pass + 1))
+else
+  echo "FAIL: 选择框没有「当前值」那枚 ●"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function paintPickFoot(opts)' && has "$APPJS" "'↑↓ 选择 · Enter 选中 · Esc 关闭'" &&
+   has "$APPJS" "'点条目选中 · 关闭按钮收起'"; then
+  echo "PASS: 选择框底部有动作 + 键位那行(桌面/手机两档,照 DialogFooter)"; pass=$((pass + 1))
+else
+  echo "FAIL: 选择框底部那行缺"; fail=$((fail + 1))
+fi
+if has "$APPJS" "'没有可选项'" && has "$APPJS" "'没有匹配项'"; then
+  echo "PASS: 空态分「没有可选项」与「没有匹配项」两种(照 DialogSelect)"; pass=$((pass + 1))
+else
+  echo "FAIL: 空态没分两种"; fail=$((fail + 1))
+fi
+if has "$CSS" '.pick-item .pi-cur { flex: none;' && has "$CSS" '.dlgfoot {' &&
+   has "$CSS" 'html.narrow .dlgfoot .hFull { display: none; }'; then
+  echo "PASS: ● 与底部那行的样式在(窄屏换手机那档文案)"; pass=$((pass + 1))
+else
+  echo "FAIL: ● 或底部那行的样式缺"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

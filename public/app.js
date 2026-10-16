@@ -67,6 +67,7 @@ const store = {
   pickItems: [], // 选择框对话框的全部条目
   pickShown: [], // 当前过滤后真正显示的条目(↑/↓ 在它里面走)
   pickAt: -1, // 选择框当前高亮项(下标指向 pickShown)
+  pickCurrent: undefined, // 「当前值」那一条的 key(照 TUI 的 DialogSelect 印一枚 ●)
   pickOnPick: null, // 选中回调
 };
 
@@ -4590,16 +4591,25 @@ function renderPick() {
   let html = '';
   let lastGroup = null;
   if (!store.pickShown.length) {
-    html = '<div class="pick-empty">没有匹配项</div>';
+    // 空态照 TUI 的 DialogSelect 分两种:压根没有条目 vs 过滤之后没匹配
+    html =
+      '<div class="pick-empty">' +
+      ((store.pickFilter || '').trim() ? '没有匹配项' : '没有可选项') +
+      '</div>';
   }
   store.pickShown.forEach((it, i) => {
     if (it.group && it.group !== lastGroup) {
       html += '<div class="pick-group">' + esc(it.group) + '</div>';
       lastGroup = it.group;
     }
+    // 「当前值」那一条照 TUI 的 DialogSelectRow 在最前面钉一枚 ●(挪开高亮之后也认得出);
+    // 空着的时候那格也留着,条目名才对得齐。
+    const cur = store.pickCurrent !== undefined && it.key === store.pickCurrent;
     html +=
-      '<div class="pick-item' + (i === store.pickAt ? ' active' : '') + (it.disabled ? ' disabled' : '') +
+      '<div class="pick-item' + (i === store.pickAt ? ' active' : '') + (cur ? ' current' : '') +
+      (it.disabled ? ' disabled' : '') +
       '" role="option" data-i="' + i + '">' +
+      '<span class="pi-cur">' + (cur ? '●' : '') + '</span>' +
       '<span class="pi-label">' + esc(it.label || '') + '</span>' +
       (it.sub ? '<span class="pi-sub">' + esc(it.sub) + '</span>' : '') +
       '</div>';
@@ -4609,6 +4619,17 @@ function renderPick() {
   if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
 }
 
+/* 对话框底部那行提示(照 TUI 的 DialogFooter:动作 + 键位)。桌面写键位,手机没有那些键,
+ * 换成点哪儿的说法 —— 面板里 #cmdHint 早就是这么分两档的。 */
+function paintPickFoot(opts) {
+  const foot = $('#pickFoot');
+  if (!foot) return;
+  const filter = opts && opts.filter ? '打字过滤 · ' : '';
+  foot.innerHTML =
+    '<span class="hFull">' + esc(filter + '↑↓ 选择 · Enter 选中 · Esc 关闭') + '</span>' +
+    '<span class="hNarrow">' + esc(filter + '点条目选中 · 关闭按钮收起') + '</span>';
+}
+
 // 打开选择框:items = [{ key, label, sub?, group?, disabled? }];current 的那项默认高亮。
 function openPick(opts) {
   const dlg = $('#dlgPick');
@@ -4616,6 +4637,7 @@ function openPick(opts) {
   store.pickItems = opts.items || [];
   store.pickOnPick = opts.onPick || null;
   store.pickFilter = '';
+  store.pickCurrent = opts.current;
   const cur = (opts.items || []).findIndex((it) => it.key === opts.current);
   store.pickAt = cur >= 0 ? cur : 0;
   const t = $('#pickTitle');
@@ -4627,6 +4649,7 @@ function openPick(opts) {
     f.placeholder = opts.filterHint || '过滤…';
   }
   renderPick();
+  paintPickFoot(opts);
   openDlg(dlg);
   // 有过滤框就先把光标放进去(直接打字即过滤);没有就把焦点放列表上,↑/↓ 立刻可用
   if (f && opts.filter) f.focus();
