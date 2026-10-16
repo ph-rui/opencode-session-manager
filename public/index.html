@@ -148,7 +148,10 @@
            细边时它得跟着收(§8.40:用户要「收起后只留进度条」,见 styles.css 的
            #composer.collapsed ~ #promptFooter)。用量两档文案都印在 DOM 里,由 CSS 按
            html.narrow 挑(窄屏那档就是 TUI 的 compact:78% ctx);命令提示也分两档(手机没有
-           Ctrl 键,换成 /),智能体提示是键盘提示,手机直接收掉(工具栏上就有下拉)。 -->
+           Ctrl 键,换成 /),智能体提示是键盘提示,手机直接收掉(工具栏上就有下拉)。
+           手机上【整条都不显示】(§8.42:用户「手机端,对话框下面还有:Build...等内容显示」——
+           展开底板时它照样挂着那 30px),所以下面那两档文案其实只在桌面用得上;DOM 一个没删,
+           桌面照旧。 -->
       <div id="promptFooter" hidden>
         <span id="chatAgent" hidden></span>
         <span id="chatDir" title="工程目录"></span>

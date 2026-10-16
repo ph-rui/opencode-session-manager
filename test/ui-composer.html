@@ -440,28 +440,31 @@
       setState(false, false);
       T('I8 桌面展开:一切照旧', vis(q('#input')) && vis(q('#agentSel')) && !collapsed());
 
-      /* ===================== K. 提示栏跟着底板一起收(§8.40) ===================== */
-      /* 用户上手后的话:「手机端对话框下面的信息还是显示,需要关闭,除了进度条」。
-         #promptFooter 挂在 #composer 【外面】(照 TUI 是输入框下面独立的一行),光靠
-         #composer 里那份 display:none 名单收不到它,所以由 CSS 的
+      /* ===================== K. 手机上提示栏整条不显示;桌面收起时才收(§8.40 / §8.42) ===================== */
+      /* 用户上手后两句话:§8.40「手机端对话框下面的信息还是显示,需要关闭,除了进度条」;
+         §8.42「手机端,对话框下面还有:Build...等内容显示」(展开底板时还是同一行)。
+         #promptFooter 挂在 #composer 【外面】(照 TUI 是输入框下面独立的一行),所以:
+         窄屏 → 整条不显示(html.narrow #promptFooter);桌面 → 收起时由
          #composer.collapsed ~ #promptFooter 收。 */
       var footV = function () { return vis(q('#promptFooter')); };
       setState(true, false);
-      T('K1 手机展开:提示栏在(它是 #composer 外面那一行)', footV());
-      T('K2 手机展开:工程路径那格也有字', q('#chatDir').textContent.length > 0, q('#chatDir').textContent);
+      T('K1 手机展开:提示栏不显示(§8.42:窄屏整条没有它)', !footV());
+      T('K2 手机展开:那几格只是被 CSS 藏,DOM 一个没少(路径那格照旧有字)',
+        !!q('#promptFooter') && !!q('#chatDir') && !!q('#ctxInfo') && !!q('#cmdHint') &&
+        q('#chatDir').textContent.length > 0, q('#chatDir').textContent);
+      T('K3 手机展开:智能体·模型 / 工程目录 / 用量 / 「/ 命令」四样一个都没露',
+        !vis(q('#chatAgent')) && !vis(q('#chatDir')) && !vis(q('#ctxInfo')) && !vis(q('#cmdHint')));
       setState(true, true);
-      T('K3 手机收起:提示栏跟着藏了', !footV());
-      T('K4 收起:它只是被 CSS 藏起来,DOM 一个没少(展开还能回来)',
-        !!q('#promptFooter') && !!q('#chatDir') && !!q('#ctxInfo') && !!q('#cmdHint'));
+      T('K4 手机收起:也不显示(§8.40 那条兄弟选择器之外,窄屏本来就没有它)', !footV());
       q('#progress').hidden = false; q('#interrupt').hidden = false;
       T('K5 收起:细边上该留的两样(进度条 / ■ 中断)照旧露着', vis(q('#progress')) && vis(q('#interrupt')));
       q('#progress').hidden = true; q('#interrupt').hidden = true;
       setState(true, false);
-      T('K6 再展开:提示栏回来了', footV());
+      T('K6 手机再展开一遍:还是不显示(不是「切一次态就回来」那种)', !footV());
       setState(false, true);
-      T('K7 桌面收起:一样藏(细边就是细边,不分桌面/手机)', !footV());
+      T('K7 桌面收起:藏(§8.40 的兄弟选择器)', !footV());
       setState(false, false);
-      T('K8 桌面展开:照旧露着', footV());
+      T('K8 桌面展开:照旧露着(桌面一字未动)', footV());
 
       /* ===================== J. 手柄缺席时的自保 ===================== */
       /* 收起之后唯一的出口就是手柄。所以手柄不在 DOM 里时,整个功能必须闭嘴 ——

@@ -1404,7 +1404,12 @@ html.narrow #older { display: none; }
 html.narrow #ctoolbar { gap: 8px; padding: 7px 10px 0; }
 html.narrow #ctoolbar .ctl select { max-width: none; }
 html.narrow .cinput { padding: 8px 10px 10px; }
-html.narrow #promptFooter { padding: 4px 10px 6px; }
+/* §8.42(用户「手机端,对话框下面还有:Build...等内容显示」):窄屏【整条】不显示 —— 展开底板时
+   它照样挂着 30px(实测手机 393×894 展开态:那一行 30px @864-894),而这几格在手机上都不必要:
+   智能体·模型在底板工具栏里就有、命令面板敲一个 `/` 就到、工程目录在标题下面那行里也有。
+   桌面一字未动;收起成细边时那条(#composer.collapsed ~ #promptFooter,§8.40)照旧。
+   于是窄屏那一版的 padding 与上面那几条 `html.narrow #promptFooter.armed …` 从此够不着了。 */
+html.narrow #promptFooter { display: none; }
 html.narrow #mentions,
 html.narrow #cmds { left: 10px; right: 10px; }
 

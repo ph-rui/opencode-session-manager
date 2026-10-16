@@ -62,6 +62,15 @@
         <div id="cmds" hidden></div>
         <input type="file" id="filePick" multiple hidden>
       </div>
+      <div id="promptFooter" hidden>
+        <span id="chatAgent" hidden></span>
+        <span id="chatDir" title="工程目录"></span>
+        <span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span>
+        <button type="button" id="agentHint" title="切换到下一个智能体">tab agents</button>
+        <button type="button" id="cmdHint" title="打开命令面板">
+          <span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span>
+        </button>
+      </div>
     </section>
   </main>
   <div id="toast" hidden></div>
@@ -335,6 +344,14 @@
       q('#older').hidden = false;
       T('C8d 窄屏:「导出 / 在TUI打开 / 归档」那一行收起来了', !vis(q('#chatOps')));
       T('C8e 窄屏:「加载更旧消息」也跟着收(整行让出 40px)', !vis(q('#older')));
+      /* §8.42(用户「手机端,对话框下面还有:Build...等内容显示」):窄屏连输入框下面那一行
+         也整条不显示 —— 展开底板时它照样挂着 30px。这里按「有会话、有内容」摆出来再断。 */
+      q('#promptFooter').hidden = false;
+      q('#chatAgent').hidden = false;
+      q('#ctxInfo').hidden = false;
+      T('C8f 窄屏:输入框下面那一行整条不显示(展开底板时也没了)', !vis(q('#promptFooter')));
+      T('C8g 窄屏:它里面那几格一个都没露(智能体·模型 / 路径 / 用量)',
+        !vis(q('#chatAgent')) && !vis(q('#chatDir')) && !vis(q('#ctxInfo')) && !vis(q('#cmdHint')));
 
       /* 对话框:基础样式 min-width:420px,在 393px 的屏上必然溢出 */
       openPick({ title: '宽度检查', items: [{ key: 'a', label: '甲' }] });
@@ -364,6 +381,14 @@
         vis(q('#chatOps')) && vis(q('#older')));
       T('D3b 桌面:#older 仍是原来的高度(窄屏那条 min-height 只管窄屏)',
         box(q('#older')).height > 0, box(q('#older')).height);
+      /* §8.42 的反面:输入框下面那一行只在窄屏收,桌面照旧整条都在 */
+      q('#promptFooter').hidden = false;
+      q('#chatAgent').hidden = false;
+      q('#ctxInfo').hidden = false;
+      q('#chatDir').textContent = '/tmp/工程';
+      T('D3c 桌面:输入框下面那一行照旧(智能体·模型 / 路径 / 用量 / 命令提示)',
+        vis(q('#promptFooter')) && vis(q('#chatAgent')) && vis(q('#chatDir')) &&
+        vis(q('#ctxInfo')) && vis(q('#cmdHint')));
       T('D4 桌面:原来那六个按钮回来了', vis(rowA().querySelector('.actions button[data-act="open"]')) &&
         vis(rowA().querySelector('.actions button[data-act="del"]')));
       T('D5 桌面:表头回来了', vis(q('#list thead')));

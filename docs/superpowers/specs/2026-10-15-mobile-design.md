@@ -963,7 +963,7 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 
 | 点 | 决定 | 理由 |
 |---|---|---|
-| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改，§8.20 补齐顺序/费用/`:分支`/`~/`，§8.21 再补智能体·模型/`tab agents`/子会话·shell）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，展开底板时比头部更贴「看一眼」。**（§8.40 改：收起成细边时这一行跟着收，只留进度条）** |
+| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改，§8.20 补齐顺序/费用/`:分支`/`~/`，§8.21 再补智能体·模型/`tab agents`/子会话·shell）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，展开底板时比头部更贴「看一眼」。**（§8.40 改：收起成细边时这一行跟着收，只留进度条）** **（§8.42 改：手机上整条都不显示了 —— 展开底板时也收，那一行在手机上从此只在桌面存在）** |
 | 算法 | **每次现算**，不另存 | 照 TUI 的 `Us`/`XN`/`d4` 原样搬（同一份口径也喂给渲染：`currentMessages()`）|
 | 两档文案 | 全量 / 窄屏两份都写进 DOM，CSS 按 `html.narrow` 切 | 横竖屏来回转不用重画，也不用 JS 判宽度（照 TUI 的 `compact` / `full`）|
 | 模型表 | 用**该 location 的模型表**（`store.models.get(dir)`），不用全局索引 | 某个模型可能在某个目录被 `enabled:false` 关掉；TUI 用的就是 `location.model.list`。查不到就退化成只印 token 数 |
@@ -1115,7 +1115,7 @@ ctrl+p commands」。
 | 点 | 决定 |
 |---|---|
 | 位置 | 新 `#promptFooter`，挂在 `#chatpane` 末尾、**`#composer` 外面**（不是里面）|
-| 为什么在外面 | 手机默认把底板收起成一条细边（`ocs.composerHiddenNarrow`），放里面会被一起收掉。**（§8.40 改：用户后来要「收起后只留进度条」，于是收起时用 `#composer.collapsed ~ #promptFooter` 把它一起收；「在外面」这个结构没动，只是不再当「常驻行」用）** |
+| 为什么在外面 | 手机默认把底板收起成一条细边（`ocs.composerHiddenNarrow`），放里面会被一起收掉。**（§8.40 改：用户后来要「收起后只留进度条」，于是收起时用 `#composer.collapsed ~ #promptFooter` 把它一起收；「在外面」这个结构没动，只是不再当「常驻行」用。§8.42 再改：手机上干脆整条不显示了，「在外面」就只剩桌面用得上）** |
 | 内容 | 左 `#chatDir`（工程路径，太长由 CSS `text-overflow: ellipsis` 截断，`title` 给全路径）；中 `#ctxInfo`（原样搬过来）；右 `#cmdHint` |
 | 两档提示 | 桌面 `ctrl+p commands`（TUI 原文），手机 `/ 命令`（手机没 Ctrl 键，面板本来就是敲 `/` 开面板）—— 两档都印 DOM，CSS 按 `html.narrow` 切，跟用量一个套路 |
 | 点击 | `#cmdHint` 是 `button`，点了走 `openCommands({ force: true })`（与 `Ctrl+P` 同一条路）|
@@ -1129,7 +1129,8 @@ ctrl+p commands」。
   `ctxCompact = 76% ctx`（`ctxHidden=false`，收起状态也露着）、`.hNarrow` `display:inline`、
   `.hFull` `display:none`（手机档生效）。截图 `footer-shot-393x894.png`。
   **（§8.40 改：收起时这一行整条藏起来了 —— `#composer` 底 = 894、消息区 +30px；
-  这些数只在「展开」态成立）**
+  这些数只在「展开」态成立。§8.42 再改：手机上「展开」态也不露了,窄屏整条 `display:none` ——
+  下面 1133 行那条「仍是输入框下面那一行」现在只在桌面成立）**
 - 393×894（底板**展开**）：`#composer` 679–864、`#promptFooter` 864–894，仍是输入框下面那一行。
 - 1366×900（桌面，底板默认展开）：`#promptFooter` 869–900 在 `#composer` 869 之下；
   `ctxFull = 151.8K (76%)`、`.hFull` `display:inline`（`ctrl+p commands`）。截图 `footer-shot-1366x900.png`。
@@ -1197,7 +1198,7 @@ ctrl+p commands」。
 
 | 点 | 决定 |
 |---|---|
-| 智能体·模型 | 新 `#chatAgent`，排在 `#chatDir` 前面（`#promptFooter` 最左），照 TUI 的顺序。取值直接用工具栏两个 `<select>` 的当前项文案（`#agentSel` / `#modelSel`，变体接 `#variantSel`，`default` 不印）。工具栏在 `#composer` 里面 —— 手机收起底板时它跟着没了，展开态下这一格是还看得见「现在是哪个智能体/模型」的地方，所以只要选中会话就常驻（窄屏 `max-width: 32%`，别把工程路径挤没）。**（§8.40 改：收起底板时连这一格一起收，细边上只留进度条；「收起时也能看一眼智能体/模型」这条不再成立）** |
+| 智能体·模型 | 新 `#chatAgent`，排在 `#chatDir` 前面（`#promptFooter` 最左），照 TUI 的顺序。取值直接用工具栏两个 `<select>` 的当前项文案（`#agentSel` / `#modelSel`，变体接 `#variantSel`，`default` 不印）。工具栏在 `#composer` 里面 —— 手机收起底板时它跟着没了，展开态下这一格是还看得见「现在是哪个智能体/模型」的地方，所以只要选中会话就常驻（窄屏 `max-width: 32%`，别把工程路径挤没）。**（§8.40 改：收起底板时连这一格一起收，细边上只留进度条；「收起时也能看一眼智能体/模型」这条不再成立。§8.42 再改：手机上这一格连同整条都不显示了 —— 智能体·模型在**展开态的工具栏**里就有（`#agentSel` / `#modelSel`），所以「看一眼现在是哪个」这条在手机上改由工具栏交代）** |
 | `tab agents` | 提示文案照 TUI 改成 `tab agents`；**无 Shift 的 `Tab`** 也接上 `cycleAgent()`（在输入框的键位链里排在命令面板/@ 补全/输入历史**之后**，所以那几处开着时先归它们）。Shift+Tab 照旧保留，不破坏既有键位与测试 |
 | 子会话 / shell | 新 `store.subs`（子→父；来自列表接口里带 `parentID` 的那批 + SSE 的 `session.created/updated/deleted`）与 `store.shells`（`shell.created` 记、`shell.exited`/`shell.deleted` 划）。`subagentCount()` 只数 `isRunning()` 的（照 TUI 只数 running），`shellCount()` 数这个会话名下的；两者 ` · ` 连起来接在用量**前面**。单独放一份、不塞进 `store.sessions`，免得顶栏的工程筛选漏进别的工程的子会话 |
 | `(new worktree)` | **不做**：那行不是会话提示栏的常驻元素，是「新建 worktree」对话框里的临时状态（`Re.pendingNew()` / `Re.progress()` 那两段），面板没有这个流程 |
@@ -1371,7 +1372,7 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 | 点 | 决定 |
 |---|---|
 | 提示栏第一格 | `paintFooterAgent()` 拆成 `.agName`（智能体）/ `.agModel`（` · 模型 · 变体`）两格；**整条 `textContent` 仍是「智能体 · 模型 · 变体」**，变更判据照旧 —— 顺带把「要不要重画」的判据也一起留着 |
-| 窄屏 | `html.narrow #chatAgent .agModel { display: none }`，宽度上限 32% → 40%（模型收走后瓶颈不在它身上）。两格都还在 DOM 里，横屏转回来就露出来；模型名照旧留在整条的 `title` 里 |
+| 窄屏 | `html.narrow #chatAgent .agModel { display: none }`，宽度上限 32% → 40%（模型收走后瓶颈不在它身上）。两格都还在 DOM 里，横屏转回来就露出来；模型名照旧留在整条的 `title` 里 **（§8.42 改：手机上整条都不显示了，所以这几条窄屏规则从此够不着，留着当记录）** |
 | 「加载更旧消息」 | `#older` 是块级盒，跟着 `#chatOps`（`display: flex`）就只能落到下一行。`#chatOps` 改 `inline-flex`、`#older` 是 `inline-block` —— 两个行内盒自然共一行；一行放不下时 `#older` 自己换行（还是原来那样）|
 | 尺寸 | `#older` 的 padding / 字号对齐 `.chip`；窄屏 `html.narrow #older { min-height: 40px }` 跟旁边几个 chip 一样高 **（§8.41 改：手机上整条不显示了，那条 `min-height` 随之删掉；桌面这一行的版式没动）** |
 | 顺手修的 | `clearSelection()` 原来只清 `store.messages`，没管 `#older` 与 `store.msgOlderCursor`：清掉选中后那一格会一直露在头部（**探针实测**：`#chatOps.hidden true` 而 `#older.hidden false`），点了也没用（`loadMessages` 没选中直接返回）；游标还会把上一个会话的页码带进下一个会话的第一页回来之前的空档。现在两样一起清 |
@@ -2030,6 +2031,9 @@ F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interr
 | DOM | 一个节点没删,只是 CSS 藏;展开就回来(与 `.cinput`、三个选择器同一套做法) |
 | 桌面 | 一样收:细边就是细边,不按 `html.narrow` 分叉(窄屏判定源仍然只有一处) |
 
+**（§8.42 接着改:手机上连【展开】态也不露了 —— 一条 `html.narrow #promptFooter { display: none }`,
+于是这条兄弟选择器在窄屏其实用不上了,它管的是桌面收起时那一路)**
+
 **验证**(真 Chromium 393×894,`/tmp/ocsm-probe/pw/thinedge.js`):
 
 ```
@@ -2116,6 +2120,50 @@ F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interr
 「不把人顶走」—— 夹具里补一条**更旧的**长消息,所以那一页拉回来总高真的会长,7c1 断眼前那条
 还是那条、还在同一个 `off`,7c2 断 `scrollTop` 跟着长出来的那一截走)。其余套件全 0 失败。
 README 计数与「会话操作那一行」那一段同步。
+
+---
+
+### 8.42 手机上输入框下面那一行整条不显示
+
+**起因**:用户——「可以了,但是手机端,对话框下面还有:Build...等内容显示」。§8.40 收的是
+【收起】成细边时的那一行;这一条说的是【展开】底板时同一行照旧挂着。真机量下来:
+
+```
+真 Chromium 393×894,底板展开:
+  #composer     227 @638-864   ← 工具栏 121 + 输入行
+  #promptFooter  30 @864-894   ← 「Build · DeepSeek V4 Flash /media/…:main 143.6K (72%)
+                                    tab agents  ctrl+p commands」
+```
+
+**做法**:一条 CSS(窄屏判定源仍然只有 `html.narrow` 一处):
+
+```css
+html.narrow #promptFooter { display: none; }
+```
+
+| 点 | 决定 |
+|---|---|
+| 收谁 | 整条:智能体·模型、工程目录、上下文用量、`tab agents`、`/ 命令` |
+| 为什么能整条收 | 智能体·模型在底板工具栏里就有(`#agentSel` / `#modelSel`,展开时就在眼前);工程目录在标题下面那行(`更新 1 天前 · 8e9e6e25`)里也交代了;`/ 命令` 只是个提示(输入框 placeholder 里也写着「/ 命令」,敲 `/` 就开面板) |
+| 桌面 | 一字未动:展开照旧整条在;收起时仍由 §8.40 那条 `#composer.collapsed ~ #promptFooter` 收 |
+| DOM | 一个节点没删,只是窄屏 `display:none`(与前几条同一套做法)。窄屏那一版的 `padding` 与 `html.narrow #promptFooter.armed …` 那几条从此够不着,留着当记录 |
+| 代价 | 手机上再也看不到**上下文用量**了(它只在那一行里)。要留就把它挪回标题下面那行(§8.15 最早就在那儿),等用户发话 |
+
+**验证**(真 Chromium 393×894,`/tmp/ocsm-probe/pw/pfooter.js`,截图
+`/tmp/ocsm-probe/perf/phone-expanded-footer.png`):
+
+```
+展开态改前:#messages 445 @192-638、#composer 227 @638-864、#promptFooter 30 @864-894
+展开态改后:#messages 475 @192-667(+30px)、#composer 227 @667-894、#promptFooter=none
+收起态:§8.40 那 49px 细边一字未变
+```
+
+**回归**:`smoke.sh` 292 → **293**(Q 组加一条:`html.narrow #promptFooter { display: none; }`
+必须在;那一段的旧注释一并改写);`ui-composer` K 组那 8 项整个翻过来(原来断「手机展开时提示栏
+在且路径那格有字」,现在断「窄屏两态都不显示、四格一个都没露、DOM 一个没少;桌面收起藏、展开在」,
+项数不变,仍 99);`ui-mobile` 168 → **174**(新 C8f/C8g 窄屏整条不显示、D3c 桌面照旧 —— 两个
+视口各跑一遍;夹具里补上 `#promptFooter` 那一段)。其余套件全 0 失败。README 计数与提示栏那几段
+同步;§8.19 / §8.21 / §8.25 / §8.40 各加一句指过来。
 
 ---
 

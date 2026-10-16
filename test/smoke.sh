@@ -1202,7 +1202,8 @@ fi
 # (源码:prompt.footer.status 里是 prompt.footer.location,右边是 usage 与 command palette 提示)。
 # 面板照做:#promptFooter 挂在 #chatpane 末尾(#composer 【外面】)。§8.40 改掉了这里一条旧
 # 判断:以前是「手机收起底板成细边,这一行照样露着(看一眼用量)」,用户上手后明确要
-# 「收起后只留进度条」,于是收起时它跟着藏(#composer.collapsed ~ #promptFooter)。两条硬约束不变:
+# 「收起后只留进度条」,于是收起时它跟着藏(#composer.collapsed ~ #promptFooter)。
+# §8.42 再进一步:手机上【整条都不显示】—— 展开底板时它照样挂着那 30px。两条硬约束不变:
 #   ① 只认最后一次【已完成】压缩之后的助手消息(压缩把上下文清空了,之前的数不算);
 #   ② 全量 / 窄屏两档文案都印在 DOM 里,由 CSS 按 html.narrow 挑,不用 JS 判宽度。
 COMPOSER_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="composer"' | head -1 | cut -d: -f1)
@@ -1219,6 +1220,13 @@ if has "$CSS" '#composer.collapsed ~ #promptFooter { display: none; }'; then
   echo "PASS: 收起成细边时提示栏跟着藏(细边上只剩进度条 / ■ 中断,§8.40)"; pass=$((pass + 1))
 else
   echo "FAIL: 提示栏没跟着底板一起收(手机收起后还挂着那 30px 信息行,§8.40)"; fail=$((fail + 1))
+fi
+# §8.42:手机上整条不显示 —— 用户「手机端,对话框下面还有:Build...等内容显示」,指的是
+# 【展开】底板时同一行照样挂着那 30px(实测 393×894 展开态:30px @864-894)。
+if has "$CSS" 'html.narrow #promptFooter { display: none; }'; then
+  echo "PASS: 手机上输入框下面那一行整条不显示(桌面照旧、收起那条 §8.40 也在,§8.42)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏没收掉 #promptFooter(展开底板时还挂着那 30px,§8.42)"; fail=$((fail + 1))
 fi
 if has "$HOME_HTML" 'id="chatDir"' && has "$HOME_HTML" 'id="cmdHint"' &&
    has "$HOME_HTML" 'class="hFull">ctrl+p commands' && has "$HOME_HTML" 'class="hNarrow">/ 命令'; then
