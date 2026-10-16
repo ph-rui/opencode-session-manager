@@ -1141,13 +1141,28 @@ if has "$HOME_HTML" 'id="chatDir"' && has "$HOME_HTML" 'id="cmdHint"' &&
 else
   echo "FAIL: 提示栏缺 #chatDir / #cmdHint 或两档提示文案"; fail=$((fail + 1))
 fi
-# TUI 的提示栏在 ctrl+p commands 前面还有一个 agent.cycle 提示(面板里绑的是 Shift+Tab)
-if has "$HOME_HTML" 'id="agentHint"' && has "$HOME_HTML" '⇧tab agents' &&
+# TUI 的提示栏在 ctrl+p commands 前面还有一个 agent.cycle 提示(键位就是 tab)
+if has "$HOME_HTML" 'id="agentHint"' && has "$HOME_HTML" '>tab agents<' &&
    has "$CSS" 'html.narrow #agentHint { display: none; }' &&
-   has "$APPJS" 'ahint.addEventListener'; then
-  echo "PASS: 还有 «⇧tab agents» 提示(照 TUI agent.cycle,桌面显示/手机收起,点了切智能体)"; pass=$((pass + 1))
+   has "$APPJS" 'ahint.addEventListener' && has "$APPJS" "e.key === 'Tab' && !e.shiftKey"; then
+  echo "PASS: 还有 «tab agents» 提示(照 TUI agent.cycle;面板里 tab 与 Shift+Tab 都切智能体,手机收起)"; pass=$((pass + 1))
 else
-  echo "FAIL: 提示栏缺 #agentHint(或没接线/没在手机上收起)"; fail=$((fail + 1))
+  echo "FAIL: 提示栏缺 #agentHint(或没按 TUI 用 tab / 没接线 / 没在手机上收起)"; fail=$((fail + 1))
+fi
+# TUI 提示栏最左那格是 Ss 的「智能体 · 模型」——工具栏在 #composer 里,收起时看不见,这格常驻
+if has "$HOME_HTML" 'id="chatAgent"' && has "$APPJS" 'function paintFooterAgent(' &&
+   has "$APPJS" 'paintFooterAgent();' && has "$CSS" '#chatAgent {'; then
+  echo "PASS: 提示栏最左有 «智能体 · 模型»(#chatAgent,照 TUI 的 Ss;工具栏收起时也看得见)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏缺 #chatAgent(或没接线)"; fail=$((fail + 1))
+fi
+# 照 TUI 的 showDetails(interrupt===0 || width>=80):上膛等第二下时窄屏把用量与提示收掉
+if has "$CSS" 'html.narrow #promptFooter.armed #ctxInfo' &&
+   has "$CSS" 'html.narrow #promptFooter.armed #cmdHint' &&
+   has "$APPJS" "foot.classList.toggle('armed', interruptArmed)"; then
+  echo "PASS: Esc 上膛后窄屏收起用量与快捷键提示(照 TUI showDetails;桌面照旧露着)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 Esc 上膛时窄屏收起提示的规则(showDetails)"; fail=$((fail + 1))
 fi
 if has "$CSS" 'html.narrow #cmdHint .hFull { display: none; }' &&
    has "$CSS" 'html.narrow #cmdHint .hNarrow { display: inline; }'; then
@@ -1165,11 +1180,13 @@ if [ -n "$DIR_AT" ] && [ -n "$AGENT_AT" ] && [ -n "$HINT_AT" ] &&
 else
   echo "FAIL: 提示栏顺序不对(dir=$DIR_AT ctx=$CTX_AT agent=$AGENT_AT hint=$HINT_AT)"; fail=$((fail + 1))
 fi
-# TUI 提示栏在用量后面还会接费用(`XN` 出来的 usage 与 `session.cost` 用 · 连起来,>0 才印)
-if has "$APPJS" 'fmtCost(s && s.cost)' && has "$APPJS" "[tokFull, costStr].filter(Boolean).join(' · ')"; then
-  echo "PASS: 用量后面接费用(TUI 的 usage · cost,>0 才印)"; pass=$((pass + 1))
+# TUI 提示栏在用量前面还会接「正在跑的子会话 / 正挂着的 shell」并在用量后面接费用(都用 · 连,>0 才印)
+if has "$APPJS" 'fmtCost(s && s.cost)' && has "$APPJS" "[subStr, tokFull, costStr].filter(Boolean).join(' · ')" \
+   && has "$APPJS" 'function subagentCount(' && has "$APPJS" 'function shellCount(' \
+   && has "$APPJS" "store.subs.set(info.id, info.parentID)" && has "$APPJS" "store.shells.set(info.id, owner)"; then
+  echo "PASS: 用量前面接 «N subagents · M shells»、后面接费用(TUI 的 subagents · shells · usage · cost)"; pass=$((pass + 1))
 else
-  echo "FAIL: 提示栏没接 session.cost / 没按 TUI 用 · 连起来"; fail=$((fail + 1))
+  echo "FAIL: 提示栏没接子会话/shell/费用,或没按 TUI 用 · 连"; fail=$((fail + 1))
 fi
 # TUI 的路径是「目录:分支」(`Co()`:先按 home 缩成 ~/...,再拼 location.vcs.info()?.branch.current)
 if has "$APPJS" 'function cachedBranch(' && has "$APPJS" "'/api/vcs?'" &&

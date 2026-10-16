@@ -36,7 +36,7 @@
         <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
         <span id="progress" hidden><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
       </div>
-      <div id="promptFooter" hidden><span id="chatDir"></span><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span><button type="button" id="agentHint">⇧tab agents</button><button type="button" id="cmdHint"><span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span></button></div>
+      <div id="promptFooter" hidden><span id="chatAgent" hidden></span><span id="chatDir"></span><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span><button type="button" id="agentHint">tab agents</button><button type="button" id="cmdHint"><span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span></button></div>
     </section>
   </main>
   <div id="toast" hidden></div>
@@ -744,10 +744,39 @@
       T('命令提示两档都在 DOM 里(桌面 ctrl+p / 手机 / 命令)',
         q('#cmdHint .hFull').textContent === 'ctrl+p commands' &&
         q('#cmdHint .hNarrow').textContent === '/ 命令');
-      T('提示栏里还有 ⇧tab agents(照 TUI agent.cycle;面板的键是 Shift+Tab)',
-        q('#agentHint').textContent === '⇧tab agents' &&
+      T('提示栏里还有 tab agents(照 TUI agent.cycle;面板里 tab 与 Shift+Tab 都切智能体)',
+        q('#agentHint').textContent === 'tab agents' &&
         q('#promptFooter').contains(q('#agentHint')),
         q('#agentHint').textContent);
+
+      /* 提示栏最左那格(照 TUI 的 Ss):智能体 · 模型。工具栏在 #composer 里,收起时它跟着
+       * 没了,这一格是收起状态下唯一还看得见「现在是哪个智能体/模型」的地方 —— 只要在
+       * 工具栏两个下拉的当前项上取文案即可。 */
+      T('提示栏最左那格是 #chatAgent,且排在工程路径 #chatDir 之前',
+        q('#chatAgent').tagName === 'SPAN' &&
+        q('#promptFooter').firstElementChild === q('#chatAgent') &&
+        q('#chatAgent').nextElementSibling === q('#chatDir'));
+      q('#ctoolbar').hidden = false;
+      q('#agentSel').innerHTML = '<option value="">默认</option><option value="build" selected>Build</option>';
+      q('#modelSel').innerHTML = '<option value="">默认</option><option value="company/deepseek-v4-flash" selected>DeepSeek V4 Flash</option>';
+      q('#variantSel').innerHTML = '<option value="default" selected>default</option>';
+      paintFooterAgent();
+      T('智能体·模型一格 = «智能体 · 模型»(照 TUI Ss;默认变体不印)',
+        q('#chatAgent').textContent === 'Build · DeepSeek V4 Flash' && q('#chatAgent').hidden === false,
+        q('#chatAgent').textContent);
+      q('#variantSel').innerHTML = '<option value="thinking" selected>thinking</option>';
+      paintFooterAgent();
+      T('非默认变体接着印在模型后面(照 TUI 的 · variant)',
+        q('#chatAgent').textContent === 'Build · DeepSeek V4 Flash · thinking',
+        q('#chatAgent').textContent);
+      q('#ctoolbar').hidden = true;
+      paintFooterAgent();
+      T('工具栏收起(没会话)时,智能体·模型那格也跟着收', q('#chatAgent').hidden === true);
+      q('#ctoolbar').hidden = false;
+      q('#agentSel').innerHTML = '<option value=""></option>';
+      q('#modelSel').innerHTML = '<option value=""></option>';
+      q('#variantSel').innerHTML = '';
+      paintFooterAgent();
 
       var CTX_M1 = {
         id: 'm1', type: 'assistant', time: { created: 100, completed: 101 },
@@ -818,6 +847,72 @@
       renderMessages();
       T('费用为 0 时照 TUI 不印',
         q('#ctxInfo .ctxFull').textContent === '1.5K' && q('#ctxInfo .ctxCompact').textContent === '1.5K',
+        q('#ctxInfo .ctxFull').textContent);
+
+      /* 正在跑的子会话:照 TUI 的 session.family(id) + status === "running" */
+      store.subs.set('ses_kid1', 'ses_a');
+      store.subs.set('ses_kid2', 'ses_a');
+      store.active.set('ses_kid1', 'busy');
+      store.active.set('ses_kid2', 'busy');
+      paintContextUsage();
+      T('正在跑的子会话数印在用量前面(照 TUI 的 session.family)',
+        q('#ctxInfo .ctxFull').textContent === '2 subagents · 1.5K', q('#ctxInfo .ctxFull').textContent);
+      T('窄屏那档也带上子会话(2 subagents · 1.5K)',
+        q('#ctxInfo .ctxCompact').textContent === '2 subagents · 1.5K', q('#ctxInfo .ctxCompact').textContent);
+      store.active.delete('ses_kid2');
+      store.subs.set('ses_kid3', 'ses_a');
+      paintContextUsage();
+      T('跑完的子会话不再数(TUI 只数 running 的)',
+        q('#ctxInfo .ctxFull').textContent === '1 subagent · 1.5K', q('#ctxInfo .ctxFull').textContent);
+      T('单个时用单数 subagent',
+        q('#ctxInfo').title.indexOf('1 subagent(正在运行)') === 0, q('#ctxInfo').title);
+      store.subs.set('ses_kid4', 'ses_b');
+      store.active.set('ses_kid4', 'busy');
+      paintContextUsage();
+      T('别的会话的子会话不算在当前会话头上',
+        q('#ctxInfo .ctxFull').textContent === '1 subagent · 1.5K', q('#ctxInfo .ctxFull').textContent);
+
+      /* 正挂着的持久 shell:照 TUI 的 shell.list(location) 按 metadata.sessionID 过滤 */
+      store.shells.set('sh_1', 'ses_a');
+      paintContextUsage();
+      T('子会话与 shell 一起印、都用 · 连(照 TUI 的 subagents · shells · usage)',
+        q('#ctxInfo .ctxFull').textContent === '1 subagent · 1 shell · 1.5K',
+        q('#ctxInfo .ctxFull').textContent);
+      store.shells.set('sh_2', 'ses_b');
+      paintContextUsage();
+      T('别的会话的 shell 不算在当前会话头上',
+        q('#ctxInfo .ctxFull').textContent === '1 subagent · 1 shell · 1.5K',
+        q('#ctxInfo .ctxFull').textContent);
+      store.shells.clear();
+      /* shell 事件:created 记在册 / exited、deleted 划掉(照 TUI 的 shell 订阅) */
+      feed('shell.created', { info: { id: 'sh_x', metadata: { sessionID: 'ses_a' } } });
+      T('shell.created 记在册(数给当前会话)', shellCount('ses_a') === 1, shellCount('ses_a'));
+      feed('shell.exited', { id: 'sh_x' });
+      T('shell.exited 从册上划掉', shellCount('ses_a') === 0, shellCount('ses_a'));
+      feed('shell.created', { info: { id: 'sh_y', metadata: { sessionID: 'ses_a' } } });
+      feed('shell.deleted', { id: 'sh_y' });
+      T('shell.deleted 也从册上划掉', shellCount('ses_a') === 0, shellCount('ses_a'));
+      /* 子会话同理:session.created 带 parentID 就记在册(照 TUI 的 session.family) */
+      feed('session.created', { sessionID: 'ses_kid9', info: { id: 'ses_kid9', parentID: 'ses_a' } });
+      T('session.created 里的子会话记在册(子→父)',
+        store.subs.get('ses_kid9') === 'ses_a', store.subs.get('ses_kid9'));
+
+      /* 只有子会话、还没用量:那一格也得露出来(TUI 也是 subagents 独立于 usage) */
+      var M4 = store.messages.get('m4');
+      store.messages.clear();
+      msgEls.clear();
+      renderMessages();
+      paintContextUsage();
+      T('没有用量、只有子会话时那格照露(只印子会话)',
+        q('#ctxInfo').hidden === false && q('#ctxInfo .ctxFull').textContent === '1 subagent',
+        q('#ctxInfo .ctxFull').textContent);
+      store.subs.clear();
+      store.active.delete('ses_kid1');
+      store.active.delete('ses_kid4');
+      store.messages.set('m4', M4);
+      renderMessages();
+      paintContextUsage();
+      T('(复原)子会话清掉后回到纯用量', q('#ctxInfo .ctxFull').textContent === '1.5K',
         q('#ctxInfo .ctxFull').textContent);
 
       /* 路径照 TUI 的 Co():目录 + 「:分支」 */

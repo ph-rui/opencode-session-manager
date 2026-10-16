@@ -26,6 +26,13 @@ const store = {
   nearBottom: false,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
   active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
+  // 子会话表:子会话ID -> 父会话ID。提示栏的「N subagents」用它数「正在跑的子会话」,
+  // 照 TUI 的 session.family(sessionID) + status === "running"。单独放一份是为了不把
+  // 子会话塞进 store.sessions —— 那会按顶栏的工程筛选漏进来一些别的工程的子会话。
+  subs: new Map(),
+  // 活着的持久 shell:shellID -> sessionID(照 TUI 的 shell.list(location) 按
+  // metadata.sessionID 过滤)。只由 SSE 的 shell.created / shell.exited / shell.deleted 维护。
+  shells: new Map(),
   compacting: new Set(), // sessionID:正在压缩上下文(SSE 的 session.compaction.started/.ended 说了算)
   compactText: new Map(), // sessionID -> 概要正文的流式缓冲(session.compaction.delta 一段段吐出来的)
   inbox: new Map(), // sessionID -> [Session.Inbox.Info]
@@ -494,6 +501,10 @@ function paintInterruptHint() {
   if (!el) return;
   const want = interruptArmed ? PHINT_ARMED : PHINT_IDLE;
   if (el.innerHTML !== want) el.innerHTML = want;
+  /* 照 TUI 的 showDetails(`interrupt===0 || width>=80`):上膛等第二下时窄屏把用量
+   * 与快捷键提示收掉(《styles.css》里挂在 html.narrow 下,桌面照旧露着)。 */
+  const foot = $('#promptFooter');
+  if (foot) foot.classList.toggle('armed', interruptArmed);
 }
 
 /* 收掉「上膛」状态:按第二下时、5 秒到点时、输入框有动静时、回合结束时都走这里 */
@@ -1043,6 +1054,7 @@ async function loadSessions(opts) {
   opts = opts || {};
   if (opts.reset) {
     store.sessions.clear();
+    store.subs.clear();
     store.sessionCursor = null;
   }
   const q = new URLSearchParams({ order: store.order, limit: '50' });
@@ -1056,6 +1068,7 @@ async function loadSessions(opts) {
     const j = await api('/api/session?' + q.toString());
     (j.data || []).forEach((s) => {
       store.sessions.set(s.id, s);
+      if (s.parentID) store.subs.set(s.id, s.parentID);
       const d = s.location && s.location.directory;
       if (d) store.seenDirs.add(d);
     });
@@ -2515,7 +2528,33 @@ function abbrevHome(dir) {
   return dir;
 }
 
-/* 提示栏(#promptFooter,照 TUI 的 prompt.footer 放在输入框下面)左边那格:工程路径。
+/* 提示栏最左边那格(照 TUI 的 `Ss`):`智能体 · 模型`(有变体再 ` · 变体`)。
+ * 工具栏(#ctoolbar)在 #composer 里面 —— 手机把底板收起时它跟着没了,这一格是
+ * 收起状态下唯一还能看到「现在是哪个智能体/模型」的地方,所以常驻(只要选中会话)。
+ * 取值直接用工具栏那两个 <select> 的当前项文案(它们与模型/智能体下拉同源)。 */
+function paintFooterAgent() {
+  const el = $('#chatAgent');
+  if (!el) return; // 测试页可能没这条
+  const a = $('#agentSel');
+  const m = $('#modelSel');
+  const tb = $('#ctoolbar');
+  if (!store.selected || !a || tb && tb.hidden) {
+    if (!el.hidden) el.hidden = true;
+    if (el.textContent) el.textContent = '';
+    return;
+  }
+  const agent = (a.options[a.selectedIndex] || {}).text || a.value || '';
+  const model = (m && m.selectedIndex >= 0 && (m.options[m.selectedIndex] || {}).text) || '';
+  const vsel = $('#variantSel');
+  const variant = (vsel && vsel.value) || '';
+  let text = [agent, model].filter(Boolean).join(' · ');
+  if (variant && variant !== 'default') text += ' · ' + variant;
+  if (el.textContent !== text) el.textContent = text;
+  el.hidden = !text;
+  if (el.title !== text) el.title = text;
+}
+
+/* 提示栏(#promptFooter,照 TUI 的 prompt.footer 放在输入框下面)的工程路径那格。
  * 显示照 TUI:`目录`(按 home 缩成 ~/...) + 有分支时 `:分支`(太长由 CSS 截断,
  * title 里给全路径)。整条只在选中会话时露出来(没会话时它整个收着)。用量那格
  * (#ctxInfo)由下面的 paintContextUsage() 管。 */
@@ -2531,6 +2570,27 @@ function paintPromptFooter(show, dir) {
   if (d.title !== dir) d.title = dir;
 }
 
+/* 正在跑的子会话个数(提示栏那格,照 TUI 的 session.family + status === "running")。
+ * 只数是还在跑的 —— TUI 也是这么数(`.filter((g)=>…status(g)==="running")`)。
+ * 子会话来自 ① 列表接口里 parentID 的那批;② SSE 的 session.created/updated。 */
+function subagentCount(sid) {
+  if (!sid) return 0;
+  let n = 0;
+  for (const cid of store.subs.keys()) {
+    if (store.subs.get(cid) === sid && isRunning(cid)) n++;
+  }
+  return n;
+}
+
+/* 这个会话正挂着的持久 shell 个数(提示栏那格,照 TUI 的 shell.list(location) 按
+ * metadata.sessionID 过滤;TUI 不过滤状态,活着的都算)。 */
+function shellCount(sid) {
+  if (!sid) return 0;
+  let n = 0;
+  for (const owner of store.shells.values()) if (owner === sid) n++;
+  return n;
+}
+
 /* 提示栏里那个数字:全量文案 + 窄屏文案一起写进去,CSS 按 html.narrow 显示哪一个。
  * 拿不到用量(还没跑过一轮 / 模型不在表里给不出百分比)就收起来 —— 但提示栏本身
  * (路径 + ctrl+p commands)照旧。费用照 TUI 的提示栏:> 0 时在用量后面接 ` · $x.xx`。 */
@@ -2538,6 +2598,7 @@ function paintContextUsage() {
   const sid = store.selected;
   const s = sid ? store.sessions.get(sid) : null;
   const dir = (s && s.location && s.location.directory) || '';
+  paintFooterAgent();
   paintPromptFooter(!!sid, dir);
   const el = $('#ctxInfo');
   if (!el) return; // 测试页可能没这个元素
@@ -2545,7 +2606,14 @@ function paintContextUsage() {
   const u = sid
     ? contextUsage(currentMessages(), store.models.get(dir), (s && s.revert && s.revert.messageID) || '')
     : null;
-  if (!u && !costStr) {
+  // TUI 的提示栏把这句排在用量前面、都用 ` · ` 连(2 subagents · 1 shell · 151.8K (76%))
+  const nSub = subagentCount(sid);
+  const nShell = shellCount(sid);
+  const subParts = [];
+  if (nSub) subParts.push(nSub + ' subagent' + (nSub === 1 ? '' : 's'));
+  if (nShell) subParts.push(nShell + ' shell' + (nShell === 1 ? '' : 's'));
+  const subStr = subParts.join(' · ');
+  if (!subStr && !u && !costStr) {
     el.hidden = true;
     el.removeAttribute('title');
     return;
@@ -2553,8 +2621,8 @@ function paintContextUsage() {
   const size = u ? fmtSize(u.tokens) : '';
   const tokFull = !u ? '' : u.percent === undefined ? size : size + ' (' + u.percent + '%)';
   const tokCompact = !u ? '' : u.percent === undefined ? size : u.percent + '% ctx';
-  const full = [tokFull, costStr].filter(Boolean).join(' · ');
-  const compact = [tokCompact, costStr].filter(Boolean).join(' · ');
+  const full = [subStr, tokFull, costStr].filter(Boolean).join(' · ');
+  const compact = [subStr, tokCompact, costStr].filter(Boolean).join(' · ');
   const f = el.querySelector('.ctxFull');
   const c = el.querySelector('.ctxCompact');
   if (f && c) {
@@ -2563,12 +2631,18 @@ function paintContextUsage() {
   } else if (el.textContent !== full) {
     el.textContent = full; // 没有两档子节点(老结构)时的兜底
   }
-  const title =
-    (u
-      ? '上下文用量 ' + u.tokens.toLocaleString() + ' tokens' +
+  const titleParts = [];
+  if (u) {
+    titleParts.push(
+      '上下文用量 ' + u.tokens.toLocaleString() + ' tokens' +
         (u.percent === undefined ? '' : '(' + u.percent + '%)')
-      : '本会话费用') +
-    (costStr ? ' · ' + costStr : '');
+    );
+    if (costStr) titleParts.push(costStr);
+  } else if (costStr) {
+    titleParts.push('本会话费用' + ' · ' + costStr);
+  }
+  if (subStr) titleParts.unshift(subStr + '(正在运行)');
+  const title = titleParts.join(' · ');
   if (el.title !== title) el.title = title;
   el.hidden = false;
 }
@@ -4259,6 +4333,12 @@ function setupComposerKeys() {
     if (commandKey(e)) return; // 命令面板开着时优先吃方向键/Enter/Tab/Esc
     if (mentionKey(e)) return; // 补全列表开着时,方向键/Enter/Tab/Esc 先给补全
     if (historyKey(e)) return; // 光标在首行/末行时,↑/↓ 取输入历史
+    if (e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      // TUI 里 agent.cycle 就是 tab。补全/命令面板开着时上面已经先把 Tab 吃掉了
+      e.preventDefault();
+      cycleAgent();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -4855,6 +4935,7 @@ function handleControlEvent(e) {
     const info = d.info;
     if (info && typeof info === 'object') {
       const merged = patchSession(info.id || sid, info);
+      if (info.parentID && info.id) store.subs.set(info.id, info.parentID);
       if (merged) dirty = true;
     } else {
       refreshActive = true;
@@ -4865,6 +4946,7 @@ function handleControlEvent(e) {
     if (id) {
       store.sessions.delete(id);
       store.active.delete(id);
+      store.subs.delete(id);
       store.inbox.delete(id);
       for (const [mid, L] of store.live) if (L.sid === id) store.live.delete(mid);
       if (store.selected === id) clearSelection();
@@ -4872,7 +4954,28 @@ function handleControlEvent(e) {
     }
     refreshActive = true;
   } else if (t === 'session.created') {
+    // 子会话(照 TUI 的 session.family):记住 子→父,提示栏数「正在跑的子会话」用
+    const info = d.info;
+    if (info && typeof info === 'object' && info.id && info.parentID) {
+      store.subs.set(info.id, info.parentID);
+      if (store.selected === info.parentID) dirty = true;
+    }
     refreshActive = true;
+  } else if (t === 'shell.created') {
+    // 持久 shell(照 TUI 的 shell.list(location) 按 metadata.sessionID 数)
+    const info = d.info;
+    if (info && info.id) {
+      const owner = (info.metadata && info.metadata.sessionID) || '';
+      store.shells.set(info.id, owner);
+      if (owner && owner === store.selected) dirty = true;
+    }
+  } else if (t === 'shell.exited' || t === 'shell.deleted') {
+    const id = d.id || (d.info && d.info.id);
+    if (id) {
+      const owner = store.shells.get(id);
+      store.shells.delete(id);
+      if (owner && owner === store.selected) dirty = true;
+    }
   } else if (t.indexOf('session.inbox.') === 0) {
     if (sid && sid === store.selected) loadInbox(sid);
     refreshActive = true;

@@ -234,6 +234,10 @@ table#list { width: 100%; border-collapse: collapse; }
   white-space: nowrap;
 }
 #promptFooter[hidden] { display: none; }
+#chatAgent { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+/* 手机上「智能体 · 模型」让一让:模型名(显示名)比 TUI 的 model id 长,别把工程路径挤没 */
+html.narrow #chatAgent { max-width: 32%; }
+#chatAgent[hidden] { display: none; }
 #chatDir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #agentHint,
 #cmdHint {
@@ -250,6 +254,12 @@ table#list { width: 100%; border-collapse: collapse; }
 #cmdHint:hover { color: var(--fg); }
 /* 智能体提示是键盘提示:手机没键盘(工具栏上就有下拉),收起来 */
 html.narrow #agentHint { display: none; }
+/* 照 TUI 的 showDetails(`interrupt===0 || width>=80`):上膛等第二下 Esc 时,
+   窄屏把用量与两处快捷键提示收掉,只留路径(等第二下就那么几秒,让位给「再按一次」)。
+   智能体·模型(`#chatAgent`)与路径是 Ss / status 那两块,不受 showDetails 管,照旧露着。 */
+html.narrow #promptFooter.armed #ctxInfo,
+html.narrow #promptFooter.armed #agentHint,
+html.narrow #promptFooter.armed #cmdHint { display: none; }
 /* 提示也分两档:桌面是 TUI 原样的「ctrl+p commands」,手机没 Ctrl 键就写「/ 命令」 */
 #cmdHint .hNarrow { display: none; }
 html.narrow #cmdHint .hFull { display: none; }

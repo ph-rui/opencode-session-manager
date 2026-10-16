@@ -44,6 +44,7 @@
         <div id="cmds" hidden></div>
         <input type="file" id="filePick" multiple hidden>
       </div>
+      <div id="promptFooter" hidden></div>
     </section>
   </main>
   <div id="toast" hidden></div>
@@ -630,12 +631,15 @@
         q('#progress .phint').textContent);
       T('Esc:上膛时补一句 toast(底板收起时看不见状态条那句)',
         q('#toast').textContent.indexOf('再按一次') >= 0, q('#toast').textContent);
+      T('Esc:上膛时提示栏挂上 .armed(照 TUI showDetails:窄屏收起用量与快捷键)',
+        q('#promptFooter').classList.contains('armed') === true);
       window.calls.length = 0;
       fire('Escape');
       T('Esc:第二下 → 中断当前回合', hadCall(/\/interrupt/), window.calls);
       T('Esc:第二下之后提示文案收回原文',
         q('#progress .phint').textContent.replace(/\s+/g, ' ').trim() === 'esc interrupt',
         q('#progress .phint').textContent);
+      T('Esc:第二下之后 .armed 也摘掉', q('#promptFooter').classList.contains('armed') === false);
 
       /* Esc:上膛之后输入框一有动静就撤掉 —— 见下面 setupComposerKeys() 之后那一组
          (输入框的接线在 init() 里,测试页要手动接上才能测) */
@@ -770,6 +774,25 @@
       var ke2 = new KeyboardEvent('keydown', { key: 'ArrowUp', cancelable: true, bubbles: true });
       q('#input').dispatchEvent(ke2);
       T('输入框按键:面板没开时方向键给历史', q('#input').value === '旧消息', q('#input').value);
+      /* Tab(无 Shift):照 TUI 的 agent.cycle —— 输入框里也切智能体;
+         命令面板/@ 补全开着时上面已经先把 Tab 吃掉了,不给切 */
+      await renderControls(store.sessions.get('ses_a'));
+      window.calls.length = 0;
+      var tb = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(tb);
+      T('Tab(无 Shift):输入框里也被消费(不把焦点移走)', tb.defaultPrevented === true);
+      await settle(function () { return hadCall(/\/api\/session\/ses_a\/agent$/); });
+      T('Tab(无 Shift):输入框里也切智能体(照 TUI agent.cycle)',
+        hadCall(/\/api\/session\/ses_a\/agent$/), window.calls);
+      setCaret('/rev');
+      await openCommands();
+      window.calls.length = 0;
+      var tb2 = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(tb2);
+      T('Tab(无 Shift):命令面板开着时让给面板(不切智能体)',
+        !hadCall(/\/agent$/), window.calls);
+      closeCommands();
+      setCaret('');
       setCaret('发一条');
       var ke3 = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
       window.calls.length = 0;
