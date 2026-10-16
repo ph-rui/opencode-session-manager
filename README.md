@@ -457,7 +457,7 @@ node test/ui-capabilities-run.js  # 能力扩展前端逻辑(无头 Firefox;缺 
 node test/ui-stream-run.js    # 流式前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-tools-run.js     # 工具卡片 diff/代码/诊断的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-layout-run.js    # 列表折叠(含鼠标靠左边缘临时拉出) + 刷新后的恢复(会话 / 滚动位置 / 顶栏条件)(无头 Firefox;缺 firefox 时自动跳过)
-node test/ui-jump-run.js      # 一键回底「跳到最新 ↓」的显隐与 sticky 位置(无头 Firefox;缺 firefox 时自动跳过)
+node test/ui-jump-run.js      # 一键回底「跳到最新 ↓」的显隐与 sticky 位置 + 拉消息失败/重试(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-attach-run.js    # 文件附件与 @ 补全的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-commands-run.js  # / 命令面板、Esc 中断、输入历史、Shift+Tab 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
 node test/ui-picks-run.js     # 选择框对话框 /models · /agents · /sessions 的前端逻辑(无头 Firefox;缺 firefox 时自动跳过)
@@ -467,13 +467,14 @@ node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(3
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:271 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:279 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、**打开网页时列表一律展开**(`paint(false)`、不再读写 `ocs.listHidden`)与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
    再加 I 组的 21 项(命令面板的五个函数与按工程取命令、命令走 `/command` 通道、同名以服务端优先、16 个面板动作齐全、全局键位接线在 `document` 上、会话在跑才中断且对话框打开时不抢键、**Esc 要按两下**(第一下只上膛 + 5 秒归零定时器 + 输入框有动静就撤 + 中断带 `resume=true` 并把排队的 `user` 项改成 `steer`)、输入历史与 `Shift+Tab`、`Ctrl+P`、`#cmds`/`#dlgHelp`/`#helpKeys` 三个节点、样式,以及 I 组的三个测试文件都在),
    以及**第三条与第四条顺序锁**:`setupTuiKeys()` 体内 `closeCommands()` → `closeMentions()` → `requestInterrupt()` 的顺序(这就是 Esc 的优先级,写反了就会「一按 Esc 直接中断」)、`setupComposerKeys()` 体内 `commandKey` → `mentionKey` → `historyKey` → `send` 的顺序(输入框里的按键让给谁)。
    再加性能与投递的各 3 项:`.cvmany` 离屏跳渲染(`#messages.cvmany > .msg` + `content-visibility` + 估值高度都在、**反向封锁**不许挂成无条件的 `#messages > .msg`、开关由 `renderMessages()` 按 `CV_MIN_MSGS` 挂且 `ui-layout` 有正反两面断言)、运行中默认投递 = 插话(`const DEFAULT_DELIVERY = 'steer'`、`store.delivery` 走这个常量而不是写死字面量、`setDelivery()` 里非法值回默认)。
+   再加**拉消息失败不许一声不响**的 8 项(移动端设计 §8.34:`#messages` 里那条状态行的结构、`setupMsgState()` 定义 1 次 + `init()` 1 次的接线锁、重试次数 `MSG_TRIES = 3` 与退避 `[800, 2500]`、失败亮原因 + 一个「重试」、**「空数组」与「没拿到」分家**(`Array.isArray(j.data)` / 缺 `data` / 半截正文都算失败)、「正在加载」慢到 250ms 才露且切会话/取消选中把在途请求作废、`.msgstate[hidden]` 必须显式写、`ui-jump.html` 里有这组断言)。
    注意 I 组在 `smoke.sh` 里只用 `has()` 与自带的 `ck()` 做**静态**断言,真正的行为验证在 `ui-commands-run.js` 与 `e2e-commands.sh`。
    选择框那块(+9:对话框四个节点、`.picklist`/`.pick-item`/`.pick-group` 样式、14 个函数齐全、
    **`focusEl` 这个旧做法已经不在了**、三条命令都接到选择框(用 python 在 `PANEL_COMMANDS` 切片里逐条对)、
@@ -593,7 +594,7 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   **前进 / 后退**(点会话入栈、重复点同一个不多压一格、收到 `popstate` 切到 URL 里的会话且不重复入栈、后退到无 hash 时取消选中并清空对话区、空操作不入栈)、
   **会话内滚动位置**(跳到底部 / 存锚点 / 刷新后回到原处且确实不在底部 / 只还原一次 / 点会话进来仍跳底部 / 锚点消息不存在时退回像素值 / 无存档照旧 / **没有存档的长会话深链到底**(不塞 `anchor` 为 `null` 的 pending —— 那会拦住 `forceBottom`,长会话一打开就停在最上面,见移动端设计 §8.23)/ 上限 20 与淘汰顺序 / 存的是 `sessionStorage`;外加**长会话挂 `.cvmany` 让离屏消息跳过渲染、短会话不挂**(不留下「估值高度撑出假滚动条」的机会))、
   **顶栏条件持久化**(空存档的默认值、四项恢复、记住的目录不在结果里也能选回、四类控件改动即时落盘、清空搜库存空串、存的是 `localStorage`)。
-- `ui-jump-run.js`:63 项浏览器内断言,覆盖一键回底「跳到最新 ↓」:形状(`#jumpLatest` 是 `#messages` 的**子元素**、`.chip`、默认 `hidden`、文案)、接线(`wired` 标记、重复接线不再挂监听、只按当前状态重画)、
+- `ui-jump-run.js`:90 项浏览器内断言,覆盖一键回底「跳到最新 ↓」:形状(`#jumpLatest` 是 `#messages` 的**子元素**、`.chip`、默认 `hidden`、文案)、接线(`wired` 标记、重复接线不再挂监听、只按当前状态重画)、
   **显隐判定**(刚选中落底部时收起、往上翻就露出来、滚回底部又收起、短会话收起、没选中收起;**走浏览器真派发的那条 `scroll` 事件**,不是手动调函数;另外手工把 `hidden` 改错再补派发一次 `scroll` 就该被纠正回来,证明监听确实挂在 `#messages` 上)、
   **真布局**(露出来时它真的钉在滚动口下沿且贴右:底边在 `#messages` 底边之上 24px 内、右沿离内边距不到 40px、带阴影)、
   **口径**(79px 算在底部、80px 不算、`BOTTOM_SLACK === 80`)、**什么才算「用户往上滚」**(照移动端设计 §8.23:容器变矮 —— 状态条出现 / 底板展开 / `#asks` 弹出 / 软键盘顶起 —— 把离底距离撑大时**不关**跟随;`scrollTop` 比上次记下的**变小**了才关;让路期间容器变矮一动不动;`pinBottom()` 会把贴底时的 `scrollTop` 记下来,`atBottom()` 保持纯几何)、**新内容到达**(往上翻着时新内容进来按钮仍露着**且不把人拽到底部**;就在底部时仍然自动跟随且按钮不冒出来)、
@@ -601,6 +602,14 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   它连「切会话会把 `#messages` 整个 `innerHTML` 清空、按钮被一起抹掉」这条都验了:清空后按钮仍 `isConnected` 且 `parentElement` 还是 `#messages`。
   另有 2 项锁**「加载更旧消息」跟着选中会话走**(见移动端设计 §8.25):清掉选中之后 `#older` 收起、分页游标 `store.msgOlderCursor` 一起清掉 —— 原来只清 `store.messages`,这一格会一直露在头部(没选中会话时点了也没用),游标还会把上一个会话的页码带进下一个会话。
   另有 5 项锁**翻页请求的 query**(见移动端设计 §8.26):首屏带 `order=desc`、首屏不带游标、翻页带 `cursor`、**翻页不带 `order`**(带了两样服务端就 `400 InvalidCursorError`,这正是「点了没反应」的原因)、没有游标时压根不发请求。
+  另有 27 项锁**拉消息失败不许一声不响**(见移动端设计 §8.34,起因是「手机打开某个会话一片空白,
+  电脑端回一句之后内容才出现」):状态行的形状与接线(`#msgState` 是 `#messages` 的子元素、默认 `hidden`、
+  `.msgstate`、重试是 `.chip`、重复接线不再挂监听)、**慢的时候露「正在加载消息…」而 250ms 内回来不闪**
+  (这一段用「排队等我手动放」的假定时器:重试退避与那句延迟提示都走 `setTimeout`)、
+  **连打回 3 次**(首发 + 2 次重试)之后亮出 `加载失败:模拟打回` + 一个「重试」、状态行贴在消息流末尾、
+  没消息就是没消息,以及**点「重试」真的再发一次、成功就把状态行收掉**、
+  **半截正文(200 + 非法 JSON)与缺 `data` 数组都算失败**(不许静默成「这个会话没有内容」)、
+  **切走之后旧会话的失败与重试都不许跟过来**、取消选中则把残留的失败话撤掉、`#msgState` 仍在 DOM 里。
 
 - `e2e-attach.sh`:32 项。只用临时会话与临时文件,结束时全部删除;验证①代理建好暂存目录并把 `uploadDir` 通过 `/__health` 告知前端、②`POST /api/experimental/fs/write?path=<绝对路径>` 原始字节写盘且内容逐字节一致、③`GET /api/fs/find` 给出相对工程目录的路径与基准目录、④提示词里的附件只认 `file:` URI(服务端自己补 `data`/`mime`,`name`/`mention` 原样落库)、⑤裸绝对路径/相对路径/`https` 三种非法 uri 都被 `400` 拒且原因可辨、⑥面板服务出去的 `app.js`/`styles.css`/`index.html` 确实带上了附件功能。
 - `ui-attach-run.js`:133 项浏览器内断言,覆盖路径与大小的纯函数(`fileURI`/`baseName`/`joinDir`/`humanSize`/`uploadName`/`uploadPathFor`/`b64Size`)、`userFilesHtml`(uri 来源显示路径、inline 不显示、图片内联缩略图、按 base64 反算大小、缺 `name`/`mime` 兜底、转义、在 `renderMessage` 里的位置与「没有附件就不产生空行」)、`resolveMentions`(只认补全确认过的路径、锚点 `start/end/text` 切出来正好是那一段、多引用、中文里紧跟标点、邮箱里的 `@` 不算)、`@` 补全(光标前 token 的提取边界、请求参数含 `location[directory]` 的 deepObject 写法、目录名与文件名分列、上下键环绕、Enter 消费按键并插入+记忆绝对路径、Esc 关闭、点选、无匹配的空态)、附件排队(上传走 `fs/write`、POST、目标绝对路径、body 就是文件本身、chip 的名字/大小/来源路径/移除按钮、超限拒绝、上传失败回滚、拖放/粘贴/文件框三条入口)、以及 `send()` 的请求体(上传文件与 `@` 引用合并进 `files[]`、`mention` 锚点、成功才清空待发送列表、失败保留可重发、切会话清空并关掉补全、没选中会话时按钮禁用、暂存目录未知时先问 `/__health`)。

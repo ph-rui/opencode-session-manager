@@ -27,7 +27,7 @@
         </div>
         <button id="older" hidden></button>
       </div>
-      <div id="messages"><button type="button" id="jumpLatest" class="chip" hidden>跳到最新 ↓</button></div>
+      <div id="messages"><button type="button" id="jumpLatest" class="chip" hidden>跳到最新 ↓</button><div id="msgState" class="msgstate" hidden><span id="msgStateText"></span><button type="button" id="msRetry" class="chip" hidden>重试</button></div></div>
       <div id="asks" hidden></div><div id="inbox" hidden></div>
       <div id="composer">
         <div id="ctoolbar" hidden>
@@ -85,7 +85,28 @@
       var method = (opts && opts.method) || 'GET';
       window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
       var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
-      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (m) {
+        var sid = decodeURIComponent(m[1]);
+        /* 三个坏开关(默认都不开,只为 §8.34 那组用):
+         *   window.GATE   = promise,卡住这次拉取(用来观察「正在加载消息…」露没露)
+         *   window.FAIL   = { sid: 次数 } 打回几次(HTTP 500)
+         *   window.BROKEN = { sid: 次数 } 回 200 但正文是半截(JSON.parse 会失败)
+         *   window.SHAPE  = { sid: 次数 } 回 200 合法 JSON,但没有 data 数组 */
+        if (window.GATE) await window.GATE;
+        if (window.FAIL && window.FAIL[sid] > 0) {
+          window.FAIL[sid]--;
+          return { ok: false, status: 500, text: async function () { return JSON.stringify({ message: '模拟打回' }); } };
+        }
+        if (window.BROKEN && window.BROKEN[sid] > 0) {
+          window.BROKEN[sid]--;
+          return { ok: true, status: 200, text: async function () { return '{ "data": [ {'; } };
+        }
+        if (window.SHAPE && window.SHAPE[sid] > 0) {
+          window.SHAPE[sid]--;
+          return json({ error: 'no data' });
+        }
+        return json({ data: window.SERVER[sid] || [], cursor: {} });
+      }
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
@@ -111,6 +132,13 @@
     var q = function (s) { return document.querySelector(s); };
     var box = q('#messages');
     var btn = q('#jumpLatest');
+    /* #msgState(拉消息的状态行,§8.34)跟 #jumpLatest 一样:节点在 index.html 里,
+       selectSession/clearSelection 会把 #messages 清空,所以引用得在【清空之前】就抓下来,
+       之后靠 paintMsgState() 自己搬回末尾。 */
+    var stateEl = q('#msgState');
+    var stateText = q('#msgStateText');
+    var retryBtn = q('#msRetry');
+    setupMsgState();
     /* 等真定时器一小会儿:scroll 事件是异步派发的,要给它落地的时间 */
     var tick = function () { return new Promise(function (r) { window.__realSetTimeout(r, 40); }); };
     var maxTop = function () { return box.scrollHeight - box.clientHeight; };
@@ -353,6 +381,125 @@
       var callsBefore = window.calls.length;
       await loadMessages({ older: true });
       T('没有游标时不发请求', window.calls.length === callsBefore);
+
+      /* ============ 8. 拉消息失败不许一声不响(§8.34) ============
+       * 手机上一个 12MB 的会话首页(工具 part 里塞了整份文件/截图)可能下几十秒,也可能
+       * 下到一半被掐断。老写法:api() 抛出 → loadMessages 的 catch 一吞 → 消息区永远空着,
+       * 用户看到的就是「打开这个会话一片空白」,而标题/状态/操作行全都好好的。
+       * 这一段要控住定时器(重试退避 + 「慢到 250ms 才露」都走 setTimeout;
+       * 本页的 setTimeout 是被钉住不触发的),这里换成「排队等我手动放」的假定时器。 */
+      var savedTO = window.setTimeout, savedCTO = window.clearTimeout;
+      var q8 = [];
+      window.setTimeout = function (fn) { q8.push(fn); return q8.length; };
+      window.clearTimeout = function (id) { if (id) q8[id - 1] = null; };
+      /* 放一轮定时器 + 把微任务抽干(重试是个 await 链,得让它跑起来) */
+      var pump = async function (rounds) {
+        for (var i = 0; i < (rounds || 8); i++) {
+          var t = q8; q8 = [];
+          t.forEach(function (fn) { if (fn) fn(); });
+          await Promise.resolve(); await Promise.resolve();
+        }
+      };
+      var stateEl = q('#msgState');
+      var stateText = q('#msgStateText');
+      var retryBtn = q('#msRetry');
+      var msgCalls = function () {
+        return window.calls.filter(function (c) { return /\/message/.test(c.url); }).length;
+      };
+
+      /* 8a. 形状 + 接线 */
+      setupMsgState();
+      T('#msgState 在页面里、是 #messages 的子元素(切会话清空时引用留在外面)',
+        !!stateEl && stateEl.parentElement === box);
+      T('默认就是收起来的(平时一个像素都不占)', stateEl.hidden === true);
+      T('带 .msgstate(自带 [hidden] 的 display:none —— 它是 flex,光靠 hidden 压不住)',
+        stateEl.classList.contains('msgstate'));
+      T('重试是个 .chip(窄屏自动拿到 44px 命中区)',
+        retryBtn.tagName === 'BUTTON' && retryBtn.classList.contains('chip'));
+      var add8 = 0;
+      var orig8 = retryBtn.addEventListener.bind(retryBtn);
+      retryBtn.addEventListener = function () { add8++; return orig8.apply(null, arguments); };
+      setupMsgState();
+      retryBtn.addEventListener = orig8;
+      T('重复接线不再挂监听(init 会被反复调)', add8 === 0, add8);
+
+      /* 8b. 慢的时候露一句「正在加载消息…」,快的时候不闪 */
+      var gate = {};
+      gate.promise = new Promise(function (r) { gate.release = r; });
+      window.GATE = gate.promise;
+      var p8 = selectSession('ses_a');
+      await Promise.resolve();
+      T('才出门这一下(没到 250ms)→ 不闪「正在加载」(本机会话 30ms 就回来了)',
+        stateEl.hidden === true, 'hidden=' + stateEl.hidden);
+      await pump(1); // 放掉那个 250ms 的定时器
+      T('慢过 250ms 还没回来 → 露「正在加载消息…」',
+        stateEl.hidden === false && stateText.textContent === '正在加载消息…', stateText.textContent);
+      T('这时候不该有「重试」(还没失败)', retryBtn.hidden === true);
+      gate.release();
+      window.GATE = null;
+      await pump(6); await p8;
+      T('回来了 → 那句话自己收起来', stateEl.hidden === true);
+      T('内容也正常渲染', box.textContent.indexOf('会话 A 的第一问') >= 0);
+
+      /* 8c. 连打回三次(首发 + 两次重试都失败)→ 亮原因 + 重试 */
+      window.FAIL = { ses_a: 3 };
+      var n0 = msgCalls();
+      var p9 = selectSession('ses_a');
+      await pump(20); await p9;
+      T('自动重试两轮:一共发了 3 次(1 首发 + 2 重试)', msgCalls() - n0 === 3, msgCalls() - n0);
+      T('失败留下证据:原因写在消息区末尾(不再是一片空白)', store.msgError === '模拟打回', store.msgError);
+      T('状态行露出来、文案是「加载失败:<原因>」',
+        stateEl.hidden === false && stateText.textContent === '加载失败:模拟打回', stateText.textContent);
+      T('并且给了一个「重试」', retryBtn.hidden === false);
+      T('状态行贴在消息流末尾', box.lastElementChild === stateEl || box.children[box.children.length - 2] === stateEl,
+        box.lastElementChild && box.lastElementChild.id);
+      T('没消息就是没消息,不许画成「这个会话没有内容」', box.querySelectorAll('.msg').length === 0);
+
+      /* 8d. 点「重试」:真的再拉一次,成功就把状态行收掉 */
+      window.FAIL = { ses_a: 0 };
+      n0 = msgCalls();
+      retryBtn.click();
+      await pump(6);
+      T('点重试 → 重新发一次请求', msgCalls() - n0 === 1, msgCalls() - n0);
+      T('成功了 → 内容出来', box.textContent.indexOf('会话 A 的第一问') >= 0);
+      T('成功了 → 状态行收起、错误清掉', stateEl.hidden === true && !store.msgError);
+
+      /* 8e. 半截正文(200 + 非法 JSON)与「没有 data 数组」都算失败,不许静默成空 */
+      window.BROKEN = { ses_a: 3 };
+      var pa = selectSession('ses_a');
+      await pump(20); await pa;
+      T('下到一半的正文(JSON.parse 失败)→ 当成失败,不静默成「没有消息」',
+        store.msgError.indexOf('JSON') >= 0, store.msgError);
+      window.BROKEN = null;
+      window.SHAPE = { ses_a: 3 };
+      var pb = selectSession('ses_a');
+      await pump(20); await pb;
+      T('响应里没有 data 数组 → 也算失败(空数组和「没拿到」必须分得开)',
+        store.msgError === '响应里没有消息数组', store.msgError);
+      window.SHAPE = null;
+
+      /* 8f. 切走之后:旧会话的失败与重试都不许跟过来 */
+      window.FAIL = { ses_a: 3 };
+      var pc = selectSession('ses_a');
+      await pump(1);
+      await selectSession('ses_long');
+      window.FAIL = null;
+      await pump(10); await pc;
+      T('切走时把上一代的失败重试作废(不会回来覆盖新会话)', !store.msgError, store.msgError);
+      T('新会话照常渲染', box.textContent.indexOf('第 59 条消息') >= 0);
+      T('状态行收起来', stateEl.hidden === true);
+
+      /* 8g. 取消选中:消息区被清空,那句话也得跟着走(不然会粘到下一个会话) */
+      store.msgError = '上一回的残留';
+      paintMsgState();
+      T('(前置)残留的失败话露着', stateEl.hidden === false);
+      clearSelection();
+      T('取消选中 → 失败话撤掉、状态行收起', stateEl.hidden === true && !store.msgError);
+      T('而且 #msgState 还在 DOM 里(没被 innerHTML 一起抹掉)',
+        stateEl.isConnected && stateEl.parentElement === box);
+
+      window.setTimeout = savedTO;
+      window.clearTimeout = savedCTO;
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

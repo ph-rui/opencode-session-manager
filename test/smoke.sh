@@ -1598,6 +1598,59 @@ else
   echo "FAIL: ● 或底部那行的样式缺"; fail=$((fail + 1))
 fi
 
+# ---- R11 组:拉消息失败不许一声不响(手机上一个 12MB 的会话首页会下几十秒甚至被掐断,§8.34)----
+if has "$MSG_HTML" 'id="msgState"' && has "$MSG_HTML" 'class="msgstate"' &&
+   has "$MSG_HTML" 'id="msgStateText"' && has "$MSG_HTML" 'id="msRetry"' &&
+   has "$MSG_HTML" 'class="chip"'; then
+  echo "PASS: 消息区末尾有一条状态行(#msgState + 文案 + 重试,跟着 #messages 一起被清空/搬回)"; pass=$((pass + 1))
+else
+  echo "FAIL: #messages 里没有那条状态行(#msgState/#msgStateText/#msRetry)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function paintMsgState()' && has "$APPJS" 'function setupMsgState()' &&
+   has "$INIT_FN_O" 'setupMsgState()' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setupMsgState' | wc -l)" = 2 ]; then
+  echo "PASS: setupMsgState() 接进了 init() 且只有这一处接线(定义 1 + init 1)"; pass=$((pass + 1))
+else
+  echo "FAIL: setupMsgState 的接线不对(应为 定义 1 次 + init 里 1 次)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const MSG_TRIES = 3' && has "$APPJS" 'const MSG_RETRY_MS = [800, 2500]' &&
+   has "$APPJS" 'await sleep(MSG_RETRY_MS[attempt - 1]'; then
+  echo "PASS: 失败自动重试两轮(首发 + 2 次,退避 0.8s / 2.5s)"; pass=$((pass + 1))
+else
+  echo "FAIL: 失败没有自动重试(或退避不对)"; fail=$((fail + 1))
+fi
+if has "$APPJS" "'加载失败:'" && has "$APPJS" "'正在加载消息…'" &&
+   has "$APPJS" "msgRetryBtn.addEventListener('click', () => loadMessages({ older: false }))"; then
+  echo "PASS: 失败亮原因 + 一个「重试」;慢的时候先亮「正在加载消息…」"; pass=$((pass + 1))
+else
+  echo "FAIL: 失败/加载那两句话或重试按钮没接上"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'Array.isArray(j.data)' && has "$APPJS" "throw new Error('响应里没有消息数组')" &&
+   has "$APPJS" "'响应不是合法 JSON(可能只下到一半)'"; then
+  echo "PASS: 「空数组」和「没拿到」分开:半个正文 / 没有 data 都算失败,不静默成空消息区"; pass=$((pass + 1))
+else
+  echo "FAIL: 半截响应还会被当成「这个会话没有消息」"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const MSG_LOADING_DELAY_MS = 250' &&
+   has "$APPJS" 'store.msgSeq++; // 这一下就把在途的响应与重试作废' &&
+   has "$APPJS" 'store.msgSeq++; // 在途的响应与重试就地作废'; then
+  echo "PASS: 「正在加载」慢到 250ms 才露(快路径不闪);切会话/取消选中把在途响应与重试作废"; pass=$((pass + 1))
+else
+  echo "FAIL: 没做「延迟才露」或切走没作废在途请求"; fail=$((fail + 1))
+fi
+if has "$CSS" '.msgstate {' && has "$CSS" '.msgstate[hidden] { display: none; }' &&
+   has "$CSS" '.msgstate.bad {'; then
+  echo "PASS: 状态行样式在(而且是 flex,必须显式写 [hidden] 的 display:none)"; pass=$((pass + 1))
+else
+  echo "FAIL: .msgstate 的样式缺(或漏了 [hidden])"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-jump.html")" "加载失败:" &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" "正在加载消息…"; then
+  echo "PASS: ui-jump.html 里有这组断言(重试次数 / 半截正文 / 切走作废都盯着)"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-jump.html 里没有这组断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

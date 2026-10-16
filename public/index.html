@@ -91,6 +91,13 @@
              做成贴在消息区右下角的小片(sticky),只在「你没停在最底部」时露出来。
              它必须是 #messages 的子元素 —— 只有滚动容器【内部】的 sticky 才钉得住。 -->
         <button type="button" id="jumpLatest" class="chip" hidden>跳到最新 ↓</button>
+        <!-- 拉消息那条状态:慢网络下露「正在加载消息…」,失败露「加载失败:<原因> + 重试」。
+             和 #jumpLatest 一样是 #messages 的子元素(切会话时消息区会被清空,引用留在外面,
+             由 paintMsgState() 搬回末尾),默认 hidden —— 平时一个像素都不占。 -->
+        <div id="msgState" class="msgstate" hidden>
+          <span id="msgStateText"></span>
+          <button type="button" id="msRetry" class="chip" hidden>重试</button>
+        </div>
       </div>
       <div id="asks" hidden></div>
       <div id="inbox" hidden></div>

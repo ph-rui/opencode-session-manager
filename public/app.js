@@ -69,6 +69,9 @@ const store = {
   pickAt: -1, // 选择框当前高亮项(下标指向 pickShown)
   pickCurrent: undefined, // 「当前值」那一条的 key(照 TUI 的 DialogSelect 印一枚 ●)
   pickOnPick: null, // 选中回调
+  msgError: '', // 最近一次拉消息失败的原文(空 = 没在失败);画成 #messages 末尾那条状态行
+  msgLoading: false, // 「正在加载消息…」是不是真露出来了(慢到 MSG_LOADING_DELAY_MS 才露)
+  msgSeq: 0, // 拉消息的「代」号:切会话或新请求一来,旧的重试/在途响应就作废
 };
 
 const $ = (s) => document.querySelector(s);
@@ -133,6 +136,15 @@ async function api(path, opts) {
     const msg = (j && (j.message || j.error)) || 'HTTP ' + r.status;
     const err = new Error(msg);
     err.status = r.status;
+    throw err;
+  }
+  /* 正文只下到一半(手机上一个 12MB 的会话首页被掐断过就是这种)时 JSON.parse 会失败。
+   * 原来这里一声不响地返回 null,调用方的 `(j.data || [])` 于是把「没拿到」当成
+   * 「这个会话没有消息」,消息区就永远空着 —— 必须把两种情形分开:抛出去,让调用方重试/报错。
+   * 空正文(204 / 某些 POST)仍是合法的 null,不走这条路。 */
+  if (j === null && txt.trim() !== '') {
+    const err = new Error('响应不是合法 JSON(可能只下到一半)');
+    err.truncated = true;
     throw err;
   }
   return j;
@@ -1240,6 +1252,10 @@ function clearSelection() {
    * 还没回来之前它仍带着上一个会话的游标。 */
   store.msgOlderCursor = null;
   $('#older').hidden = true;
+  store.msgError = ''; // 没选中会话:失败提示也一并撤掉(否则它会跟着下一个会话)
+  store.msgSeq++; // 在途的响应与重试就地作废
+  setMsgLoading(false);
+  paintMsgState();
   updateJumpLatest(); // 没选中会话了 → 收起来
   $('#chatTitle').textContent = '未选择会话';
   $('#chatMeta').textContent = '';
@@ -1438,6 +1454,65 @@ function setupJumpLatest() {
   updateJumpLatest();
 }
 
+/* --------- 消息区末尾那条状态行(正在加载 / 加载失败 + 重试,§8.34)---------
+ * 和「跳到最新」同一个套路:#messages 在切会话与取消选中时会被 innerHTML 清空,
+ * 所以引用留在外面(paintMsgState 自己搬回末尾),节点本身写在 index.html 里。
+ *
+ * 两条纪律:
+ *   ① 只在这件事【真的值得说】时露面 —— 「正在加载消息…」要慢过 MSG_LOADING_DELAY_MS 才露,
+ *      不然本机那种 30ms 就回来的会话每次切都会闪一下;
+ *   ② 失败必须留下证据(原因 + 一个「重试」),宁可丑也不能像原来那样一片空白,
+ *      让人以为「这个会话本来就没内容」。 */
+let msgStateEl = null;
+let msgStateText = null;
+let msgRetryBtn = null;
+let msgLoadingTimer = null;
+
+function setMsgLoading(on) {
+  clearTimeout(msgLoadingTimer);
+  msgLoadingTimer = null;
+  if (!on) {
+    store.msgLoading = false;
+    paintMsgState(); // 这一下同时把上一次的失败话撤掉(成功收尾走的就是这里)
+    return;
+  }
+  if (store.msgError) {
+    store.msgError = ''; // 新的一次拉取开始了:上一次的失败话先撤掉,免得两种状态叠一起
+    paintMsgState();
+  }
+  if (store.msgLoading) return;
+  msgLoadingTimer = setTimeout(() => {
+    msgLoadingTimer = null;
+    store.msgLoading = true;
+    paintMsgState();
+  }, MSG_LOADING_DELAY_MS);
+}
+
+function paintMsgState() {
+  const box = $('#messages');
+  if (!box || !msgStateEl) return; // 老测试页没有这个节点 —— 什么都不做
+  if (msgStateEl.parentElement !== box) box.appendChild(msgStateEl);
+  const bad = !!store.msgError;
+  const show = bad || store.msgLoading;
+  msgStateEl.classList.toggle('bad', bad);
+  msgStateEl.hidden = !show;
+  if (!show) return;
+  msgStateText.textContent = bad ? '加载失败:' + store.msgError : '正在加载消息…';
+  if (msgRetryBtn) msgRetryBtn.hidden = !bad;
+}
+
+function setupMsgState() {
+  msgStateEl = $('#msgState');
+  if (!msgStateEl) return;
+  msgStateText = $('#msgStateText');
+  msgRetryBtn = $('#msRetry');
+  if (msgRetryBtn && msgRetryBtn.dataset.wired !== '1') {
+    msgRetryBtn.dataset.wired = '1';
+    msgRetryBtn.addEventListener('click', () => loadMessages({ older: false }));
+  }
+  paintMsgState();
+}
+
 /* --------- 顶栏筛选/排序/搜索的持久化(H 组 4)---------
  * 与 G 组的分工:URL hash 管「选中哪个会话」,localStorage 管「列表怎么筛」。
  * 启动时【先回填 store 与控件,再 loadSessions】—— 否则会先按默认值拉一次、
@@ -1552,6 +1627,10 @@ async function selectSession(id) {
   paintChatHeader(s);
   msgEls.clear();
   $('#messages').innerHTML = '';
+  store.msgError = ''; // 切会话了:上一个会话的失败/加载状态都不该跟过来
+  store.msgSeq++; // 这一下就把在途的响应与重试作废(下面 loadMessages 还会再记一代)
+  setMsgLoading(false);
+  paintMsgState();
   renderAsks();
   renderInbox();
   renderChatOps();
@@ -1603,6 +1682,17 @@ function refreshSessionInfo(id) {
     });
 }
 
+/* 拉消息失败不许一声不响(§8.34):手机上一个 12MB 的会话首页(工具 part 里塞了整份文件/截图)
+ * 可能下几十秒,也可能下到一半被掐断。原来 api() 抛出 → 这里的 catch 一吞,消息区就永远是空的,
+ * 而标题、状态、操作行全都好好的 —— 用户看到的就是「打开这个会话一片空白」,等到别的机器上
+ * 回了句话、事件把对账重新拉起来,内容才忽然出现。这里改成:自动重试两次(退避 0.8s / 2.5s),
+ * 还不行才把原因画到消息区末尾,带一个「重试」按钮。 */
+const MSG_TRIES = 3; // 首发 + 2 次重试
+const MSG_RETRY_MS = [800, 2500];
+const MSG_LOADING_DELAY_MS = 250; // 这么快就回来了就不闪「正在加载消息…」这一下
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function loadMessages(opts) {
   opts = opts || {};
   const id = store.selected;
@@ -1616,19 +1706,39 @@ async function loadMessages(opts) {
     q.set('cursor', store.msgOlderCursor);
   } else {
     q.set('order', 'desc');
+    store.msgError = '';
   }
-  try {
-    const j = await api('/api/session/' + encodeURIComponent(id) + '/message?' + q.toString());
-    /* 等待期间可能已经切走了(SSE 事件驱动的防抖对账正好压在一次切换上):这份响应属于
-     * 上一个会话,写进去就会让新会话显示别人的消息,连头部那枚上下文用量也跟着错。
-     * store.messages 只有当前会话一份,所以这里按 id 复查一次再写。 */
-    if (store.selected !== id) return;
-    (j.data || []).forEach((m) => store.messages.set(m.id, m));
-    store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
-    pruneLive();
-    renderMessages();
-  } catch (e) {
-    console.error('loadMessages', e);
+  setMsgLoading(true);
+  const url = '/api/session/' + encodeURIComponent(id) + '/message?' + q.toString();
+  const seq = ++store.msgSeq; // 这一代请求;再有别的请求进来,这一代(含它的重试)就地作废
+  for (let attempt = 0; attempt < MSG_TRIES; attempt++) {
+    if (attempt) {
+      await sleep(MSG_RETRY_MS[attempt - 1] || 2500);
+      if (seq !== store.msgSeq || store.selected !== id) return;
+    }
+    try {
+      const j = await api(url);
+      /* 等待期间可能已经切走了(SSE 事件驱动的防抖对账正好压在一次切换上):这份响应属于
+       * 上一个会话,写进去就会让新会话显示别人的消息,连头部那枚上下文用量也跟着错。
+       * store.messages 只有当前会话一份,所以这里按 id 复查一次再写。 */
+      if (seq !== store.msgSeq || store.selected !== id) return;
+      // 「空数组」和「没拿到」必须分得开:响应不成形就当失败去重试,别画成「这个会话没有消息」
+      if (!j || !Array.isArray(j.data)) throw new Error('响应里没有消息数组');
+      j.data.forEach((m) => store.messages.set(m.id, m));
+      store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
+      pruneLive();
+      store.msgError = '';
+      setMsgLoading(false);
+      renderMessages();
+      return;
+    } catch (e) {
+      console.error('loadMessages', e);
+      if (seq !== store.msgSeq || store.selected !== id) return;
+      if (attempt < MSG_TRIES - 1) continue;
+      store.msgError = (e && e.message) || String(e);
+      setMsgLoading(false);
+      paintMsgState(); // 空着也要把话说清楚:加载失败:<原因> + 一个「重试」
+    }
   }
 }
 
@@ -6217,6 +6327,7 @@ function init() {
   setupHistoryNav();
   setupScrollMemory();
   setupJumpLatest(); // 一键回底(TUI 的 Jump to latest / End)
+  setupMsgState(); // 拉消息的状态行(正在加载 / 加载失败 + 重试)
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)
