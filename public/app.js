@@ -20,10 +20,16 @@ const store = {
   msgOlderCursor: null,
   pending: false,
   running: false,
-  // 消息区「贴着底没有」的缓存。atBottom() 读 scrollHeight,文档一脏就强制整篇重排版
-  // (实测 100 条消息 / 7800 节点:干净时 0.95ms,脏了 23~29ms)。滚动事件、每次
-  // renderMessages 收尾都会刷新它,增量重绘只认这个缓存,不再自己去读。
+  // 消息区【跟随中】的状态 —— 含义是「跟着最新输出走」这个意图,不是一次几何测量。
+  // 只有【用户自己往上滚】才关掉它;内容变长、容器变矮都不算(见 updateJumpLatest)。
+  // atBottom() 读 scrollHeight,文档一脏就强制整篇重排版(实测 100 条消息 / 7800 节点:
+  // 干净时 0.95ms,脏了 23~29ms)。滚动事件、每次 renderMessages 收尾都会刷新它,
+  // 增量重绘只认这个缓存,不再自己去读。
   nearBottom: false,
+  // 「上一次看到的 scrollTop」。光看离底多远分不出「用户往上滚了」和「容器变矮 / 内容
+  // 变长了」—— 后两者也会让离底距离变大,却完全不该关掉跟随。两次 scrollTop 一比,
+  // 只有变小才是用户自己往回翻。只在滚动事件与贴底动作里刷(见 pinBottom)。
+  lastTop: 0,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
   active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
   // 子会话表:子会话ID -> 父会话ID。提示栏的「N subagents」用它数「正在跑的子会话」,
@@ -260,7 +266,7 @@ function paintCompactBody(sid) {
   host.dataset.cbodyLen = String(body.length);
   // 只有本来就贴着底时才跟一下 —— 贴底时这一次读已经在上面那次 innerHTML 之后欠下了,
   // 省不掉;不贴底就一次布局都不读。
-  if (store.nearBottom) box.scrollTop = box.scrollHeight;
+  if (store.nearBottom) pinBottom(box);
   return true;
 }
 
@@ -1227,7 +1233,10 @@ async function restoreFromHash() {
   const id = hashToID(location.hash);
   if (!id) return;
   const saved = savedAnchor(id); // 有存档就回到读到的位置;没有就按老样子跳到底部
-  store.restoreScroll = { sid: id, anchor: saved };
+  // 只在【真有存档】时才塞 pending:塞一个 anchor 为 null 的进去会拦住 selectSession 里的
+  // forceBottom,于是「没有存档」变成停在最上面 —— 长会话一打开就得自己点一次「跳到最新」,
+  // 与这里的本意正好相反。
+  if (saved) store.restoreScroll = { sid: id, anchor: saved };
   await selectSession(id);
 }
 
@@ -1328,25 +1337,51 @@ const BOTTOM_SLACK = 80;
  * 清空之后由 updateJumpLatest() 自己搬回滚口末尾(别去每个清空点各补一行,那种补法迟早漏一个)。 */
 let jumpBtn = null;
 
+/* 纯几何:离底 < BOTTOM_SLACK 就算「停在最底部」。刻意不看任何全局状态 ——
+ * 一边是离线可断言(测试直接喂一个 {scrollHeight, scrollTop, clientHeight}),一边是
+ * 「容器变矮把离底距离撑大」这件事必须由 updateJumpLatest() 去解释,不能塞在这里。 */
 function atBottom(box) {
   return box.scrollHeight - box.scrollTop - box.clientHeight < BOTTOM_SLACK;
 }
 
-/* 顺带刷新 store.nearBottom(增量重绘的唯一口径)。
- * atB 是调用方已经算好的「贴不贴底」;滚动事件会把 Event 对象塞进来,所以只认 boolean。 */
+/* 「贴底」这个动作只有一个实现:滚到底,并把这次看到的 scrollTop 记下来 ——
+ * 下次滚动才分得清「用户自己往上滚」和「内容长长 / 容器变矮」。 */
+function pinBottom(box) {
+  if (!box) return;
+  box.scrollTop = box.scrollHeight;
+  store.lastTop = box.scrollTop;
+}
+
+/* store.nearBottom(跟随中?)+ 「跳到最新」按钮显隐的唯一写点。atB 是 boolean 时调用方
+ * 已经量好了(测试 / 位置已知),其余情况(滚动事件塞进来的是 Event)现量一次。
+ *
+ * 现量这一次不能把 atBottom() 的结果直接当结论:容器变矮(#状态条出现、底板展开、
+ * #asks 弹出、软键盘顶起)与内容变长都会让「离底距离」变大,而那【不是】用户往上滚 ——
+ * 直接采信就会把跟随关掉,表现成「明明一直贴在底,忽然不跟了,得点一下跳到最新」。
+ * 所以只认两条:离底够近 → 跟随;scrollTop 比上次记下的变小了 → 用户自己往上滚了,让路。
+ * 其余(内容变长 / 容器变矮)维持原样,跟随中就把底部重新贴住。 */
 function updateJumpLatest(atB) {
   const box = $('#messages');
-  if (box) store.nearBottom = typeof atB === 'boolean' ? atB : atBottom(box);
-  if (!jumpBtn || !box) return; // 老测试页没有这个按钮 —— 什么都不做
+  if (box) {
+    if (typeof atB === 'boolean') {
+      store.nearBottom = atB;
+    } else {
+      const top = box.scrollTop;
+      if (atBottom(box)) store.nearBottom = true;
+      else if (top < store.lastTop - 1) store.nearBottom = false;
+      store.lastTop = top;
+    }
+  }
+  if (!jumpBtn || !box) return store.nearBottom; // 老测试页没有这个按钮 —— 什么都不做
   if (jumpBtn.parentElement !== box) box.appendChild(jumpBtn); // 被清空过 → 搬回末尾
   // 没选中会话、或者已经停在底部 → 收起来(它正是「不在底部」时才该出现的东西)
   jumpBtn.hidden = !store.selected || store.nearBottom;
+  return store.nearBottom;
 }
 
 function jumpToLatest() {
-  const box = $('#messages');
-  if (box) box.scrollTop = box.scrollHeight;
-  updateJumpLatest();
+  pinBottom($('#messages'));
+  updateJumpLatest(true); // 刚贴的底,位置已知,不用再量
 }
 
 function setupJumpLatest() {
@@ -1362,6 +1397,14 @@ function setupJumpLatest() {
   btn.addEventListener('click', jumpToLatest);
   // 手滚 / 惯性 / 拖滚动条都走这一条。不节流:一次减法加一次 hidden 赋值
   box.addEventListener('scroll', updateJumpLatest, { passive: true });
+  // 容器变矮(状态条出现 / 底板展开 / #asks 弹出 / 软键盘顶起)会把底部顶出可视区 ——
+  // 跟随状态没变,可是得【立刻】重新贴住,不能等下一次渲染(一条消息都不再来的话就永远贴着不动了)。
+  // 只在跟随时贴;用户往上翻着的时候一动不动。
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+      if (store.nearBottom) pinBottom(box);
+    }).observe(box);
+  }
   updateJumpLatest();
 }
 
@@ -1466,6 +1509,7 @@ async function selectSession(id) {
   store.msgOlderCursor = null;
   store.pending = false;
   store.forceBottom = !rs;
+  store.lastTop = 0; // 滚口要清空,上个会话的 scrollTop 不能拿来跟新会话比(会被当成「用户往上滚」)
   clearAttachments(); // 待发送附件属于上一个会话,不带过去(H 组 6)
   closeMentions();
   closeCommands();
@@ -2319,7 +2363,9 @@ function renderMessages() {
   const force = store.forceBottom;
   store.forceBottom = false;
   const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底
-  const nearBottom = !pending && (force || atBottom(box));
+  // 量一次「跟不跟随」。注意不能拿 atBottom(box) 的结果当结论 —— 容器刚变矮(状态条 /
+  // 底板展开 / #asks / 软键盘)也会让离底变远,而那不是用户往上滚(见 updateJumpLatest)。
+  const nearBottom = !pending && (force || updateJumpLatest());
 
   // 删除已不存在的消息(live 缓冲里的消息不算「不存在」)
   for (const [id, rec] of msgEls) {
@@ -2375,7 +2421,7 @@ function renderMessages() {
     applyScrollAnchor(pending);
     atB = atBottom(box);
   } else if (nearBottom) {
-    box.scrollTop = box.scrollHeight;
+    pinBottom(box);
     atB = true;
   } else if (!pending) {
     atB = false; // 没锚点要还原、也没跟底 → 就是不在底部
@@ -4960,7 +5006,7 @@ function paintLiveDelta() {
     return;
   }
   if (changed) {
-    if (nearBottom) box.scrollTop = box.scrollHeight;
+    if (nearBottom) pinBottom(box);
     updateJumpLatest(nearBottom); // 增量把内容顶长了,按钮的显隐要跟着重算(位置已知道,不再量)
     updateChatStatus();
   }

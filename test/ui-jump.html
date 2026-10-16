@@ -209,6 +209,60 @@
       T('就在底部时新内容进来 → 自动跟随(仍在底部)', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
       T('自动跟随时按钮不冒出来', btn.hidden === true);
 
+      /* ============ 4b. 什么才算「用户往上滚」 ============
+       * 「贴不贴底」是【用户意图】,不是一次几何测量。容器变矮(状态条出现 / 底板展开 /
+       * #asks 弹出 / 软键盘顶起)与内容变长都会把「离底还有多远」撑大,可那都不是用户
+       * 往回翻 —— 老写法直接采信那一次几何读数,于是「明明一直贴在底,忽然就不跟了,
+       * 得点一下跳到最新」。判据只认两条:离底够近,或者 scrollTop 比上次记下的变小了。 */
+      pinBottom(box);
+      T('pinBottom() 记下贴底时的 scrollTop(下次才分得清用户往上滚)',
+        Math.abs(box.scrollTop - maxTop()) < 2 && store.lastTop === box.scrollTop,
+        box.scrollTop + '/' + maxTop() + '/' + store.lastTop);
+
+      var ch0 = box.clientHeight;
+      box.style.maxHeight = Math.max(60, ch0 - 160) + 'px'; // 等价于容器变矮 160px
+      T('(前置)容器确实矮了、离底也确实过了 BOTTOM_SLACK',
+        box.clientHeight <= ch0 - 160 &&
+          box.scrollHeight - box.scrollTop - box.clientHeight > BOTTOM_SLACK,
+        box.clientHeight + '/' + (box.scrollHeight - box.scrollTop - box.clientHeight));
+      updateJumpLatest();
+      T('容器变矮(scrollTop 没往回走)→ 不算用户往上滚,跟随保持', store.nearBottom === true && btn.hidden === true);
+
+      box.scrollTop = Math.max(0, box.scrollTop - 200);
+      updateJumpLatest();
+      T('scrollTop 往回走了 200px → 这就是用户往上滚,让路', store.nearBottom === false && btn.hidden === false);
+      box.style.maxHeight = '';
+      box.scrollTop = box.scrollHeight;
+      await tick();
+      T('(复位)回到底部 → 跟随回来', store.nearBottom === true && btn.hidden === true,
+        store.nearBottom + '/' + btn.hidden);
+
+      /* 容器变矮那一刻就要把底重新贴住(ResizeObserver),别等下一次渲染 ——
+       * 一条消息都不再来的话,底部就永远被顶出可视区了。 */
+      box.style.maxHeight = Math.max(60, box.clientHeight - 160) + 'px';
+      var pinnedAfterResize = false;
+      for (var ri = 0; ri < 8 && !pinnedAfterResize; ri++) {
+        await tick();
+        pinnedAfterResize = maxTop() - box.scrollTop < 2;
+      }
+      T('容器变矮后底部被当场重新贴住(不用等下一次渲染)', pinnedAfterResize, box.scrollTop + '/' + maxTop());
+      box.style.maxHeight = '';
+      box.scrollTop = box.scrollHeight;
+      await tick();
+
+      /* 往上翻着的时候,容器变矮也不许把人拽走 */
+      box.scrollTop = Math.max(0, maxTop() - 400);
+      await tick();
+      var heldAt = box.scrollTop;
+      T('(前置)此刻已让路', store.nearBottom === false);
+      box.style.maxHeight = Math.max(60, box.clientHeight - 160) + 'px';
+      await tick();
+      T('让路期间容器变矮 → 一动不动', box.scrollTop === heldAt, box.scrollTop + ' vs ' + heldAt);
+      box.style.maxHeight = '';
+      box.scrollTop = box.scrollHeight;
+      await tick();
+      T('(复位)回到底部', maxTop() - box.scrollTop < 2 && store.nearBottom === true);
+
       /* 增量重绘(paintLiveDelta / paintCompactBody)只认 store.nearBottom 缓存,不再每个
        * token delta 读一次 scrollHeight —— 文档刚被改脏时那次读是整篇强制重排(实测
        * 7800 节点 23~29ms,干净时 0.95ms)。缓存的唯一写点就是 updateJumpLatest()。 */

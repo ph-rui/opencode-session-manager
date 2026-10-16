@@ -1045,20 +1045,44 @@ else
 fi
 RENDER_FN_O=$(printf '%s' "$APPJS" | awk '/^function renderMessages\(\)/{f=1} f{print} f&&/^\}$/{exit}')
 DELTA_FN_O=$(printf '%s' "$APPJS" | awk '/^function paintLiveDelta\(/{f=1} f{print} f&&/^\}$/{exit}')
-# 整表 renderMessages() 里读一次 atBottom()(该量还得量);增量重绘(paintLiveDelta/
-# paintCompactBody)只读 store.nearBottom —— 文档刚改完就去读 scrollHeight 会把 7800
-# 个节点整篇重排(实测脏树 23~29ms,干净 0.95ms),每个 token delta 都摊一次太贵。
-if has "$RENDER_FN_O" 'atBottom(box)' && has "$DELTA_FN_O" 'store.nearBottom'; then
+UPD_FN_O=$(printf '%s' "$APPJS" | awk '/^function updateJumpLatest\(/{f=1} f{print} f&&/^\}$/{exit}')
+# 整表 renderMessages() 与增量重绘都汇到 updateJumpLatest() 里量一次;增量重绘
+# (paintLiveDelta/paintCompactBody)只读 store.nearBottom —— 文档刚改完就去读
+# scrollHeight 会把 7800 个节点整篇重排(实测脏树 23~29ms,干净 0.95ms),每个 token delta
+# 都摊一次太贵。判据(atBottom + 只有用户往上滚才关掉)也只有这一处。
+if has "$UPD_FN_O" 'atBottom(box)' && has "$DELTA_FN_O" 'store.nearBottom'; then
   echo "PASS: 自动跟随与按钮共用 atBottom()(增量重绘只读缓存,不再各写一个 80)"; pass=$((pass + 1))
 else
   echo "FAIL: 自动跟随或按钮没走 atBottom()"; fail=$((fail + 1))
+fi
+# 「贴不贴底」= 用户意图,不是一次几何读数:容器变矮(状态条 / 底板展开 / #asks / 软键盘)
+# 与内容变长都会把「离底还有多远」撑大,直接采信那一次读数就会把跟随关掉 —— 表现就是
+# 「明明一直贴在底,忽然不跟了,动不动就要点一下跳到最新」。
+if has "$UPD_FN_O" 'store.lastTop' && has "$UPD_FN_O" 'top < store.lastTop - 1'; then
+  echo "PASS: 只有 scrollTop 往回走(用户自己往上滚)才关掉跟随"; pass=$((pass + 1))
+else
+  echo "FAIL: 跟随又被一次几何读数直接决定了"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function pinBottom(box)' && has "$APPJS" 'store.lastTop = box.scrollTop;'; then
+  echo "PASS: 「贴底」只有 pinBottom() 一个实现(顺带记下这次看到的 scrollTop)"; pass=$((pass + 1))
+else
+  echo "FAIL: 贴底动作散在多处,lastTop 会跟着漂"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'new ResizeObserver(' && has "$APPJS" 'if (store.nearBottom) pinBottom(box);'; then
+  echo "PASS: 容器变矮(状态条/底板展开/#asks/软键盘)当场重新贴底,不等下一次渲染"; pass=$((pass + 1))
+else
+  echo "FAIL: 容器变矮后要等下一次渲染才贴回去(没消息再来就永远差一截)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'if (saved) store.restoreScroll = { sid: id, anchor: saved };'; then
+  echo "PASS: 深链里没有存档时不再塞 pending(不再拦住 forceBottom 停在最上面)"; pass=$((pass + 1))
+else
+  echo "FAIL: 没有存档的深链又会被 pending 拦成「停在最上面」"; fail=$((fail + 1))
 fi
 if has "$RENDER_FN_O" 'updateJumpLatest(' && has "$DELTA_FN_O" 'updateJumpLatest('; then
   echo "PASS: 内容变长之后按钮的显隐会跟着重算"; pass=$((pass + 1))
 else
   echo "FAIL: 渲染之后没重算按钮"; fail=$((fail + 1))
 fi
-UPD_FN_O=$(printf '%s' "$APPJS" | awk '/^function updateJumpLatest\(/{f=1} f{print} f&&/^\}$/{exit}')
 if has "$UPD_FN_O" 'jumpBtn.parentElement !== box'; then
   echo "PASS: #messages 被清空(切会话/取消选中)后按钮自己搬回来"; pass=$((pass + 1))
 else

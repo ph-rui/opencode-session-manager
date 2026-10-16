@@ -540,6 +540,21 @@
       T('短会话不挂 cvmany(不留「估值占位撑出假滚动条」的机会)',
         box.classList.contains('cvmany') === false);
 
+      /* 没有存档【且是长会话】:得跳到底部,而不是停在最上面。
+       * 老写法把「没有存档」也塞成待还原的锚点(anchor 为 null),那会拦住 selectSession 里的
+       * forceBottom —— 于是打开就停在最上面,还得自己点一次「跳到最新」。 */
+      sessionStorage.clear();
+      location.hash = '#ses_long';
+      store.selected = null;
+      store.messages.clear();
+      msgEls.clear();
+      box.innerHTML = '';
+      await restoreFromHash();
+      T('没有存档的长会话刷新后直接到底部(而不是停在最上面)',
+        box.scrollTop + box.clientHeight >= box.scrollHeight - 2,
+        box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight);
+      T('并且是「跟随中」(新内容会自动跟)', store.nearBottom === true, store.nearBottom);
+
       /* 存档上限:只留最近 20 个会话 */
       for (var pi = 0; pi < 25; pi++) { store.selected = 'ses_p' + pi; saveScrollAnchor(); }
       var pkeys = Object.keys(JSON.parse(sessionStorage.getItem('ocs.scroll') || '{}'));
