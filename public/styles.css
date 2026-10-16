@@ -705,6 +705,25 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 /* --------------------------- 待发送队列(inbox) --------------------------- */
 
 #inbox { border-top: 1px solid var(--border); background: #f7f9ff; max-height: 26vh; overflow: auto; }
+/* 行头照 TUI 的 QueuedPromptDock:一条 `N queued · 下一条` 的档,点开才是逐条那一列。
+   计数那格用正文色加粗、后面的正文灰掉并省略号截断(终端里是 truncate)。 */
+.ibdock > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  padding: 5px 12px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+.ibdock > summary::-webkit-details-marker { display: none; }
+.ibdock > summary::before { content: '▸ '; }
+.ibdock[open] > summary::before { content: '▾ '; }
+.ibCount { color: var(--fg); font-weight: 700; }
+.ibNext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iblist { border-top: 1px solid #e6ecf7; }
 .inbox-item {
   display: flex;
   align-items: center;

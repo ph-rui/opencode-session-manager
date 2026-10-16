@@ -263,6 +263,31 @@
       T('插话项按钮为「改为排队」',
         qa('#inbox .inbox-item')[1].querySelector('[data-inbox-op="toggle"]').textContent === '改为排队');
 
+      /* 收成一条 dock(照 TUI 的 QueuedPromptDock,§8.31):行头 `N queued · 下一条`,逐条那列点开才见 */
+      T('待发送队列收在一条 details 里(默认收起)', !!q('#inbox .ibdock') && q('#inbox .ibdock').open === false &&
+        q('#inbox .ibdock').getAttribute('data-def') === '0');
+      T('行头照 TUI:`N queued · 下一条的正文`',
+        q('#inbox .ibCount').textContent === '2 queued' && q('#inbox .ibNext').textContent === ' · 排队消息',
+        q('#inbox .ibCount').textContent + '|' + q('#inbox .ibNext').textContent);
+      T('逐条那列还在(收在 details 里面,一行都没少)',
+        qa('#inbox .ibdock .iblist .inbox-item').length === 2 &&
+        !!q('#inbox .ibdock .iblist .inbox-item [data-inbox-op="cancel"]'));
+      q('#inbox .ibdock').open = true;
+      renderInbox();
+      T('展开态跨重画留住(队列一动不折回去)', q('#inbox .ibdock').open === true);
+      store.inbox.set(SESSION.id, [
+        { id: 'i5', sessionID: 'ses_t', type: 'user', delivery: 'queue', payload: { text: '第一行\n第二行' } },
+      ]);
+      renderInbox();
+      T('行头里换行压成空格(照 TUI 的 replaceAll("\\n", " "))',
+        q('#inbox .ibNext').textContent === ' · 第一行 第二行', q('#inbox .ibNext').textContent);
+      T('只有控制项(没有文本)时行头只留计数',
+        (function () {
+          store.inbox.set(SESSION.id, [{ id: 'i6', sessionID: 'ses_t', type: 'move', payload: {} }]);
+          renderInbox();
+          return q('#inbox .ibCount').textContent === '1 queued' && q('#inbox .ibNext') === null;
+        })());
+
       /* move 类型条目的文本取自 payload.location.directory */
       store.inbox.set(SESSION.id, [
         { id: 'i4', sessionID: 'ses_t', type: 'move', delivery: 'queue', payload: { location: { directory: '/tmp/oc-x' } } },

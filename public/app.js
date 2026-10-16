@@ -638,12 +638,30 @@ function renderInbox() {
   const items = ((store.selected && store.inbox.get(store.selected)) || []).filter(
     (it) => it && it.type !== 'synthetic'
   );
+  // 现在整块收在一条 details 里,而这份列表每次事件都整块重画 —— 展开态得自己记住,
+  // 否则待发送项一动(排队→插话、取消一条)就折回去。
+  const wasOpen = !!(box.querySelector('.ibdock') && box.querySelector('.ibdock').open);
   box.innerHTML = '';
   if (!items.length) {
     box.hidden = true;
     return;
   }
   box.hidden = false;
+  // 行头照 TUI 的 QueuedPromptDock(一条 `N queued · 下一条的正文`,换行压成空格),
+  // 点开才是逐条那一列 —— 面板没有 TUI 那个「Queued prompts」对话框,拿 details 顶。
+  // 计数:面板这边数的是整张待发送表(排队 / 插话 / 压缩 / 移动都在里面),
+  // 只数 delivery=queue 的话行数与展开后对不上。
+  const firstText = inboxText(items[0]).replace(/\s+/g, ' ').trim();
+  const dock = document.createElement('details');
+  dock.className = 'ibdock';
+  dock.setAttribute('data-def', '0');
+  const sum = document.createElement('summary');
+  sum.innerHTML =
+    '<span class="ibCount">' + items.length + ' queued</span>' +
+    (firstText ? '<span class="ibNext"> · ' + esc(firstText) + '</span>' : '');
+  dock.appendChild(sum);
+  const list = document.createElement('div');
+  list.className = 'iblist';
   for (const it of items) {
     const isSteer = it.delivery === 'steer';
     const el = document.createElement('div');
@@ -664,8 +682,11 @@ function renderInbox() {
       setInboxDelivery(it, isSteer ? 'queue' : 'steer', el)
     );
     el.querySelector('[data-inbox-op="cancel"]').addEventListener('click', () => cancelInbox(it, el));
-    box.appendChild(el);
+    list.appendChild(el);
   }
+  dock.appendChild(list);
+  if (wasOpen) dock.open = true;
+  box.appendChild(dock);
 }
 
 async function setInboxDelivery(it, mode, el) {

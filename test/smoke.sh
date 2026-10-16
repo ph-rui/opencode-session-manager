@@ -1528,6 +1528,24 @@ else
   echo "FAIL: .meta 还是自己印一份 tokens"; fail=$((fail + 1))
 fi
 
+# ---- R8 组:待发送队列收一条(照 TUI 的 QueuedPromptDock,§8.31)----
+if has "$APPJS" "dock.className = 'ibdock'" && has "$APPJS" "' queued</span>'" &&
+   has "$APPJS" "replace(/\s+/g, ' ').trim()"; then
+  echo "PASS: 待发送队列收一条「N queued · 下一条」(换行压成空格,照 TUI)"; pass=$((pass + 1))
+else
+  echo "FAIL: 待发送队列的行头没照 TUI 收成一条"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const wasOpen = !!(box.querySelector(' && has "$APPJS" 'if (wasOpen) dock.open = true;'; then
+  echo "PASS: 展开态跨重画留住(队列一动不折回去)"; pass=$((pass + 1))
+else
+  echo "FAIL: 整块重画会把展开态丢掉"; fail=$((fail + 1))
+fi
+if has "$CSS" '.ibdock > summary {' && has "$CSS" '.ibCount {' && has "$CSS" '.ibNext { flex: 1;'; then
+  echo "PASS: dock 的样式在(计数加粗、正文省略号截断)"; pass=$((pass + 1))
+else
+  echo "FAIL: dock 的样式缺"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
