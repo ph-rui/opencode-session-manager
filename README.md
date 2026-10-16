@@ -420,7 +420,8 @@ OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
 
 ## 尚未实现(v2+ 剩余项)
 
-无。
+- **跨消息并组**:TUI 的探索组能横跨相邻的助手消息 —— 它按「行」投影(`grouping/session.ts` 的 `append`:新 part 的 `path` 与上一行同类就并进去,而助手消息**不插 `message` 行**,中间几步只要 `finish === "tool-calls"`、没落 footer,两边的 `read`/`grep` 就并成一个组)。面板是**按「消息」渲染**(`msgEls` 以消息 id 为键,`content-visibility` 离屏跳渲染与滚动锚点也挂在这一层),照做要先改成按行投影,牵动增量渲染 / 流式缓冲 / 离屏 / 锚点四条路;而实测(60 个会话的窗口)只有 **8 处**会跨消息,占探索分组的 **2.9%**,收益与风险不成比例 —— **决定不做**,理由写在移动端设计 §9 的取舍表里。当前行为:跨消息的连续探索工具会分成两段,各印各的「Explored:」。
+- 另有一处「看着像没做、其实不用做」:TUI 的 `SessionMessageView` 里有「`idle` 带 `error` → `Error: …`」(`ExecutionError`)这个分支,但它的行式视图(`reduceSessionRows`)对 `idle` **一行都不 push**,那个分支在行式视图里到不了;所以面板把 `idle` 整条不出行**是一致的**。会话真报错时两边都走助手脚注那条路(`Error: …` / `⚠ Retrying in …`),面板 §8.27 已对齐。
 
 工具卡片上明确不做的:并排 / split 视图、语法高亮(`config.diffs.view` / `filetype` / `syntaxStyle`)、
 字符级行内高亮(`diffHighlightAdded` / `Removed`)、会话级「变更」面板与 revert。

@@ -1647,6 +1647,7 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 | 不出行的两种 | 新 `msgHidden()`；`renderMessages` 里 `if (!L && msgHidden(view)) continue` —— 连 DOM 带 `msgEls` 记录一起不建。这修掉一个现存外观问题：`idle` 原来会渲染成空壳，实测 `#messages .msg.idle` 是 **349×2、左边一条 `rgb(220,220,220)` 灰边**（`.msg` 的 `border-left` + `padding`），加 22px 下边距，一条会话里几十条就是几十处空隙 |
 | 签名 | `model-switched` 那行的模型名要查表，所以它也进 `fpExtra`（与 §8.27 的助手脚注同一个坑）。**实拍第一版就抓到了**：模型表晚到一步时那行永远停在 `Switched model to company/deepseek-v4-flash`，而 `store.modelIndex` 里明明有 `company/deepseek-v4-flash → DeepSeek V4 Flash` |
 | `shell`（消息种类） | 面板这一支在 §8.22 早就照 `ShellDisplay` 画好了，这轮不动 |
+| `idle` 带 `error` | **不做**：`SessionMessageView` 里确实有「`idle` 带 `error` → `Error: …`」这个分支（`ExecutionError`，paddingLeft 3，error 色），但它的行式视图 `reduceSessionRows`（`rows.ts:379`）对 `idle` 是 `flushTurn(rows)` 之后**直接 return、一行都不 push**，所以那个分支在行式视图里到不了（只有 `SessionMessageView` 被"行"驱动，见 `index.tsx:1576`）。面板把 `idle` 整条不出行**反而与 TUI 一致**；会话真报错时两边都走助手脚注那条路（§8.27 的 `Error: …` / `⚠ Retrying in …`）|
 
 **验证**：`footer-audit.js` 探针加了 `minor` 一栏（逐行 dump）+ `idleN`。三个会话实拍：
 
