@@ -1663,6 +1663,45 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.33 追加：选择框的三个细节照 TUI 的 DialogSelect
+
+**起因**：清单第 7 项「对话框 / 状态条细节」。**状态条那一半早先几轮已经落地**（`#promptFooter`
+五格、`#progress` 那句 `esc interrupt`、`#cmdHint` 的桌面/手机两档），这一轮只补**选择框**
+（`/sessions` `/models` `/agents` 共用的那个 `#dlgPick`）与 TUI 的 `DialogSelect` 之间剩下的三处差。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/ui/dialog-select.tsx`，dev 分支）：
+
+| 点 | TUI 做法 | 出处 |
+|---|---|---|
+| 「当前值」那一条 | 行首单独一格印一枚 `●`（新设计档实验开着时是 `▪`；`props.current && !props.gutter` 才印）。**高亮（`active`）与它是两回事** —— 高亮是光标位置、会跟着 `↑`/`↓` 走，`●` 钉在当前值那条上不动 | `DialogSelectRow` |
+| 缩进对齐 | 有 `●` 的行把左边距少算两格（`DIALOG_LIST_INSET - 3` vs `- 1`），于是**印不印 `●`，条目名都对齐** | 同上 |
+| 底部一行动作 + 键位 | `DialogFooter`：`actions.secondary`（`side !== "right"`）在左、`primary`（`side === "right"`）在右，每项是「动作名 + 键位」（键位从 keymap 里查） | `DialogSelect` 的 `legacyFooter`、`ui/dialog.tsx` |
+| 空态 | 分两种：**压根没有条目** → `emptyView ?? "No items available"`；**有过滤词但没匹配** → `noMatchView ?? "No results found"`。选哪条按 `renderFilter !== false && filter.length > 0` 判 —— **不是按「有没有条目」判** | `DialogSelect` 的 `grouped().length > 0` 分支 |
+| 分组标题 | `DialogSelectCategory`：默认档是 `hue.accent[200]` + **粗体**，每组上边留一行 | `DialogSelectCategory` |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| `●` 那格 | `renderPick` 里每条都印一个 `<span class="pi-cur">`，不是当前的印空串 —— 与 TUI「少算左边距」等价：**条目名恒对齐**。CSS `flex: none; width: 1em`，颜色 `--accent`。另外给那一条挂上 `.current` 类当抓手（TUI 里 `current` 是独立 prop，面板里得留个类，测试与后续样式才有得抓） |
+| `●` 的取值 | `openPick` 把 `opts.current` 存进 `store.pickCurrent`；`undefined` 就不印（窄屏那个「⋯」动作菜单没有「当前值」这回事）。判等用 `it.key === store.pickCurrent`，所以**变体选择框里「默认」那条（`key === ''`）也会正确钉上 `●`** |
+| 底部那行 | 新 `paintPickFoot(opts)`（在 `openPick` 末尾调），往 `#pickFoot` 里写两档文案：桌面 `↑↓ 选择 · Enter 选中 · Esc 关闭`、手机 `点条目选中 · 关闭按钮收起`；有过滤框时前面各多一句「打字过滤」。两档切换沿用面板既有的 `html.narrow` 套路，但**样式单写一份 `.dlgfoot`** —— `#cmdHint` 那三行规则带 id 前缀，`.hFull`/`.hNarrow` 在别处本来就不生效 |
+| 空态 | 判据照 TUI 用「**过滤词非空**」而不是「条目为空」：过滤框里有字却没结果 → 「没有匹配项」，否则 → 「没有可选项」 |
+| 分组标题 | 面板本来就是 `.pick-group`（`--muted` + 600 字重 + `--panel` 底），与 TUI 那套「accent 色 + 粗体 + 上边留白」是同一意图的不同配色，**不动**（这轮不改配色，见 §9 的取舍表） |
+
+**验证**：探针里直接调 `openPick`（`openPick` 是全局函数声明，探针能调）开一张
+`/models` 形状的列表，393×894 实拍（`/tmp/ocsm-probe/perf/footer-audit-393x894.png`）：
+`curN: 1`、`dots: "|●|"`（三条里只有中间那条印了 `●`）、底部读出手机那档
+`打字过滤 · 点条目选中 · 关闭按钮收起`。图里还能一并看到分组标题、当前模型那条的名字用 accent 色。
+
+**回归**：`smoke.sh` 新 R10 组 4 项；`ui-picks` 87 → **96**（9 项：`current` 那条带 `.current` 且印 `●`、
+每条都占着那格但只有 `current` 印出来、高亮挪开后 `●` 还在、没给 `current` 就不印、
+空态两种文案、底部两档文案与「有没有过滤框」的组合）；其余套件与 `e2e-*` 全 0 失败。
+（`ui-jump` 在某次批量连跑里报了 1 项失败，单独复跑 5 次全绿 —— 是那一套自己的时序抖动，
+与这轮改动无关：这轮没碰滚动锚点那条路。）
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
