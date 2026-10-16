@@ -1475,6 +1475,33 @@ else
   echo "FAIL: 窄屏没有「滚到顶自动拉更旧」,那一行却收起来了 —— 手机上就翻不了旧消息了"; fail=$((fail + 1))
 fi
 
+# ---- §8.43(用户「123 做」):手机上再瘦三处 —— 顶栏整条、标题下面那行、用量那格搬家 ----
+# ① 顶栏只在列表页有用(竖屏实测 111px = 屏高 12%),会话里整条收掉,回列表自己回来;
+# ② 标题下面那行「更新 1 天前 · 8e9e6e25」是排障用的,手机上也收掉;
+# ③ 用量那格(#ctxInfo)没丢 —— 由 syncCtxInfoHome() 搬进标题行末尾(同一个节点,不是副本)。
+if has "$CSS" 'html.narrow.view-chat #topbar { display: none; }'; then
+  echo "PASS: 手机上进了会话,顶栏整条收掉(回列表随 view-chat 摘掉自己回来,§8.43)"; pass=$((pass + 1))
+else
+  echo "FAIL: 会话里顶栏还占着那 111px(§8.43)"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #chatMeta { display: none; }'; then
+  echo "PASS: 手机上标题下面那行(更新 / 项目号)收掉(§8.43)"; pass=$((pass + 1))
+else
+  echo "FAIL: 手机上 #chatMeta 还占着那 17px(§8.43)"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow .chline #ctxInfo' &&
+   has "$APPJS" 'function syncCtxInfoHome()' &&
+   has "$APPJS" "document.documentElement.classList.contains('narrow')" &&
+   has "$APPJS" 'const home = narrow ? line : foot' && has "$APPJS" 'if (ctx.parentElement === home) return' &&
+   has "$APPJS" 'if (narrow) line.appendChild(ctx);' &&
+   has "$APPJS" 'syncCtxInfoHome(); // §8.43:用量那格的家跟着窄屏走' &&
+   has "$APPJS" 'syncCtxInfoHome(); // §8.43:深链直接进会话时也把用量那格摆对家' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'syncCtxInfoHome' | wc -l)" = 3 ]; then
+  echo "PASS: 用量那格跟着窄屏搬家(同一个节点、没有副本;窄屏判定源仍是 html.narrow,§8.43)"; pass=$((pass + 1))
+else
+  echo "FAIL: 用量那格没跟着窄屏搬家(或另造了个副本,§8.43)"; fail=$((fail + 1))
+fi
+
 # ---- R4 组:助手消息脚注(照 TUI 的 AssistantFooter,§8.27)----
 if has "$APPJS" 'function assistantFooterHtml(m, opts)' && has "$APPJS" 'class="afoot"' &&
    has "$APPJS" 'class="afAgent' && has "$APPJS" 'class="afModel"' &&

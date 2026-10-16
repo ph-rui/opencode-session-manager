@@ -984,6 +984,10 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 五路求和 + `limit.context`、`fmtSize`、窄屏文案、三个调用点 + 共用口径）；`ui-stream` 183 → 195
 （上下文用量 12 条，含压缩后重新起算、percent 可空、`step.ended` 立刻算出）；其余套件与 `e2e-*` 全 0 失败。
 
+**（后续）** §8.19 把这一格从头部挪到输入框下面的提示栏（照 TUI 的 `prompt.footer`）；§8.42 把提示栏在
+手机上整条收掉；**§8.43 又把它单独搬回标题行末尾**（同一个节点，见 §8.43）—— 转了一圈：手机上它最终
+还是在「一眼能看到」的头部，只是那行里只剩它一个。
+
 ### 8.16 追加：压缩/输出不再每个 delta 强制排版（性能）
 
 **起因**：用户——「上下文压缩时，不会崩溃无响应了，但还是有点卡顿，输出卡，我怀疑进度条一动的时候就卡」。
@@ -2147,7 +2151,7 @@ html.narrow #promptFooter { display: none; }
 | 为什么能整条收 | 智能体·模型在底板工具栏里就有(`#agentSel` / `#modelSel`,展开时就在眼前);工程目录在标题下面那行(`更新 1 天前 · 8e9e6e25`)里也交代了;`/ 命令` 只是个提示(输入框 placeholder 里也写着「/ 命令」,敲 `/` 就开面板) |
 | 桌面 | 一字未动:展开照旧整条在;收起时仍由 §8.40 那条 `#composer.collapsed ~ #promptFooter` 收 |
 | DOM | 一个节点没删,只是窄屏 `display:none`(与前几条同一套做法)。窄屏那一版的 `padding` 与 `html.narrow #promptFooter.armed …` 那几条从此够不着,留着当记录 |
-| 代价 | 手机上再也看不到**上下文用量**了(它只在那一行里)。要留就把它挪回标题下面那行(§8.15 最早就在那儿),等用户发话 |
+| 代价 | ~~手机上再也看不到**上下文用量**了(它只在那一行里)~~ —— **§8.43 已解决:那格搬到标题行末尾**(见 §8.43) |
 
 **验证**(真 Chromium 393×894,`/tmp/ocsm-probe/pw/pfooter.js`,截图
 `/tmp/ocsm-probe/perf/phone-expanded-footer.png`):
@@ -2164,6 +2168,54 @@ html.narrow #promptFooter { display: none; }
 项数不变,仍 99);`ui-mobile` 168 → **174**(新 C8f/C8g 窄屏整条不显示、D3c 桌面照旧 —— 两个
 视口各跑一遍;夹具里补上 `#promptFooter` 那一段)。其余套件全 0 失败。README 计数与提示栏那几段
 同步;§8.19 / §8.21 / §8.25 / §8.40 各加一句指过来。
+
+---
+
+### 8.43 手机上再瘦三处:顶栏整条 / 标题下面那行 / 用量那格搬家
+
+**起因**:用户——「可以-f push了;123做动手」。1、2、3 就是 §8.42 末尾我摆出来的三条待办:
+
+```
+1. 顶栏那两行,111px(占竖屏 12%):「筛选 / 品牌 / 已连接」+「搜索 / +新建」
+2. 标题下面那行,17px:「更新 1 天前 · 8e9e6e25」
+3. 上下文用量 —— §8.42 之后它跟着提示栏一起没了,想留就得挪个地方
+```
+
+**做法**(三条各自独立,窄屏判定源仍然只有 `html.narrow` 一处):
+
+| # | 收什么 | 怎么收 | 为什么能收 / 代价 |
+|---|---|---|---|
+| 1 | 顶栏整条 111px | `html.narrow.view-chat #topbar { display: none; }` | 那一行只在列表页有用(筛选 / 工程目录 / 排序 / 已归档 / 计数 / 导入 / 刷新 / 搜索 / `+新建` / 连接状态);`view-chat` 由 `syncNarrowView()` 从 `store.selected` 派生,回列表自己回来。**代价**:会话里没有「刷新」按钮(浏览器自己的刷新 / 下拉还在),要列表那一套就返回列表 |
+| 2 | 标题下面那行 17px | `html.narrow #chatMeta { display: none; }` | 「更新 1 天前 · 8e9e6e25」是给排障看的(更新时间 / 项目号)。上面那条 `html.narrow.short #chatMeta { font-size: 11px }` 与从前的 `font-size` 规则从此够不着,留着当记录 |
+| 3 | 用量那格 | `syncCtxInfoHome()` 把**同一个** `#ctxInfo` 节点搬进 `.chline` 末尾 | §8.42 把提示栏整条收了,那五格里只有用量值得手机「看一眼」(§8.15 的初衷)。**没有镜像副本** —— 与 `#jumpLatest` / `#msgState` 一个路子:按 id 找,谁都不依赖它在哪个父亲下面;宽屏搬回 `#chatDir` 之后、`#agentHint` 之前 |
+
+第 3 条的两个接线点(都读同一个类,不另设判定):`syncNarrowClass()`(跨断点 / 转屏,也覆盖首次)与
+`paintChatHeader()`(深链直接进会话那一下兜一道)。函数本身幂等(`ctx.parentElement === home` 直接
+返回),所以两处调不出乱子。CSS 那边只给它压了字号(`html.narrow .chline #ctxInfo { font-size: 11.5px }`),
+其余样式(两档文案按 `html.narrow` 切、`hidden` 语义)本来就是 id 级的,搬了家照旧生效。
+
+**验证**(真 Chromium,`/tmp/ocsm-probe/pw/trio.js`、`trio2.js`;截图 `trio-phone-collapsed.png` /
+`trio-phone-expanded.png`):
+
+```
+手机 393×894,会话(底板收起):
+  §8.42 之后:#topbar grid 111 @0-111  #chatHeader 81 @111-192  #messages 654 @192-846
+  改后:      #topbar none            #chatHeader 61 @0-61    #messages 785 @61-846  (消息区 +131px)
+  标题行:#chatTitle 226px + #chatState(空闲)+ #ctxInfo「76% ctx」42px 排在末尾;
+  整页 scrollWidth = 393 = 视口宽(没有横向溢出)
+手机 393×894,会话(底板展开):#messages 475 → 644(+169px),下面的工具箱与输入行照旧
+手机 393×894,列表:#topbar grid 111 照旧(那一行只在列表页留着)
+手机横屏 894×393 / 窄窗 700×700:同上(顶栏 none、#chatMeta none、用量在标题行)
+桌面 1366×900:一字未动 —— #topbar flex 47、#chatMeta 18、#ctxInfo 77 仍在 #promptFooter 里(「151.8K (76%)」)
+```
+
+**回归**:`smoke.sh` 293 → **296**(三条锁:窄屏 + `view-chat` 收顶栏 / 窄屏收 `#chatMeta` /
+`syncCtxInfoHome()` 在且恰好接线两次 —— 那条同时锁「用量不许顺手丢掉」);`ui-composer` 99 → **101**
+(`I3` 改写:窄屏会话里「筛选」跟着顶栏走 + 新 `I3b`;`K3` 四样改三样 + 新 `K3b` 用量搬到标题行);
+`ui-mobile` 174 → **192**(新 `A6b`/`A7b`:用量那格的家跟着 `html.narrow` 来回搬、`B38` 窄屏列表
+顶栏照旧、`C8g` 改写 + `C8h`/`C8i`/`C8j` 会话里三样、`D3d`/`D3e`/`D3f` 桌面三样都在且用量回到提示栏,
+两个视口各跑一遍);其余 19 套与 6 个 `e2e-*` 全 0 失败。README 计数与那几段说明同步;§8.15 / §8.42
+各加一句指过来。
 
 ---
 

@@ -1775,6 +1775,7 @@ function paintChatHeader(s) {
   ]
     .filter(Boolean)
     .join('  ·  ');
+  syncCtxInfoHome(); // §8.43:深链直接进会话时也把用量那格摆对家(幂等)
 }
 
 /* 列表页里没有这个会话时,单独问一次服务端把它补进 store,再补画用到它的几处。
@@ -6410,6 +6411,25 @@ function syncNarrowView() {
   document.documentElement.classList.toggle('view-chat', !!store.selected);
 }
 
+/* §8.43:手机上「上下文用量」那一格(#ctxInfo)搬到标题行末尾 —— 输入框下面那一行窄屏整条
+ * 不显示(§8.42),那五格里只有用量值得留在眼前(§8.15 的初衷:能「看一眼」)。搬的是
+ * 【同一个节点】,没有镜像副本(和 #jumpLatest / #msgState 一样靠 id 找);宽屏搬回
+ * 提示栏里原来的位置(#chatDir 之后、#agentHint 之前)。窄屏判定源仍然只有 <html>.narrow
+ * 一处 —— 与 CSS 用同一个类,不另设变量。
+ * 两处调用:① syncNarrowClass()(跨断点/转屏,也覆盖首次);② paintChatHeader()
+ * (会话画出来时兜一道,免得深链直接进会话那一下漏掉)。函数本身幂等,已在位就直接返回。 */
+function syncCtxInfoHome() {
+  const ctx = $('#ctxInfo');
+  const foot = $('#promptFooter');
+  const line = $('#chatHeader .chline');
+  if (!ctx || !foot || !line) return;
+  const narrow = document.documentElement.classList.contains('narrow');
+  const home = narrow ? line : foot;
+  if (ctx.parentElement === home) return;
+  if (narrow) line.appendChild(ctx);
+  else foot.insertBefore(ctx, $('#agentHint') || null);
+}
+
 // 会话列表的点击委托:点按钮走 onAction,点行本身进会话。
 // 抽成函数是为了让 test/ui-mobile.html 能单独装上它(那里屏蔽了 init)。
 function setupListActions() {
@@ -6434,6 +6454,7 @@ function syncNarrowClass() {
   apply('narrow', window.OCS_NARROW_MQ);
   apply('short', window.OCS_SHORT_MQ);
   // 跨断点(转屏 / 拉窗口)后重读这一档自己的那份记忆:桌面与手机是两份,别互相串
+  syncCtxInfoHome(); // §8.43:用量那格的家跟着窄屏走(同一个类,不另设判定)
   paintComposer();
 }
 

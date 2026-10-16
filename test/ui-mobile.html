@@ -212,9 +212,20 @@
       };
       syncNarrowClass();
       T('A6 不命中 → 去掉类', !document.documentElement.classList.contains('narrow'));
+      T('A6b 宽屏:用量那格搬回提示栏原位(#chatDir 之后、#agentHint 之前)',
+        q('#ctxInfo').parentElement === q('#promptFooter') &&
+        q('#ctxInfo').nextElementSibling === q('#agentHint'),
+        q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.id);
       window.matchMedia = realMM;
       syncNarrowClass();
       T('A7 恢复真实 matchMedia 后又回到窄屏', document.documentElement.classList.contains('narrow'));
+
+      /* §8.43:用量那格(#ctxInfo)的家跟着 <html>.narrow 走 —— 窄屏搬到标题行末尾(下面那一行
+         整条不显示,§8.42),宽屏搬回提示栏原位(#chatDir 之后、#agentHint 之前)。搬的是同一个
+         节点,不是副本(和 #jumpLatest / #msgState 一个路子)。 */
+      T('A7b 窄屏:用量那格搬进了标题行',
+        q('#ctxInfo').parentElement === q('#chatHeader .chline'),
+        q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.getAttribute('class'));
 
       /* 样式里不能再出现第二份 @media 判定(静默回归的入口) */
       var sheetTxt = qa('link[rel=stylesheet]').length + ':' + (window.OCS_NARROW_MQ === MQ);
@@ -313,6 +324,9 @@
         document.documentElement.scrollWidth <= window.innerWidth,
         [document.documentElement.scrollWidth, window.innerWidth]);
 
+      /* §8.43:顶栏只在列表页留着 —— 进了会话整条收掉(C 组断),回列表自己回来 */
+      T('B38 窄屏列表:顶栏照旧(筛选 / 搜索 / +新建 都在这儿)', vis(q('#topbar')));
+
       /* ===================== C. 窄屏:对话区 ===================== */
       await selectSession('ses_a');
       T('C1 选中会话后加上 view-chat', document.documentElement.classList.contains('view-chat'));
@@ -350,8 +364,15 @@
       q('#chatAgent').hidden = false;
       q('#ctxInfo').hidden = false;
       T('C8f 窄屏:输入框下面那一行整条不显示(展开底板时也没了)', !vis(q('#promptFooter')));
-      T('C8g 窄屏:它里面那几格一个都没露(智能体·模型 / 路径 / 用量)',
-        !vis(q('#chatAgent')) && !vis(q('#chatDir')) && !vis(q('#ctxInfo')) && !vis(q('#cmdHint')));
+      T('C8g 窄屏:它里面那三格一个都没露(智能体·模型 / 路径 / 命令提示)',
+        !vis(q('#chatAgent')) && !vis(q('#chatDir')) && !vis(q('#cmdHint')));
+      /* §8.43(用户「123 做」):会话里那 111px 的顶栏整条收掉;标题下面那行(更新 / 项目号)
+         也收掉;用量那格搬到标题行末尾 —— 它由 app.js 的 syncCtxInfoHome() 搬(同一个节点)。 */
+      T('C8h 窄屏会话:顶栏整条收掉了(竖屏那 111px 还给消息区)', !vis(q('#topbar')));
+      T('C8i 窄屏会话:标题下面那行(更新 / 项目号)收掉了', !vis(q('#chatMeta')));
+      T('C8j 窄屏会话:用量那格搬到标题行末尾,露着',
+        vis(q('#ctxInfo')) && q('#ctxInfo').parentElement === q('#chatHeader .chline'),
+        q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.getAttribute('class'));
 
       /* 对话框:基础样式 min-width:420px,在 393px 的屏上必然溢出 */
       openPick({ title: '宽度检查', items: [{ key: 'a', label: '甲' }] });
@@ -389,6 +410,14 @@
       T('D3c 桌面:输入框下面那一行照旧(智能体·模型 / 路径 / 用量 / 命令提示)',
         vis(q('#promptFooter')) && vis(q('#chatAgent')) && vis(q('#chatDir')) &&
         vis(q('#ctxInfo')) && vis(q('#cmdHint')));
+      /* §8.43 的反面:顶栏 / 标题下面那行 / 用量那格在桌面一个都没动。上面是直接把 narrow
+         类摘掉伪造的桌面,所以这里显式把用量那格的家同步回去(真实的转屏走 syncNarrowClass)。 */
+      syncCtxInfoHome();
+      T('D3d 桌面:顶栏照旧(筛选 / 搜索 / +新建 都在)', vis(q('#topbar')));
+      T('D3e 桌面:标题下面那行也在', vis(q('#chatMeta')));
+      T('D3f 桌面:用量那格回到提示栏里(#ctxInfo 的家跟着窄屏走)',
+        q('#ctxInfo').parentElement === q('#promptFooter') && qa('#ctxInfo').length === 1,
+        q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.id);
       T('D4 桌面:原来那六个按钮回来了', vis(rowA().querySelector('.actions button[data-act="open"]')) &&
         vis(rowA().querySelector('.actions button[data-act="del"]')));
       T('D5 桌面:表头回来了', vis(q('#list thead')));

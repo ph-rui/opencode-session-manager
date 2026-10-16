@@ -423,8 +423,9 @@
       T('I1 手机展开:输入框/📎/发送都回来了', vis(q('#input')) && vis(q('#btnAttach')) && vis(q('#send')));
       T('I2 手机展开:智能体/模型又回到明面上', vis(q('#agentSel')) && vis(q('#modelSel')));
       setState(true, true);
-      T('I3 手机收起:与底板无关的窄屏控件不受影响(返回、筛选还在)',
-        vis(q('#backList')) && vis(q('#btnFilters')));
+      T('I3 手机收起:与底板无关的窄屏控件不受影响(返回还在)', vis(q('#backList')));
+      T('I3b 手机收起:会话里顶栏整条收掉(§8.43;「筛选」就在顶栏里,跟着走)',
+        !vis(q('#topbar')) && !vis(q('#btnFilters')));
       T('I4 手机收起:对话区仍然占着屏(view-chat)', vis(q('#chatpane')) && !vis(q('#listpane')));
 
       /* #ctoolbar 的 hidden 只由「有没有选中会话」决定,不能被折叠牵着走。
@@ -452,8 +453,11 @@
       T('K2 手机展开:那几格只是被 CSS 藏,DOM 一个没少(路径那格照旧有字)',
         !!q('#promptFooter') && !!q('#chatDir') && !!q('#ctxInfo') && !!q('#cmdHint') &&
         q('#chatDir').textContent.length > 0, q('#chatDir').textContent);
-      T('K3 手机展开:智能体·模型 / 工程目录 / 用量 / 「/ 命令」四样一个都没露',
-        !vis(q('#chatAgent')) && !vis(q('#chatDir')) && !vis(q('#ctxInfo')) && !vis(q('#cmdHint')));
+      T('K3 手机展开:智能体·模型 / 工程目录 / 「/ 命令」三样一个都没露',
+        !vis(q('#chatAgent')) && !vis(q('#chatDir')) && !vis(q('#cmdHint')));
+      T('K3b 手机展开:用量那一格没丢 —— 它被搬到标题行末尾了(同一个节点,不是副本)',
+        q('#ctxInfo').parentElement === q('#chatHeader .chline') && qa('#ctxInfo').length === 1,
+        q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.getAttribute('class'));
       setState(true, true);
       T('K4 手机收起:也不显示(§8.40 那条兄弟选择器之外,窄屏本来就没有它)', !footV());
       q('#progress').hidden = false; q('#interrupt').hidden = false;
