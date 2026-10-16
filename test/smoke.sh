@@ -405,6 +405,21 @@ if has "$APPJS" 'interrupt?resume=true' && has "$APPJS" 'function resumeQueued' 
 else
   echo "FAIL: 中断没有「resume + 放行排队消息」"; fail=$((fail + 1))
 fi
+# 运行中发消息的默认投递方式:TUI 里光按 Enter 是 prompt.submit(插话),
+# 排队要额外按 leader+Enter(prompt.queue)。面板原来默认排队,用户实测对不上。
+if has "$APPJS" "const DEFAULT_DELIVERY = 'steer'" \
+   && has "$APPJS" 'delivery: DEFAULT_DELIVERY' \
+   && has "$APPJS" "mode === 'queue' ? 'queue' : DEFAULT_DELIVERY"; then
+  echo "PASS: 默认投递=插话(对齐 TUI 的 Enter=prompt.submit)"; pass=$((pass + 1))
+else
+  echo "FAIL: 默认投递没有对齐 TUI(仍默认排队,或非法值没回默认)"; fail=$((fail + 1))
+fi
+# 反向封锁:别把默认值写死在 store 或 setDelivery 里,必须由 DEFAULT_DELIVERY 一处说了算
+if has "$APPJS" "delivery: 'steer', // 运行中消息" || has "$APPJS" "delivery: 'queue', // 运行中消息"; then
+  echo "FAIL: store.delivery 又写死字面量,没走 DEFAULT_DELIVERY"; fail=$((fail + 1))
+else
+  echo "PASS: store.delivery 走 DEFAULT_DELIVERY 单一出处"; pass=$((pass + 1))
+fi
 # 反向封锁:Esc 不能又退回「只在输入框里能按」—— 那是这次要修的病
 if has "$APPJS" 'isRunning(sid)) {' && has "$APPJS" 'anyDialogOpen'; then
   echo "PASS: 仅当会话在跑才中断,且对话框打开时不抢键"; pass=$((pass + 1))
@@ -1159,6 +1174,25 @@ if has "$(cat "$(dirname "$0")/ui-stream.html")" "#ctxInfo"; then
   echo "PASS: ui-stream.html 里有上下文用量的断言"; pass=$((pass + 1))
 else
   echo "FAIL: ui-stream.html 里没有上下文用量的断言"; fail=$((fail + 1))
+fi
+# 离屏消息跳过渲染(content-visibility:auto):只对长会话开,而且必须挂 .cvmany 这个开关
+if has "$CSS" '#messages.cvmany > .msg' && has "$CSS" 'content-visibility: auto' &&
+   has "$CSS" 'contain-intrinsic-size: auto'; then
+  echo "PASS: 长会话离屏消息跳过渲染(.cvmany + content-visibility + 估值高度)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 content-visibility 优化或没挂 .cvmany 开关"; fail=$((fail + 1))
+fi
+# 反向封锁:不许无条件挂 —— 短会话拿估值占位会把「不用滚」的场景撑出假滚动条
+if printf '%s' "$CSS" | grep -qE '^[[:space:]]*#messages > \.msg[[:space:]]*\{'; then
+  echo "FAIL: content-visibility 挂成了无条件(#messages > .msg),短会话会被估值撑出假滚动条"; fail=$((fail + 1))
+else
+  echo "PASS: content-visibility 没有无条件挂(短会话行为不变)"; pass=$((pass + 1))
+fi
+if has "$APPJS" 'const CV_MIN_MSGS' && has "$APPJS" "classList.toggle('cvmany'" &&
+   has "$(cat "$(dirname "$0")/ui-layout.html")" 'cvmany'; then
+  echo "PASS: 开关由 renderMessages() 按条数挂,ui-layout 有正反两面的断言"; pass=$((pass + 1))
+else
+  echo "FAIL: .cvmany 开关的接线不对(或缺 ui-layout 断言)"; fail=$((fail + 1))
 fi
 
 echo

@@ -2,6 +2,12 @@
 
 /* OpenCode 会话管理器 — 前端逻辑(原生 JS,无框架) */
 
+/* 运行中发消息的默认投递方式。照 TUI:TUI 里**光按 Enter** 是 `prompt.submit`(插话,
+ * 下一个 step 边界就并进当前回合),`<leader>return` 才是 `prompt.queue`(排队,等回合结束)。
+ * 也就是说「接着打一句」在 TUI 里本来就发得出去,不用等整个回合。面板原来默认排队,
+ * 用户实测「TUI 里发得出去、网页版躺在队列里」,这里对齐成插话(工具栏仍可切回排队)。 */
+const DEFAULT_DELIVERY = 'steer';
+
 const store = {
   sessions: new Map(),
   messages: new Map(),
@@ -26,7 +32,7 @@ const store = {
   agents: new Map(), // directory -> [Agent.Info]
   models: new Map(), // directory -> [Model.Info]
   modelIndex: new Map(), // 'providerID/modelID' -> Model.Info
-  delivery: 'queue', // 运行中消息的投递方式
+  delivery: DEFAULT_DELIVERY, // 运行中消息的投递方式(默认插话,见 DEFAULT_DELIVERY)
   ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
   showArchived: false, // 列表是否显示已归档会话
   restoreScroll: null, // 刷新恢复时要还原的滚动锚点(只由 restoreFromHash 设置,renderMessages 消费)
@@ -434,7 +440,8 @@ async function switchModel() {
 /* ----------------------------- 投递方式 / 中断 ----------------------------- */
 
 function setDelivery(mode) {
-  store.delivery = mode === 'steer' ? 'steer' : 'queue';
+  // 只认这两个值,其它一律回默认(插话)—— 默认值是 DEFAULT_DELIVERY 一处说了算
+  store.delivery = mode === 'queue' ? 'queue' : DEFAULT_DELIVERY;
   paintDelivery();
 }
 
@@ -1265,6 +1272,10 @@ function applyScrollAnchor(a) {
   if (!a) return;
   const rec = a.id ? msgEls.get(a.id) : null;
   if (rec && rec.el && rec.el.parentElement === box) {
+    // 量出锚点相对滚动口上沿的差,滚掉它 —— 一步就准:滚完之后锚点正好落在 off 处,
+    // 而且接下来重排的是【锚点下方】刚露头那一屏,锚点自己不会动。
+    // 上面那些离屏消息即使还按 contain-intrinsic-size 的估值占位,也只是让滚动条比例不准,
+    // 不影响锚点在屏上的位置(实测冷刷新后偏 1px)。
     const d = rec.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
     box.scrollTop = Math.max(0, box.scrollTop + d - a.off);
     return;
@@ -2131,9 +2142,17 @@ function currentMessages() {
   return msgs;
 }
 
+/* content-visibility: auto 只对「真长」的会话开(见 styles.css 里 #messages.cvmany > .msg)。
+   条数少的时候离屏内容本来就没多少,省不下几个钱,却要拿 contain-intrinsic-size 的估值去
+   占位 —— 短会话「压根不用滚」的场景反而会被估值虚高撑出一条假滚动条。所以按条数挂开关,
+   阈值取 30:再少的话那次 flush 也就几毫秒,不值得引入估值这个变量。 */
+const CV_MIN_MSGS = 30;
+
 function renderMessages() {
   const box = $('#messages');
   const msgs = currentMessages();
+  // 够长才让离屏消息跳过渲染(CV_MIN_MSGS);短会话维持原样,滚动行为一个字节都不变
+  box.classList.toggle('cvmany', msgs.length >= CV_MIN_MSGS);
   const force = store.forceBottom;
   store.forceBottom = false;
   const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底

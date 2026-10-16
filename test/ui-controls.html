@@ -171,12 +171,26 @@
       updateComposerControls();
       T('未选会话时禁用发送', q('#send').disabled === true);
 
+      /* 默认投递方式照 TUI:TUI 里光按 Enter 就是 prompt.submit(插话),
+       * 排队要额外按 leader+Enter(prompt.queue)。所以面板也默认插话。
+       * 用户报的正是「TUI 里发得出去、网页版躺在队列里」。 */
+      T('未动过工具栏时默认是「插话」(对齐 TUI 的 Enter = prompt.submit)',
+        store.delivery === 'steer', store.delivery);
+      paintDelivery(); // 真面板在 boot 里画一次(本测试屏蔽了自动 init,这里手动补上)
+      T('默认高亮的是插话按钮',
+        q('#delivery button[data-delivery="steer"]').classList.contains('active') &&
+        !q('#delivery button[data-delivery="queue"]').classList.contains('active'));
+      setDelivery('queue');
+      T('切到排队 → 排队按钮高亮、插话不再高亮',
+        q('#delivery button[data-delivery="queue"]').classList.contains('active') &&
+        !q('#delivery button[data-delivery="steer"]').classList.contains('active') &&
+        store.delivery === 'queue');
       setDelivery('steer');
       T('插话按钮高亮', q('#delivery button[data-delivery="steer"]').classList.contains('active'));
       T('排队按钮不再高亮', !q('#delivery button[data-delivery="queue"]').classList.contains('active'));
       T('store.delivery=steer', store.delivery === 'steer');
       setDelivery('bogus');
-      T('非法投递值回退为排队', store.delivery === 'queue');
+      T('非法投递值回退为默认(插话)', store.delivery === 'steer');
 
       /* ---------------- 中断请求:resume + 放行排队消息 ---------------- */
       store.selected = SESSION.id;

@@ -258,6 +258,21 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   padding: 1px 0 1px 12px;
   margin: 0 0 22px;
 }
+/* 更猛的优化:离屏消息整块跳过渲染(content-visibility: auto)。改完 #messages 再读
+   scrollHeight/atBottom 那次强制同步排版(flush),原来要连看不见的消息一起算,长会话里
+   是整个界面最贵的一步(实测 100 条消息时 24ms,进度条/spinner/流式 delta 每次都要吃一次);
+   把离屏的跳过之后只剩可见那几屏,24ms → 0ms。
+   contain-intrinsic-size 用 `auto <估值>`:头一回拿估值占位,渲染过一次浏览器自己记住
+   真实高度,所以滚回去不会跳。估值只影响滚动条比例,不影响「锚点/跳到底」落点
+   (那两步是照 getBoundingClientRect 现算再滚,滚完锚点正好在屏顶,实测偏 1px)。
+   .cvmany 由 app.js 按条数挂(CV_MIN_MSGS):短会话不挂 —— 短会话本来就没多少离屏内容,
+   犯不着拿估值去赌「短会话不用滚」那种场景。
+   注意这会给 .msg 带上 contain: layout style paint(paint 会裁掉溢出的后代),
+   消息里的宽表格/长代码早就有自己的 overflow-x: auto 滚动口,不受影响。 */
+#messages.cvmany > .msg {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
 .msg.user { border-left-color: #007acc; }
 .msg.assistant { border-left-color: #2e8b57; }
 .msg.minor { border-left-color: transparent; color: var(--muted); font-size: 0.88em; margin-bottom: 8px; }

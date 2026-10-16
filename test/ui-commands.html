@@ -385,7 +385,7 @@
       store.active.set('ses_a', 'busy');
       setCaret('/init');
       await send();
-      T('send:会话忙时带上 delivery', bodyOf(lastCall(/\/command$/)).delivery === 'queue', bodyOf(lastCall(/\/command$/)));
+      T('send:会话忙时带上默认投递方式(插话,照 TUI 的 Enter=prompt.submit)', bodyOf(lastCall(/\/command$/)).delivery === 'steer', bodyOf(lastCall(/\/command$/)));
       store.active.delete('ses_a');
 
       store.mentionHits.set('Makefile', '/proj/a/Makefile');

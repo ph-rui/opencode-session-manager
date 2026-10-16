@@ -476,6 +476,7 @@
       var box = q('#messages');
       await selectSession('ses_long');
       T('长会话渲染出来了', q('#messages').textContent.indexOf('第 59 条消息') >= 0);
+      T('长会话挂 cvmany(离屏消息跳过渲染)', box.classList.contains('cvmany') === true);
       var maxTop = box.scrollHeight - box.clientHeight;
       T('长会话确实能滚动(否则这组测试没意义)', maxTop > 100, maxTop);
       T('不还原时是跳到底部的', box.scrollTop + box.clientHeight >= box.scrollHeight - 2,
@@ -536,6 +537,8 @@
       box.innerHTML = '';
       await restoreFromHash();
       T('没有存档时刷新仍按老样子(短会话不滚)', box.scrollTop === 0, box.scrollTop);
+      T('短会话不挂 cvmany(不留「估值占位撑出假滚动条」的机会)',
+        box.classList.contains('cvmany') === false);
 
       /* 存档上限:只留最近 20 个会话 */
       for (var pi = 0; pi < 25; pi++) { store.selected = 'ses_p' + pi; saveScrollAnchor(); }
