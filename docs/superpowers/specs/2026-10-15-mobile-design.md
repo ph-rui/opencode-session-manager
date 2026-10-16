@@ -1294,6 +1294,93 @@ diff 徽标 / 诊断行）；`ui-tools` 110 → **134**（`toolIcon` 6 例、`to
 
 ---
 
+### 8.24 追加：探索类工具行折成一组 + 思考块摘要带标题与时长（继续对 TUI 的消息体）
+
+**起因**：§8.22 对齐了**单个**工具行，用户接着说「继续对齐」。这一轮对的是工具行的**分组**与思考块的**摘要行**。
+
+**先把 TUI 的事实抓准**（v2 `packages/tui/src/routes/session/grouping/session.ts`、`grouping/tree.ts`、
+`group-view.tsx`、`context/thinking.ts`、`util/locale.ts`，原文在 `/tmp/ocsm-probe/tui-grouping-*.ts` 等）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 探索类工具 = `read` / `glob` / `grep` / `webfetch` / `websearch`（`list` 不算） | `explorationTools`；`partPath()` 给它们挂 `["exploration"]` |
+| 相邻的**同 kind** 才并进一个组 | `tree.ts` 只并相邻同 kind 的 part |
+| 组行：`GroupContent` 折成一行，词 `Explored`/`Exploring`、后面跟计数 | `group-view.tsx` 的 `groupExploration()` 分支 |
+| 计数：`grep`/`glob`/`websearch` 都算 `search`、`webfetch` 算 `fetch`，其余用工具名；复数 `+es`/`+s` | `GroupContent.label()` |
+| `size === 1` 的组也折（`grouped()` 分支没有条数下限） | 同上 |
+| 思考块摘要：正文最前面那段**加粗 + 空行**拎出来当标题，收工后接时长 | `reasoningSummary` + `ReasoningHeader`（主程序里）|
+| 时长格式 `1s` / `1.2s` / `1m 5s` / `1h 5m` / `1d 5h` | `Locale.duration`（`util/locale.ts`）|
+
+**实测真实数据的形态**（`GET /api/experimental/session/:id/export` 的两条真会话全量：只读长会话
+`ses_demo` 2480 条助手消息 + 探针会话 `ses_demo` 51 条，
+合计 2531 条）：
+
+| 事实 | 数据 |
+|---|---|
+| 每条助手消息的工具数 | `{0: 103, 1: 2239, 2: 179, 3: 7, 4: 3}` —— 一条里基本就一个工具（88%）|
+| 探索组落在哪 | 单条消息内 **286 组**（`size=1` 就有 247 个、2 条 36 个、3 条 2 个、4 条 1 个）；跨消息相邻的只有 **8 处** —— 把整条会话的 part 摊平按 TUI 口径数，TUI 是 278 组、面板是 286 组，差 2.9% |
+| 「思考组」 | **0 组**（2531 条里有 2341 条带 reasoning，形态都是 `[reasoning, 一个工具]` 交替，相邻 reasoning 根本不成立）|
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 分组范围 | 只在**单条助手消息内**并相邻的探索工具（286 组落在这里；跨消息那 8 处只占 2.9% —— 面板每条消息是一个独立 DOM 块、增量重绘也按消息 id 走，跨消息并组要动这个批次边界，先记在后续对齐项里）|
+| 工具集合 | `EXPLORE_TOOLS` 照 TUI 五类；`EXPLORE_MIN_RUN = 1`（照 TUI 的 `size=1` 也折）当**唯一开关** —— 想只折两条以上的那种，把这一个常量改成 2 |
+| 计数与复数 | `exploreLabel()` 照 `label()`；几条之间 `, ` 连 |
+| 折叠 | 默认**折着**（照 TUI），原来那些工具行一个不少地挪进 `.gbody`（一处 DOM 都不删，只挪位置）|
+| 行首 / 词 | 跑着时行首是 spinner、词 `Exploring`；全部收工换成 `→` 与 `Explored`。**冒号连在词上**（`.tname` 里），不然 `.toolrow > summary` 那条 `gap: 6px` 会在冒号前面留一道缝（实拍先踩到：`Explored : 1 read`）|
+| 思考头 | `REASONING_TITLE_RE` / `reasoningTitle()` / `fmtDur()` / `reasoningHead()`；收工后 `思考: <标题> · 12.3s`，标题拿不到就只有 `思考`，时间时刻拿不到就不印时长 |
+| 不做 reasoning 分组 | 实测 0 组（见上表），照 TUI 的话它在真数据里永远不会成立，不做 |
+| `details` 的开合 | 渲染出的每个 `details` 都带 `data-def`（它**天生**是开还是合）：重绘时新旧一对，旧的开合跟它的默认对不上就说明**用户动过手**，照搬到新元素上（两头都搬）。没带 `data-def` 的思考块维持老规矩：只搬「用户折起来过」那一种 |
+
+**验证**：新探针 `narrow-audit.js`（`node narrow-audit.js <sid> [宽] [高]`，代理真面板 + 注入探针，
+dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / 越界的元素，并截图；`BEFORE=1` 还能把窄屏
+提示栏的旧规则临时装回去量一组对照、`SCROLL_TO=explore` 滚到第一组上）。在
+`ses_demo` 的 393×894 与 1366×900 两个视口上读到：两条探索组都是
+`→ Explored: 1 read`、`open: false`、`.gbody` 里 1 行；思考头 `思考 · 4.7s` / `思考 · 946ms` / `思考 · 400ms`；
+没有元素比视口宽（`pre` 里那些 492px 的 `code` 有 `overflow-x: auto` 兜着，`#messages` 本身不横滚）。
+
+**回归**：`smoke.sh` 230 → **239**（新 R 组 6 项：五类工具表 / 计数与复数 / `Explored`·`Exploring` /
+探索组默认折叠 + `data-def` / `renderMessage` 里并组 / `.explore` 样式；R2 组 3 项：标题正则 /
+摘要文案 / 时长格式）；`ui-tools` 134 → **168**（新 34 项：分组触发的三种形态与不触发的四条边界、
+计数与复数、`data-def`、思考头三种情形、`syncDetailsOpen` 两头搬与「没带 `data-def` 就只搬折起来的」）；
+`ui-stream` 236（不变）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
+### 8.25 追加：窄屏把提示栏的模型那格收起来，「加载更旧消息」并进会话操作那一行
+
+**起因**：两个都是手机竖屏上看出来的：① 用户报「加载更旧消息，这个项应该跟导出这些处于同一水平线」；
+② 提示栏第一格 `智能体 · 模型 · 变体` 挤掉工程路径。
+
+**实测**（`narrow-audit.js`，393×894，`ses_demo`）：
+
+- 改前：`#chatAgent` 宽 **119px**（把 `max-width: 32%` 用满）、`#chatDir` 只剩 **145px**，
+  路径可见部分到 `/work/example-repo/…` 就截了（`scrollWidth 311`）。
+- 改后：`#chatAgent` **31px**（只有 `Build`）、`#chatDir` **234px**（+61%），可见部分到
+  `/work/example-repo/exam-…`。
+- `#older` 改前与 `#chatOps` 不同 top（自己占一整行），改后两者 `top` 都是 191、高都是 40px。
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 提示栏第一格 | `paintFooterAgent()` 拆成 `.agName`（智能体）/ `.agModel`（` · 模型 · 变体`）两格；**整条 `textContent` 仍是「智能体 · 模型 · 变体」**，变更判据照旧 —— 顺带把「要不要重画」的判据也一起留着 |
+| 窄屏 | `html.narrow #chatAgent .agModel { display: none }`，宽度上限 32% → 40%（模型收走后瓶颈不在它身上）。两格都还在 DOM 里，横屏转回来就露出来；模型名照旧留在整条的 `title` 里 |
+| 「加载更旧消息」 | `#older` 是块级盒，跟着 `#chatOps`（`display: flex`）就只能落到下一行。`#chatOps` 改 `inline-flex`、`#older` 是 `inline-block` —— 两个行内盒自然共一行；一行放不下时 `#older` 自己换行（还是原来那样）|
+| 尺寸 | `#older` 的 padding / 字号对齐 `.chip`；窄屏 `html.narrow #older { min-height: 40px }` 跟旁边几个 chip 一样高 |
+
+**验证**：393×894 四个 chip（导出 / 在 TUI 打开 / 归档 / 加载更旧消息）一行放得下（`#chatOps` 右沿 205、
+`#older` 左沿 208 —— 中间那道 3px 是行内盒之间的空白）；1366×900 桌面同样是这一行。截图
+`/tmp/ocsm-probe/perf/narrow-explore-393.png` 与 `-1366.png`。
+
+**回归**：`smoke.sh` 239 → **243**（新 R3 组 4 项：拆两格 / 窄屏回收 + 宽度上限 / `#chatOps` 与 `#older`
+同排 / 窄屏 40px）；`ui-stream` 236 → **240**（窄屏收起来 / 宽屏露出来 / `.agName` 照旧 / `title` 里模型名没丢）；
+`ui-mobile` 160、`ui-layout` 164 等全部不动；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
