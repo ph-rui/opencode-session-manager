@@ -427,11 +427,11 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 191 |
+| `smoke.sh` | 194 |
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 160 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 183 |
-| `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 87 / 71 / 183 |
+| `ui-attach` / `ui-commands` / `ui-picks` | 132 / 166 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
 | `ui-jump`（新，见 §8.6）| 44 |
@@ -855,6 +855,84 @@ PASS 存储里那笔老值一动没动(既不读也不写)
 重新接线后必须是展开态；另外把测试里所有「用 `localStorage` 造收起态」的夹具换成直接给
 `<main>` 加类，因为那条路已经没了）；`smoke.sh` 191 不变（「记住折叠状态」那条源码锁换成
 「一律展开 + 不再读写 `ocs.listHidden`」）；`ui-*` 其余与 `e2e-*` 全部 0 失败。
+
+---
+
+### 8.14 追加：Esc 要按两下才打断，且中断后「排队中」的消息接着发
+
+**起因**：用户——「tui 是按两下 ESC 打断，然后排队中的 prompt 自动发出；网页版是按一下 ESC 就打断，
+排队中的 prompt 不会自动发送」。
+
+**TUI 的权威事实**（在本机 `opencode` v2.0.16 那个 211 MB 的单文件二进制里读出来的，
+TUI 是 `opentui` 的 JS，代码原样躺在里面）：
+
+```js
+armInterruptTimer() { this.clearInterruptTimer();
+  this.interruptTimeout = setTimeout(() => { … this.patch({ interrupt: 0 }) }, 5000) }
+handleInterrupt = () => { if (this.isClosed || this.state().phase !== "running") return false;
+  let t = this.state().interrupt + 1;
+  if (this.patch({ interrupt: t }), t < 2) return this.armInterruptTimer(), true;
+  return this.clearInterruptTimer(), this.patch({ interrupt: 0 }),
+         this.setNotice("interrupting"), this.options.onInterrupt?.(), true };
+```
+
+- 第一下只是**计数 +1**并挂一个 **5 秒**归零定时器，第二下（窗口内）才真打断；
+  提示文案按宽度挑：`Press esc again to interrupt` → `esc again to interrupt` → `esc again: stop` → `esc stop`。
+- 输入框一有动静（`handleInputClear`）就把计数清掉；`phase` 变 `idle` 也归零。
+- `onInterrupt` 就是 `session.interrupt({ sessionID, resume: true })`。
+- **为什么 TUI 一打断排队的 prompt 就跟着跑**：TUI 输入框默认用 `steer` 投递
+  （`Rt=(w="steer")`、`De(prompt, "steer")`），而服务端 `session.interrupt` 带 `resume=true` 时会取
+  inbox 第一件，**只有 `steer` / `compaction` / `move` 才 `wake`** —— 于是它顺手就把那条跑起来了。
+  面板默认走「排队」（`queue`），拿不到这个顺手。
+
+**真服务实测**（临时会话 + `sleep 300` 的长回合 + `curl`，四条都跑过一遍）：
+
+| 场景 | 结果 |
+|---|---|
+| A：中断**不带** `resume` + `queue` 项 | 那条**永远**躺在待发送队列里（盯着看了 30 秒没动）|
+| B：`interrupt?resume=true` + `queue` 项 | **还是躺着**（接口文档也写着：`queued prompts remain parked`）|
+| C：`steer` 项 + `interrupt?resume=true` | 挨着就跑起来了（TUI 走的正是这条）|
+| D：`queue` 项，中断返回后立刻（0.01s）`PATCH` 成 `steer` | 也跑起来了 —— 没有「回合还没收干净」的竞态 |
+
+**决定**：
+
+| 点 | 决定 | 理由 |
+|---|---|---|
+| Esc | **按两下**才打断：第一下只上膛（状态条那句提示换成 `esc again to interrupt`，再补一句 toast），**5 秒**内按第二下才真发请求 | 照 TUI 抄；Esc 在面板里还兼职「关命令面板 / 关 @ 补全」，手滑一下就把正在跑的回合砍了，代价太大 |
+| 上膛归零 | 输入框有动静、回合结束、真的打断，三处都收 | 照 TUI 的 `handleInputClear` 与 `phase === "idle"`；半次 Esc 不能悬在那儿等手滑 |
+| `■ 中断` 按钮 / 命令面板的「中断」 | 照旧**一下**生效，不走两下 | 它们是写明动作的按钮，不是「顺手按到」的键 |
+| 提示位置 | 状态条旁边那句（TUI 的 `prompt.footer`）+ 一句 toast | `.phint` 在底板收起 / 窄屏时是 `display:none`，收起态下只看它等于没提示 |
+| 中断请求 | 带 `resume=true` | 和 TUI 的 `session.interrupt` 完全同调法：接上「插话」类待投递输入与下一件控制项 |
+| 排队消息放行 | 中断成功后把 inbox 里 `type==='user' && delivery==='queue'` 的项 `PATCH` 成 `steer`（就是它的「改为插话」，会 `wake`） | 面板保持自己「排队」的默认语义，只在被打断这个边界上放行；服务端对 `queue` 的定义是「等下一次回合边界」，被中断之后不会再有下一个边界 |
+| 只推 `user` | 压缩 / 移动这类控制项不碰 | 它们已经由 `resume=true` 自己接管了 |
+| 状态条 `title` | `按 Esc 中断` → `连按两下 Esc 中断` | 鼠标停上去看到的说明得跟实际行为一致 |
+
+**验证**（真面板 + 真服务，`/tmp/ocsm-probe/perf/live-interrupt.js`：造一个干净会话 → 起长回合 →
+运行中排一条队 → 派发真 `keydown` → 看面板自己的 `store.inbox` / `#messages` / `#progress .phint`）：
+
+```
+PASS 造出探针会话 / 面板选中了探针会话
+PASS 面板认到回合在跑(SSE) / 状态条亮起来了
+PASS 面板认到待发送队列里有一条
+PASS Esc 第一下不发中断请求
+PASS Esc 第一下把状态条提示换成「再按一次」
+PASS Esc 第一下给一句 toast
+PASS 队列里那条还老老实实待着
+PASS Esc 第二下发中断请求
+PASS 中断请求带 resume=true(照 TUI)
+PASS 第二下之后提示文案收回原文
+PASS 发出去了把排队项改成 steer 的 PATCH
+PASS 排队里那一条已经不在队列里了(被放走)
+PASS 那条文本进了消息流(真的发出去了)
+PASS 它自己跑起来了(回合又转起来)
+```
+
+**回归**：`smoke.sh` 191 → 194（Esc 优先级那条顺序锁换成 `requestInterrupt()`，另加「两下才打断
++ 输入框归零 + 中断带 resume 并放行排队项」三条源码锁）；`ui-commands` 155 → 166（⑩ 组把
+「一按即断」改成「第一下上膛 → 第二下才打断」，并补上定时器到点、输入框归零、回合结束归零）；
+`ui-controls` 83 → 87（中断请求的 URL 带 `resume=true`，以及「只推排队项、不碰插话项与控制项」）；
+`ui-layout` / `ui-stream` / `ui-composer` / `ui-mobile` / `ui-jump` / `ui-tools` / `ui-asks` /
+`ui-capabilities` / `ui-attach` / `ui-picks` / `netallow` 与 `e2e-*` 全部 0 失败。
 
 ---
 

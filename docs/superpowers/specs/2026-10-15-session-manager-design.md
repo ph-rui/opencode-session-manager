@@ -368,6 +368,8 @@ opencode-session-manager/
     - TUI 的键位权威定义:`session.interrupt` 默认就是 **`escape`(按一下,不是两下)**、
       `command.palette.show` 是 `ctrl+p`、`prompt.autocomplete.hide` 是 `escape`、`agent.cycle` 是 `shift+tab`、
       `prompt.history.*` 是 `up`/`down`、`prompt.clear` 是 `ctrl+c`。
+      > **后来改了,见 `2026-10-15-mobile-design.md` §8.14**:这条「按一下」只看了键位表那一侧;
+      TUI 的 `handleInterrupt` 实际是**按两下**（第一下上膛 + 5 秒窗口），用户按的就是这个。
     - 命令只有两条接口:`GET /api/command?location[directory]=<目录>` → `{location, data:[{name, description?}]}`;
       `POST /api/session/:sid/command` body `{name, text, files?, …}` → **204 无内容**。
       实测:未知 `name` → `404 CommandNotFoundError`;**缺 `text` → `400 InvalidRequestError`**
@@ -409,6 +411,8 @@ opencode-session-manager/
     (截图里成了「说明在左、按键在右」)。删掉那个空格子即可,并补了一条断言盯着「标题之后紧跟的就是 `kbd`」。
   - **I 组明确不做**:`Ctrl+C` 清空输入(会把网页里的复制弄坏);把 `Esc` 做成「按两下」——
     TUI 的默认定义就是单次 `escape`,用户感受到的「两下才断」其实是「第一次在关浮层」。
+    > **后来改了,见 `2026-10-15-mobile-design.md` §8.14**:`Esc` 改成按两下了(第一下只上膛,
+    TUI 的 `handleInterrupt` 本来就是这么写的),而且中断后「排队中」的消息会接着发出去。
 - **选择框对话框(`/sessions` · `/models` · `/agents`)** — 把 I 组里三条「只聚焦」的命令补成交互。
   - **先复现再改**:用一个只驱动真实 `app.js` 的页面(合成 `Enter` 按键)跑了一遍 ——
     敲 `/models`,命令面板里确实有这一项,选中后只是把 `/models ` 补进输入框,再按 `Enter` 之后
@@ -694,6 +698,7 @@ opencode-session-manager/
   `#cmds`/`#dlgHelp`/`#helpKeys` 三个节点、`#cmds`/`.cmd-tag`/`.keys kbd` 样式,以及三个 I 组测试文件都在。
   其中**两条新的顺序锁**用 `awk` 取函数体:
   `setupTuiKeys()` 里必须是 `closeCommands()` → `closeMentions()` → `interrupt()`(这就是 `Esc` 的优先级,写反了会变成「一按 Esc 直接中断」),
+  (后来那个 `interrupt()` 换成了 `requestInterrupt()` —— 按两下那档,见移动端设计 §8.14)
   `setupComposerKeys()` 里必须是 `commandKey` → `mentionKey` → `historyKey` → `send`(输入框里的按键让给谁)。
 - 端到端 `test/e2e-commands.sh`:**40 项全部通过**(纯 curl,只建临时会话与 `/tmp` 临时工程目录,结束时全删)。
   验的是 `GET /api/command` 与 `POST …/command` 的真实行为:
