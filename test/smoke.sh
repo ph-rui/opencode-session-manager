@@ -370,14 +370,41 @@ ESC_ORDER=$(printf '%s' "$APPJS" | awk '
   /^function setupTuiKeys\(\)/ { f = 1 }
   f && /closeCommands\(\);$/ && !a { a = 1 }
   f && /closeMentions\(\);$/ && !b { b = 1 }
-  f && /interrupt\(\);$/ && !c { c = 1 }
+  f && /requestInterrupt\(\);$/ && !c { c = 1 }
   f && /^}/ { exit }
   END { print (a && b && c) ? "cmds-mentions-interrupt" : "wrong" }
 ')
 case "$ESC_ORDER" in
-  cmds-mentions-interrupt) echo "PASS: Esc 优先级 = 关命令面板 → 关 @ 补全 → 中断"; pass=$((pass + 1)) ;;
+  cmds-mentions-interrupt) echo "PASS: Esc 优先级 = 关命令面板 → 关 @ 补全 → 中断(两下)"; pass=$((pass + 1)) ;;
   *) echo "FAIL: Esc 优先级顺序不对 (got '$ESC_ORDER')"; fail=$((fail + 1)) ;;
 esac
+# 两下才打断:第一下只上膛 + 挂 5 秒归零定时器(照 TUI 的 handleInterrupt / armInterruptTimer),
+# 第二下才真调 interrupt();窗口长度、提示文案都得对得上。
+ESC_ARM=$(printf '%s' "$APPJS" | awk '
+  /^function requestInterrupt\(\)/ { f = 1 }
+  f && /INTERRUPT_ARM_MS/ { a = 1 }
+  f && /^ *interrupt\(\);$/ && !b { b = 1 }
+  f && /^}/ { exit }
+  END { print (a && b) ? "armed" : "wrong" }
+')
+if [ "$ESC_ARM" = armed ] && has "$APPJS" 'const INTERRUPT_ARM_MS = 5000'; then
+  echo "PASS: Esc 第一下只上膛、第二下才真打断(5 秒窗口)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺「按两下 Esc 才打断」的实现 (got '$ESC_ARM')"; fail=$((fail + 1))
+fi
+# 输入框一有动静就归零(照 TUI 的 handleInputClear):半次 Esc 不能悬在那儿等手滑
+if has "$APPJS" "inp.addEventListener('input', () => disarmInterrupt())"; then
+  echo "PASS: 输入框有动静就撤掉「Esc 上膛」"; pass=$((pass + 1))
+else
+  echo "FAIL: 输入框改动后没撤掉上膛状态"; fail=$((fail + 1))
+fi
+# 中断后排队消息接着发:TUI 的输入框默认 steer + interrupt 带 resume,面板要显式推一把
+if has "$APPJS" 'interrupt?resume=true' && has "$APPJS" 'function resumeQueued' \
+   && has "$APPJS" 'it.delivery === '"'"'queue'"'"''; then
+  echo "PASS: 中断带 resume=true,并把排队中的消息改成 steer 接着发"; pass=$((pass + 1))
+else
+  echo "FAIL: 中断没有「resume + 放行排队消息」"; fail=$((fail + 1))
+fi
 # 反向封锁:Esc 不能又退回「只在输入框里能按」—— 那是这次要修的病
 if has "$APPJS" 'isRunning(sid)) {' && has "$APPJS" 'anyDialogOpen'; then
   echo "PASS: 仅当会话在跑才中断,且对话框打开时不抢键"; pass=$((pass + 1))
@@ -506,10 +533,10 @@ if has "$HOME_HTML" 'id="progress" hidden'; then
 else
   echo "FAIL: 首页缺 #progress / 没默认 hidden"; fail=$((fail + 1))
 fi
-if has "$HOME_HTML" 'title="正在执行 · 按 Esc 中断"'; then
-  echo "PASS: 状态条挂着「按 Esc 中断」的提示"; pass=$((pass + 1))
+if has "$HOME_HTML" 'title="正在执行 · 连按两下 Esc 中断"'; then
+  echo "PASS: 状态条挂着「连按两下 Esc 中断」的提示"; pass=$((pass + 1))
 else
-  echo "FAIL: 状态条缺「按 Esc 中断」提示"; fail=$((fail + 1))
+  echo "FAIL: 状态条缺「连按两下 Esc 中断」提示"; fail=$((fail + 1))
 fi
 # 8 格,一格一个 <i>,数量对不上就跟 TUI 的 8 格条不是一回事了
 PROG_CELLS=$(printf '%s' "$HOME_HTML" | sed -n 's/.*<span class="pbar"[^>]*>\(.*\)<\/span>.*/\1/p' | grep -o '<i></i>' | wc -l)

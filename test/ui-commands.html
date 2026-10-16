@@ -39,6 +39,7 @@
           <textarea id="input"></textarea>
           <button id="send"></button>
         </div>
+        <span id="progress" hidden title="正在执行 · 连按两下 Esc 中断"><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
         <div id="mentions" hidden></div>
         <div id="cmds" hidden></div>
         <input type="file" id="filePick" multiple hidden>
@@ -608,7 +609,7 @@
       store.active.set('ses_a', 'busy');
       fire('Escape');
       T('Esc:优先关命令面板', q('#cmds').hidden === true);
-      T('Esc:关面板时不会顺手中断回合', !hadCall(/\/interrupt$/), window.calls);
+      T('Esc:关面板时不会顺手中断回合', !hadCall(/\/interrupt/), window.calls);
 
       /* Esc:@ 补全开着 → 只关补全 */
       store.mentionItems = [{ path: 'Makefile', type: 'file', abs: '/proj/a/Makefile' }];
@@ -618,12 +619,46 @@
       window.calls.length = 0;
       fire('Escape');
       T('Esc:其次关 @ 补全', q('#mentions').hidden === true);
-      T('Esc:关补全时不会顺手中断回合', !hadCall(/\/interrupt$/), window.calls);
+      T('Esc:关补全时不会顺手中断回合', !hadCall(/\/interrupt/), window.calls);
 
-      /* Esc:都不开且在跑 → 中断 */
+      /* Esc:都不开且在跑 → 照 TUI 要按两下:第一下只上膛,第二下才真打断 */
       window.calls.length = 0;
       fire('Escape');
-      T('Esc:都不开且会话在跑 → 中断当前回合', hadCall(/\/interrupt$/), window.calls);
+      T('Esc:第一下只上膛,不发中断请求', !hadCall(/\/interrupt/), window.calls);
+      T('Esc:上膛后状态条换成「再按一次」提示(照 TUI 的 prompt.footer)',
+        q('#progress .phint').textContent.replace(/\s+/g, ' ').trim() === 'esc again to interrupt',
+        q('#progress .phint').textContent);
+      T('Esc:上膛时补一句 toast(底板收起时看不见状态条那句)',
+        q('#toast').textContent.indexOf('再按一次') >= 0, q('#toast').textContent);
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:第二下 → 中断当前回合', hadCall(/\/interrupt/), window.calls);
+      T('Esc:第二下之后提示文案收回原文',
+        q('#progress .phint').textContent.replace(/\s+/g, ' ').trim() === 'esc interrupt',
+        q('#progress .phint').textContent);
+
+      /* Esc:上膛之后输入框一有动静就撤掉 —— 见下面 setupComposerKeys() 之后那一组
+         (输入框的接线在 init() 里,测试页要手动接上才能测) */
+
+      /* Esc:上膛之后 5 秒到点自己收回(把定时器抓下来手动触发,不真等 5 秒) */
+      var realST = window.setTimeout;
+      var grab = null;
+      window.setTimeout = function (fn, ms) { if (!grab) grab = { fn: fn, ms: ms }; return 1; };
+      fire('Escape');
+      window.setTimeout = realST;
+      T('Esc:上膛挂的是 5 秒归零定时器(照 TUI 的 armInterruptTimer)', !!grab && grab.ms === 5000, grab && grab.ms);
+      if (grab) grab.fn();
+      T('Esc:到点自动收回上膛', q('#progress .phint').textContent.indexOf('again') < 0,
+        q('#progress .phint').textContent);
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:窗口过期后要重新按两下', !hadCall(/\/interrupt/), window.calls);
+
+      /* Esc:回合跑完也要把上膛收掉(照 TUI:phase 变 idle 就归零) */
+      store.active.delete('ses_a');
+      updateChatStatus();
+      T('Esc:回合结束时把上膛收掉', q('#progress .phint').textContent.indexOf('again') < 0,
+        q('#progress .phint').textContent);
 
       /* Esc:都不开且没跑 → 什么都不做 */
       store.active.delete('ses_a');
@@ -637,7 +672,7 @@
       q('#dlgHelp').showModal();
       window.calls.length = 0;
       fire('Escape');
-      T('Esc:对话框打开时不抢键(交给 <dialog>)', !hadCall(/\/interrupt$/));
+      T('Esc:对话框打开时不抢键(交给 <dialog>)', !hadCall(/\/interrupt/));
       q('#dlgHelp').close();
       store.active.delete('ses_a');
 
@@ -647,7 +682,7 @@
       var pe = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
       pe.preventDefault();
       document.dispatchEvent(pe);
-      T('Esc:已被别人消费过就不再处理', !hadCall(/\/interrupt$/));
+      T('Esc:已被别人消费过就不再处理', !hadCall(/\/interrupt/));
       store.active.delete('ses_a');
 
       /* Ctrl+P:命令面板 */
@@ -704,6 +739,23 @@
 
       /* 输入框内的接线:命令面板先于 @ 补全与历史 */
       setupComposerKeys(); // 这个接线在 init() 里,测试页要手动接上
+      /* Esc 上膛之后输入框一有动静就撤掉(照 TUI 的 handleInputClear):
+         这一条要等输入框接上才能测,所以放在这里,不放上面那组全局键位里 */
+      store.selected = 'ses_a';
+      store.active.set('ses_a', 'busy');
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:先上膛(准备测输入框归零)', q('#progress .phint').textContent.indexOf('again') >= 0,
+        q('#progress .phint').textContent);
+      setCaret('写点别的');
+      q('#input').dispatchEvent(new Event('input'));
+      T('Esc:输入框有动静 → 上膛自己撤掉', q('#progress .phint').textContent.indexOf('again') < 0,
+        q('#progress .phint').textContent);
+      window.calls.length = 0;
+      fire('Escape');
+      T('Esc:撤掉之后的那一下只是重新上膛(不会攒到两次)', !hadCall(/\/interrupt/), window.calls);
+      q('#input').dispatchEvent(new Event('input')); // 收干净,别把上膛留给后面的用例
+      store.active.delete('ses_a');
       store.history.clear();
       pushHistory('ses_a', '旧消息');
       setCaret('/re');

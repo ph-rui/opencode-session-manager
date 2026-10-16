@@ -72,7 +72,8 @@
       if (u.indexOf('/api/session/active') === 0) data = { data: ACTIVE_DATA };
       else if (u.indexOf('/api/agent') === 0) data = { data: AGENTS };
       else if (u.indexOf('/api/model') === 0) data = { data: MODELS };
-      else if (u.indexOf('/api/session/') === 0 && u.indexOf('/inbox') >= 0) data = { data: [] };
+      else if (/\/interrupt(\?|$)/.test(u)) data = { interrupted: true };
+      else if (u.indexOf('/api/session/') === 0 && u.indexOf('/inbox') >= 0) data = { data: window.INBOX || [] };
       else if (u.indexOf('/api/session?') === 0) data = { data: [SESSION], cursor: {} };
       else data = {};
       return { ok: true, status: 200, text: async function () { return JSON.stringify(data); } };
@@ -177,13 +178,26 @@
       setDelivery('bogus');
       T('非法投递值回退为排队', store.delivery === 'queue');
 
-      /* ---------------- 中断请求 ---------------- */
+      /* ---------------- 中断请求:resume + 放行排队消息 ---------------- */
       store.selected = SESSION.id;
+      window.INBOX = [
+        { id: 'i9', sessionID: SESSION.id, type: 'user', delivery: 'queue', payload: { text: '排队中' } },
+        { id: 'i8', sessionID: SESSION.id, type: 'user', delivery: 'steer', payload: { text: '插话' } },
+        { id: 'i7', sessionID: SESSION.id, type: 'compaction', delivery: 'queue', payload: {} },
+      ];
       window.calls.length = 0;
       await interrupt();
-      var ci = reqs(/\/interrupt$/)[0];
-      T('中断 POST 到 /api/session/:id/interrupt', !!ci && ci.method === 'POST' && ci.url === '/api/session/ses_t/interrupt', ci && ci.url);
+      var ci = reqs(/\/interrupt/)[0];
+      T('中断 POST 到 /api/session/:id/interrupt?resume=true',
+        !!ci && ci.method === 'POST' && ci.url === '/api/session/ses_t/interrupt?resume=true', ci && ci.url);
+      var pq = reqs(/\/inbox\/i9$/)[0];
+      T('中断后把「排队」项改成 steer(接着发出去)',
+        !!pq && pq.method === 'PATCH' && bodyOf(pq).delivery === 'steer', pq && pq.url);
+      T('中断不动「插话」项(它由 resume 自己接着跑)', reqs(/\/inbox\/i8$/).length === 0);
+      T('中断不动压缩这类控制项', reqs(/\/inbox\/i7$/).length === 0);
       T('中断后重取运行状态', reqs(/\/api\/session\/active$/).length >= 1);
+      T('中断提示里带上放行的条数', q('#toast').textContent.indexOf('1 条') >= 0, q('#toast').textContent);
+      window.INBOX = [];
 
       /* ---------------- 运行状态文案 ---------------- */
       store.selected = SESSION.id;

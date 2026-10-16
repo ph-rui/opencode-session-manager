@@ -413,20 +413,109 @@ function updateComposerControls() {
   if (att) att.disabled = !sel;
 }
 
+/* ---------------------------- 中断:Esc 要按两下 ----------------------------
+ * TUI 的 handleInterrupt 是「按两下」的:第一下只把 interrupt 计数置 1、挂一个 5 秒的
+ * 归零定时器(armInterruptTimer),窗口里再按一下才真的打断;输入框一有动静
+ * (handleInputClear)也把计数清掉,而且回合一结束(patch 里 phase === "idle")就归零。
+ * 面板照抄这套 —— Esc 在面板里还兼职「关命令面板 / 关 @ 补全」,手滑一下就把正在跑的
+ * 回合砍了,代价太大。没上膛时提示文案也照 TUI 的 prompt.footer 写法。
+ * 「■ 中断」按钮和命令面板里的「中断」是明确动作,照旧一下生效,不走这一套。 */
+const INTERRUPT_ARM_MS = 5000;
+let interruptArmed = false;
+let interruptArmTimer = null;
+const PHINT_IDLE = '<b>esc</b> interrupt';
+const PHINT_ARMED = '<b>esc</b> again to interrupt';
+
+/* 状态条旁边那句提示(TUI 的 prompt.footer)。这里的 innerHTML 只在「上膛/收回」
+ * 两种状态间来回,收回时写回的就是 index.html 里那段原文,不动 DOM 结构。 */
+function paintInterruptHint() {
+  const el = $('#progress .phint');
+  if (!el) return;
+  const want = interruptArmed ? PHINT_ARMED : PHINT_IDLE;
+  if (el.innerHTML !== want) el.innerHTML = want;
+}
+
+/* 收掉「上膛」状态:按第二下时、5 秒到点时、输入框有动静时、回合结束时都走这里 */
+function disarmInterrupt() {
+  if (!interruptArmed && !interruptArmTimer) return;
+  interruptArmed = false;
+  if (interruptArmTimer) {
+    clearTimeout(interruptArmTimer);
+    interruptArmTimer = null;
+  }
+  paintInterruptHint();
+}
+
+/* Esc 走这里:第一下上膛(5 秒内有效),第二下才真打断 */
+function requestInterrupt() {
+  if (interruptArmed) {
+    disarmInterrupt();
+    interrupt();
+    return;
+  }
+  interruptArmed = true;
+  if (interruptArmTimer) clearTimeout(interruptArmTimer);
+  interruptArmTimer = setTimeout(() => {
+    interruptArmTimer = null;
+    disarmInterrupt();
+  }, INTERRUPT_ARM_MS);
+  paintInterruptHint();
+  /* 收起的底板上看不见状态条那句提示(styles.css 里 .phint 在收起 / 窄屏时是
+   * display:none),这里再补一句 toast,免得「按一下没反应」被当成坏掉。 */
+  flash('再按一次 Esc 中断当前回合(5 秒内)', 'warn');
+}
+
 async function interrupt() {
   const sid = store.selected;
   if (!sid) return;
+  disarmInterrupt();
   const btn = $('#interrupt');
   if (btn) btn.disabled = true;
   try {
-    const j = await api('/api/session/' + enc(sid) + '/interrupt', { method: 'POST' });
-    if (j && j.interrupted) flash('已中断当前回合', 'ok');
-    else flash('当前没有正在执行的回合', 'warn');
+    /* resume=true:和 TUI 的 session.interrupt 一模一样 —— 中断之后接着跑「插话」类
+     * 待投递输入,以及下一件控制项(压缩 / 移动)。 */
+    const j = await api('/api/session/' + enc(sid) + '/interrupt?resume=true', { method: 'POST' });
+    if (j && j.interrupted) {
+      const n = await resumeQueued(sid);
+      flash(n ? '已中断当前回合 · ' + n + ' 条排队消息接着发出' : '已中断当前回合', 'ok');
+    } else {
+      flash('当前没有正在执行的回合', 'warn');
+    }
   } catch (e) {
     flash('中断失败:' + e.message, 'bad');
   }
   if (btn) btn.disabled = false;
   await loadActive();
+}
+
+/* 中断之后把「排队中」的消息接着发出去 —— TUI 里看到的就是这个效果。
+ * TUI 的输入框默认用 steer 投递,interrupt 又带 resume=true,所以服务器顺手就把那条跑
+ * 起来了;面板默认走 queue(排队),而 queue 的语义是「停在原地等下一次回合边界」,回合
+ * 被中断之后不会再有下一个边界,那条就一直躺在待发送队列里(真机实测:不推它,30 秒都
+ * 不动)。点它的「改为插话」就是「唤醒会话执行」,换成面板的话说就是:接着发。
+ * 只推 user 一类:压缩 / 移动这些控制项已经由 interrupt?resume=true 自己接管了。 */
+async function resumeQueued(sid) {
+  let items = [];
+  try {
+    const j = await api('/api/session/' + enc(sid) + '/inbox');
+    items = j.data || [];
+  } catch (e) {
+    return 0;
+  }
+  const queued = items.filter((it) => it && it.type === 'user' && it.delivery === 'queue');
+  for (const it of queued) {
+    try {
+      await api('/api/session/' + enc(sid) + '/inbox/' + enc(it.id), {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ delivery: 'steer' }),
+      });
+    } catch (e) {
+      /* 推不动也不吵:那条还在待发送队列里,用户自己也能点「改为插话」 */
+    }
+  }
+  if (queued.length) await loadInbox(sid);
+  return queued.length;
 }
 
 /* ----------------------------- 待发送队列 ----------------------------- */
@@ -2196,6 +2285,8 @@ function updateChatStatus() {
   } else if (st || store.running || compactionRunning()) {
     paint('● 运行中', 'state running', 'run');
   } else {
+    /* 回合一结束就不该再留着「Esc 上膛」的痕迹(照 TUI:phase 变 idle 就把 interrupt 归零) */
+    disarmInterrupt();
     paint('空闲', 'state', false);
   }
   updateComposerControls();
@@ -3287,7 +3378,7 @@ const HELP_KEYS = [
   { k: '↑ / ↓', d: '面板里移动;光标在首行/末行时取输入历史' },
   { k: 'Enter / Tab', d: '选中面板项' },
   { sec: '会话' },
-  { k: 'Esc', d: '关命令面板 → 关 @ 补全 → 中断当前回合(对应 TUI session.interrupt)' },
+  { k: 'Esc', d: '关命令面板 → 关 @ 补全 → 连按两下中断当前回合(对应 TUI session.interrupt)' },
   { k: 'End', d: '跳回最新消息(对应 TUI session.last);往上翻过头了也能一键回来' },
   { k: 'Shift+Tab', d: '切换到下一个智能体(对应 TUI agent.cycle)' },
   { k: 'Enter', d: '发送(Shift+Enter 换行)' },
@@ -3880,6 +3971,9 @@ async function runCommand(parsed, sid, files, busy) {
 function setupComposerKeys() {
   const inp = $('#input');
   if (!inp) return;
+  /* 输入框一有动静就把「Esc 上膛」收掉(照 TUI 的 handleInputClear:改了输入就等于
+   * 放弃这次中断),免得几秒前的半次 Esc 突然把回合砍了。 */
+  inp.addEventListener('input', () => disarmInterrupt());
   inp.addEventListener('keydown', (e) => {
     if (commandKey(e)) return; // 命令面板开着时优先吃方向键/Enter/Tab/Esc
     if (mentionKey(e)) return; // 补全列表开着时,方向键/Enter/Tab/Esc 先给补全
@@ -3910,7 +4004,8 @@ async function cycleAgent() {
   await switchAgent(next);
 }
 
-// Esc 的优先级:命令面板 → @ 补全 → 中断(TUI:session.interrupt = escape,一按即断)
+// Esc 的优先级:命令面板 → @ 补全 → 中断(照 TUI:session.interrupt 要按两下,
+// 第一下只是「上膛」,见 requestInterrupt)
 function setupTuiKeys() {
   document.addEventListener('keydown', (e) => {
     if (e.isComposing || e.defaultPrevented) return;
@@ -3929,7 +4024,7 @@ function setupTuiKeys() {
       const sid = store.selected;
       if (sid && isRunning(sid)) {
         e.preventDefault();
-        interrupt();
+        requestInterrupt();
       }
       return;
     }
