@@ -1460,8 +1460,9 @@ if has "$APPJS" 'async function autoLoadOlder(box)' && has "$APPJS" 'const AUTO_
    has "$APPJS" 'function setupAutoOlder()' && has "$INIT_FN_O" 'setupAutoOlder()' &&
    has "$APPJS" "document.documentElement.classList.contains('narrow')" &&
    has "$APPJS" 'if (store.msgError) return' &&
+   has "$APPJS" 'const at = scrollAnchor()' && has "$APPJS" 'applyScrollAnchor(at)' &&
    [ "$(printf '%s' "$APPJS" | grep -oF 'setupAutoOlder' | wc -l)" = 2 ]; then
-  echo "PASS: 窄屏滚到顶自动拉更旧(那一行收掉后翻旧仍有一条路;窄屏判定源还是 html.narrow,失败过不自己重撞)"; pass=$((pass + 1))
+  echo "PASS: 窄屏滚到顶自动拉更旧(那一行收掉后翻旧仍有一条路;窄屏判定源还是 html.narrow,失败过不自己重撞,拉完拿锚点把人放回原地)"; pass=$((pass + 1))
 else
   echo "FAIL: 窄屏没有「滚到顶自动拉更旧」,那一行却收起来了 —— 手机上就翻不了旧消息了"; fail=$((fail + 1))
 fi

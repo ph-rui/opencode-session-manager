@@ -1424,15 +1424,21 @@ async function autoLoadOlder(box) {
   if (box.scrollTop > AUTO_OLDER_TOP) return;
   autoOlderArmed = false;
   autoOlderBusy = true;
+  const at = scrollAnchor(); // 拉之前:眼前那条是谁、在屏上什么位置
   try {
     await loadMessages({ older: true });
   } finally {
     autoOlderBusy = false;
-    /* 上一页还在路上时用户又挪到过顶区(那时上膛没被消耗掉,因为这一趟还没腾出手):他
-     * 停下来就不会再派发 scroll 了,窄屏上那个按钮又已经收起来,所以这里补一发 ——
-     * 不补的话他只能再挪一次。上膛在真拉之前就被打掉,所以这条不会自己连拉。 */
-    if (autoOlderArmed) autoLoadOlder(box);
   }
+  /* 新拉的都在眼前这条【上面】。不把人放回原地的话,浏览器会守着 scrollTop(探针实测一直是
+   * 0),眼前这一屏就整个换成刚拉回来的那一页 —— 手机上表现成「一滚到顶就被顶到会话开头」。
+   * 用现成的锚点那套(applyScrollAnchor):还是这条消息、还在屏上原来的位置。
+   * 只在用户没趁机滚走时动手(离原来那个位置在一个顶区之内)。 */
+  if (at && at.id && Math.abs($('#messages').scrollTop - at.top) <= AUTO_OLDER_TOP) applyScrollAnchor(at);
+  /* 上一页还在路上时用户又挪到过顶区(那时上膛没被消耗掉,因为这一趟还没腾出手):他
+   * 停下来就不会再派发 scroll 了,窄屏上那个按钮又已经收起来,所以这里补一发 ——
+   * 不补的话他只能再挪一次。上膛在真拉之前就被打掉,所以这条不会自己连拉。 */
+  if (autoOlderArmed) autoLoadOlder(box);
 }
 
 function setupAutoOlder() {

@@ -410,6 +410,7 @@
         calls7b() === c1 + 1 && lastUrl().indexOf('cursor=cur-old') >= 0, calls7b() - c1 + ' ' + lastUrl());
       store.msgOlderCursor = 'cur-old-2';
       var c2 = calls7b();
+      box.scrollTop = 0; // 拉完那一下可能把滚动位置挪过(锚点那套),这里明确回到顶区再断
       await autoLoadOlder(box);
       T('7b2 还停在顶区:不再连着拉第二页(一次进顶只拉一页)', calls7b() === c2, calls7b() - c2);
       box.scrollTop = 400;
@@ -459,6 +460,27 @@
       box.dispatchEvent(new Event('scroll'));
       for (var w2 = 0; w2 < 25 && calls7b() === c7; w2++) await tick();
       T('7b9 再回顶:又带一页(上膛是真的回了)', calls7b() === c7 + 1, calls7b() - c7);
+      /* 7c:拉完不许把人顶走 —— 新拉的都在眼前这条【上面】,眼前这一屏必须还在原地。
+         夹具里给 ses_a 补一条【更旧的】长消息:这一页拉回来时它会被插到最上面(总高真的长),
+         于是这条断言不是空转。 */
+      window.SERVER['ses_a'] = [{ id: 'msg_older_big', type: 'user', time: { created: 50 },
+        text: '更旧的一条。'.repeat(40) }].concat(window.SERVER['ses_a']);
+      for (var w3 = 0; w3 < 25 && autoOlderBusy; w3++) await tick();
+      box.scrollTop = 0;
+      store.msgError = '';
+      store.msgOlderCursor = 'cur-old-7';
+      autoOlderArmed = true;
+      var at0 = scrollAnchor();
+      var top0 = box.scrollTop;
+      var h0 = box.scrollHeight;
+      await autoLoadOlder(box);
+      var at1 = scrollAnchor();
+      T('7c1 拉完把人放回原地:眼前那条还是那条、还在屏上同一个位置',
+        !!at0 && !!at1 && at0.id === at1.id && Math.abs(at0.off - at1.off) <= 2,
+        (at0 && at0.id) + '@' + (at0 && at0.off) + ' → ' + (at1 && at1.id) + '@' + (at1 && at1.off));
+      T('7c2 代价就是 scrollTop 跟着长出来的那一截往下走(新内容在上面,不是换成新那一页)',
+        box.scrollHeight > h0 && box.scrollTop > top0,
+        top0 + ' → ' + box.scrollTop + '(总高 ' + h0 + ' → ' + box.scrollHeight + ')');
       /* 还给后面的组一个干净状态 */
       if (!hadNarrow7b) html.classList.remove('narrow');
       store.msgError = '';
