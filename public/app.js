@@ -1210,6 +1210,11 @@ function clearSelection() {
   msgEls.clear();
   if (id) dropAsksFor(id);
   $('#messages').innerHTML = ''; // 里面的「跳到最新」按钮由 updateJumpLatest() 自己搬回来
+  /* 「加载更旧消息」跟着选中会话走:游标和那一格都清掉 —— 只清 store.messages 的话,这一格
+   * 会一直露在头部(没选中会话时点了也没用,loadMessages 会直接返回),而且下一个会话的第一页
+   * 还没回来之前它仍带着上一个会话的游标。 */
+  store.msgOlderCursor = null;
+  $('#older').hidden = true;
   updateJumpLatest(); // 没选中会话了 → 收起来
   $('#chatTitle').textContent = '未选择会话';
   $('#chatMeta').textContent = '';

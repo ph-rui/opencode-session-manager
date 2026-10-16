@@ -184,6 +184,14 @@
       T('清空后对话区没有残留消息', box.querySelectorAll('.msg').length === 0,
         box.querySelectorAll('.msg').length);
 
+      /* 「加载更旧消息」也跟着选中会话走:只清 store.messages 的话这一格会一直露在头部
+         (没选中会话时点了也没用),游标还会把上一个会话的页码带进下一个会话。 */
+      store.msgOlderCursor = 'cur-old';
+      q('#older').hidden = false;
+      clearSelection();
+      T('清掉选中后「加载更旧消息」跟着收起', q('#older').hidden === true);
+      T('清掉选中后分页游标也清掉', !store.msgOlderCursor, String(store.msgOlderCursor));
+
       T('在底部的口径:离底 79px 算在底部', atBottom({ scrollHeight: 1000, scrollTop: 921, clientHeight: 0 }) === true);
       T('离底 80px 就不算了(留一点余量给人往回看)', atBottom({ scrollHeight: 1000, scrollTop: 920, clientHeight: 0 }) === false);
       T('口径只有一处:自动跟随与按钮共用 BOTTOM_SLACK', BOTTOM_SLACK === 80, BOTTOM_SLACK);
