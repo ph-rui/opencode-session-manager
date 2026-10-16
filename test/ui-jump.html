@@ -389,6 +389,82 @@
       await loadMessages({ older: true });
       T('没有游标时不发请求', window.calls.length === callsBefore);
 
+      /* ============ 7b. 窄屏滚到顶自动拉更旧(§8.41) ============
+       * 手机上「导出 / 在TUI打开 / 归档 / 加载更旧消息」那一整行收掉了(styles.css 的
+       * html.narrow 那两条),翻旧消息全靠这里:滚到顶替用户点一次那个按钮 —— 走的是
+       * 同一段 loadMessages({older:true})(同一个游标、同一套重试与失败话)。
+       * 节流四条:窄屏以外不接管、一次进顶只拉一页、上一页在路上不重入、失败过不自动重来。 */
+      var html = document.documentElement;
+      var hadNarrow7b = html.classList.contains('narrow');
+      var calls7b = function () { return window.calls.length; };
+      var lastUrl = function () { return (window.calls[window.calls.length - 1] || {}).url || ''; };
+      store.selected = 'ses_a';
+      store.msgError = '';
+      store.msgOlderCursor = 'cur-old';
+      html.classList.add('narrow');
+      box.scrollTop = 0;
+      autoOlderArmed = true;
+      var c1 = calls7b();
+      await autoLoadOlder(box);
+      T('7b1 窄屏到顶 → 自己拉一页(带着游标)',
+        calls7b() === c1 + 1 && lastUrl().indexOf('cursor=cur-old') >= 0, calls7b() - c1 + ' ' + lastUrl());
+      store.msgOlderCursor = 'cur-old-2';
+      var c2 = calls7b();
+      await autoLoadOlder(box);
+      T('7b2 还停在顶区:不再连着拉第二页(一次进顶只拉一页)', calls7b() === c2, calls7b() - c2);
+      box.scrollTop = 400;
+      await autoLoadOlder(box);
+      T('7b3 滚下去(离开顶区)时什么都不发', calls7b() === c2, calls7b() - c2);
+      box.scrollTop = 0;
+      autoOlderArmed = true; // 逻辑直调这一路要自己上膛;监听那条路下面单独验
+      await autoLoadOlder(box);
+      T('7b4 重新上膛 → 又拉一页', calls7b() === c2 + 1, calls7b() - c2);
+      html.classList.remove('narrow');
+      autoOlderArmed = true;
+      store.msgOlderCursor = 'cur-old-3';
+      var c3 = calls7b();
+      await autoLoadOlder(box);
+      T('7b5 桌面(不带 narrow)不接管:翻旧仍是点那个按钮', calls7b() === c3, calls7b() - c3);
+      html.classList.add('narrow');
+      autoOlderArmed = true;
+      store.msgOlderCursor = null;
+      var c4 = calls7b();
+      await autoLoadOlder(box);
+      T('7b6 没有更旧的了 → 不发', calls7b() === c4, calls7b() - c4);
+      store.msgOlderCursor = 'cur-old-4';
+      store.msgError = '上一页挂了';
+      autoOlderArmed = true;
+      var c5 = calls7b();
+      await autoLoadOlder(box);
+      T('7b7 上一页失败过 → 不自己重撞(那句「加载失败 + 重试」还在等用户)',
+        calls7b() === c5 && store.msgError === '上一页挂了', calls7b() - c5);
+      store.msgError = '';
+      /* 真正那条路:监听挂一次,顶区里来一发 scroll 就够(合成事件就够确定,不等浏览器那一发) */
+      setupAutoOlder();
+      store.msgOlderCursor = 'cur-old-5';
+      box.scrollTop = 0;
+      autoOlderArmed = true;
+      var c6 = calls7b();
+      box.dispatchEvent(new Event('scroll'));
+      for (var w1 = 0; w1 < 25 && calls7b() === c6; w1++) await tick();
+      T('7b8 监听那条路:顶区里一发 scroll 就带上一页', calls7b() === c6 + 1, calls7b() - c6);
+      /* 等这一页走完:它收尾时会把游标换成服务端给的那个(夹具给的是 null) —— 不等就动手,
+         后面那两发 scroll 撞的是「上一页还在路上」,断的就不是上膛了。 */
+      for (var w1b = 0; w1b < 25 && autoOlderBusy; w1b++) await tick();
+      box.scrollTop = 600;
+      box.dispatchEvent(new Event('scroll')); // 离开顶区 → 重新上膛
+      store.msgOlderCursor = 'cur-old-6';
+      var c7 = calls7b();
+      box.scrollTop = 0;
+      box.dispatchEvent(new Event('scroll'));
+      for (var w2 = 0; w2 < 25 && calls7b() === c7; w2++) await tick();
+      T('7b9 再回顶:又带一页(上膛是真的回了)', calls7b() === c7 + 1, calls7b() - c7);
+      /* 还给后面的组一个干净状态 */
+      if (!hadNarrow7b) html.classList.remove('narrow');
+      store.msgError = '';
+      store.msgOlderCursor = null;
+      store.selected = 'ses_a';
+
       /* ============ 8. 拉消息失败不许一声不响(§8.34) ============
        * 手机上一个 12MB 的会话首页(工具 part 里塞了整份文件/截图)可能下几十秒,也可能
        * 下到一半被掐断。老写法:api() 抛出 → loadMessages 的 catch 一吞 → 消息区永远空着,

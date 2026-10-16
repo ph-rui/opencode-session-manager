@@ -1393,8 +1393,12 @@ html.narrow #ctoolbar .ctl select { font-size: 16px; }
 html.narrow #chatHeader { padding: 8px 10px; }
 html.narrow .chline { gap: 8px; }
 html.narrow #chatMeta { font-size: 11.5px; }
-html.narrow #chatOps .chip { min-height: 40px; }
-html.narrow #older { min-height: 40px; }
+/* §8.41(用户「手机端…显示太多东西没必要」):窄屏把「导出 / 在TUI打开 / 归档 / 加载更旧消息」
+   这一整行收掉 —— 竖屏上它有 40px,而这三样在 `/` 命令面板里都有(export / tui / archive),
+   翻旧消息改由「滚到顶自动拉」(#older 那个按钮走的是同一段 loadMessages({older:true}))。
+   桌面照旧整条留着。 */
+html.narrow #chatOps,
+html.narrow #older { display: none; }
 
 /* ---- 输入区 ---- */
 html.narrow #ctoolbar { gap: 8px; padding: 7px 10px 0; }

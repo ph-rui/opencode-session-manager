@@ -1405,6 +1405,46 @@ function setupScrollMemory() {
   window.addEventListener('pagehide', saveScrollAnchor); // 关页/刷新前兜一次,避免节流丢掉最后一个位置
 }
 
+/* ---------------- 窄屏「滚到顶自动拉更旧」 ----------------
+ * 手机上「导出 / 在TUI打开 / 归档 / 加载更旧消息」那一整行按 §8.41 收掉了,翻旧消息全靠
+ * 这里:滚到顶就替用户点一次那个按钮 —— 走的是同一段 loadMessages({older:true})(同一套
+ * 游标、重试与失败话),只是没有按钮可点。四条节流:窄屏以外不接管(桌面照旧点按钮)、
+ * 一次进顶只拉一页(要再拉得先离开顶区)、上一页还在路上不重入、失败之后不自动重来
+ * (消息区顶上那句「加载失败 + 重试」还在,由用户决定)。 */
+const AUTO_OLDER_TOP = 120; // 离顶多少 px 内算「到顶了」(手指回弹也会经过这里)
+let autoOlderArmed = true;  // 上膛:进过顶区没有(离开顶区才重新上膛,免得一页接一页地拉)
+let autoOlderBusy = false;  // 上一页还在路上
+let autoOlderWired = false; // 重复接线不重复挂监听
+
+async function autoLoadOlder(box) {
+  if (!document.documentElement.classList.contains('narrow')) return; // 窄屏判定源只有这一个
+  if (autoOlderBusy || !autoOlderArmed) return;
+  if (!store.msgOlderCursor) return; // 没有更旧的了
+  if (store.msgError) return;        // 上一页失败过:让用户按「重试」,别自己循环撞
+  if (box.scrollTop > AUTO_OLDER_TOP) return;
+  autoOlderArmed = false;
+  autoOlderBusy = true;
+  try {
+    await loadMessages({ older: true });
+  } finally {
+    autoOlderBusy = false;
+    /* 上一页还在路上时用户又挪到过顶区(那时上膛没被消耗掉,因为这一趟还没腾出手):他
+     * 停下来就不会再派发 scroll 了,窄屏上那个按钮又已经收起来,所以这里补一发 ——
+     * 不补的话他只能再挪一次。上膛在真拉之前就被打掉,所以这条不会自己连拉。 */
+    if (autoOlderArmed) autoLoadOlder(box);
+  }
+}
+
+function setupAutoOlder() {
+  if (autoOlderWired) return;
+  autoOlderWired = true;
+  const box = $('#messages');
+  box.addEventListener('scroll', () => {
+    if (box.scrollTop > AUTO_OLDER_TOP) { autoOlderArmed = true; return; }
+    autoLoadOlder(box);
+  }, { passive: true });
+}
+
 /* ---------------- 一键回底(TUI 的 "Jump to latest ↓") ----------------
  * TUI 那边是消息区下沿一行右对齐的 "Jump to latest ↓",只在「你没停在最底部」时出现,
  * 键位是 session.last(End / ctrl+alt+g)。这里做成贴在消息区右下角的小片(sticky)。
@@ -1790,6 +1830,7 @@ async function loadMessages(opts) {
   } else {
     q.set('order', 'desc');
     store.msgError = '';
+    autoOlderArmed = true; // 新的一页(切会话/重拉首屏)重新上膛:下一回到顶又能自动拉
   }
   setMsgLoading(true);
   const url = '/api/session/' + encodeURIComponent(id) + '/message?' + q.toString();
@@ -6436,6 +6477,7 @@ function init() {
   setupComposerToggle(); // 底板收起/展开(手机默认收起,见上面那一节)
   setupHistoryNav();
   setupScrollMemory();
+  setupAutoOlder(); // 窄屏滚到顶自动拉更旧(§8.41:那一行在手机上收起来了)
   setupJumpLatest(); // 一键回底(TUI 的 Jump to latest / End)
   setupMsgState(); // 拉消息的状态行(正在加载 / 加载失败 + 重试)
   setupAttachments();

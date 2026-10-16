@@ -1446,14 +1446,24 @@ else
   echo "FAIL: 窄屏没收 .agModel / 宽度上限没跟着改"; fail=$((fail + 1))
 fi
 if has "$CSS" '#chatOps { display: inline-flex' && has "$CSS" '#older { width: auto; margin: 8px 0 0;'; then
-  echo "PASS: #chatOps 改 inline-flex,「加载更旧消息」落在会话操作同一行"; pass=$((pass + 1))
+  echo "PASS: 桌面:#chatOps 是 inline-flex,「加载更旧消息」落在会话操作同一行"; pass=$((pass + 1))
 else
   echo "FAIL: 「加载更旧消息」还是自己占一整行"; fail=$((fail + 1))
 fi
-if has "$CSS" 'html.narrow #older { min-height: 40px; }'; then
-  echo "PASS: 手机上「加载更旧消息」跟旁边几个 chip 一样高(40px)"; pass=$((pass + 1))
+# ---- §8.41(用户「手机端…显示太多东西没必要」):窄屏把那一整行收掉,翻旧改走「滚到顶自动拉」----
+if has "$CSS" 'html.narrow #chatOps,' && has "$CSS" 'html.narrow #older { display: none; }'; then
+  echo "PASS: 手机上「导出 / 在TUI打开 / 归档 / 加载更旧消息」那一整行收起(40px 还给消息区)"; pass=$((pass + 1))
 else
-  echo "FAIL: 窄屏下 #older 的触摸高度没对齐"; fail=$((fail + 1))
+  echo "FAIL: 窄屏下那一行没收(或只收了几个 chip、行还占着 40px)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'async function autoLoadOlder(box)' && has "$APPJS" 'const AUTO_OLDER_TOP = 120' &&
+   has "$APPJS" 'function setupAutoOlder()' && has "$INIT_FN_O" 'setupAutoOlder()' &&
+   has "$APPJS" "document.documentElement.classList.contains('narrow')" &&
+   has "$APPJS" 'if (store.msgError) return' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setupAutoOlder' | wc -l)" = 2 ]; then
+  echo "PASS: 窄屏滚到顶自动拉更旧(那一行收掉后翻旧仍有一条路;窄屏判定源还是 html.narrow,失败过不自己重撞)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏没有「滚到顶自动拉更旧」,那一行却收起来了 —— 手机上就翻不了旧消息了"; fail=$((fail + 1))
 fi
 
 # ---- R4 组:助手消息脚注(照 TUI 的 AssistantFooter,§8.27)----

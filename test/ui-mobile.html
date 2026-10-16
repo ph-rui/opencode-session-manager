@@ -328,6 +328,14 @@
       T('C8c 窄屏:对话区左沿贴边(不被隐式列顶开)',
         Math.abs(box(q('#chatpane')).left) <= 1, box(q('#chatpane')).left);
 
+      /* §8.41(用户「手机端…显示太多东西没必要」):窄屏把「导出 / 在TUI打开 / 归档 /
+         加载更旧消息」那一整行收掉 —— 三个动作在 `/` 命令面板里都有,翻旧靠滚到顶自动拉。
+         这里把两样按「有会话、还有更旧的」摆出来,断的是 CSS 那一层。 */
+      q('#chatOps').hidden = false;
+      q('#older').hidden = false;
+      T('C8d 窄屏:「导出 / 在TUI打开 / 归档」那一行收起来了', !vis(q('#chatOps')));
+      T('C8e 窄屏:「加载更旧消息」也跟着收(整行让出 40px)', !vis(q('#older')));
+
       /* 对话框:基础样式 min-width:420px,在 393px 的屏上必然溢出 */
       openPick({ title: '宽度检查', items: [{ key: 'a', label: '甲' }] });
       var dw = box(q('#dlgPick')).width;
@@ -349,6 +357,13 @@
       T('D1 桌面:#btnFilters 隐藏', !vis(q('#btnFilters')));
       T('D2 桌面:#backList 隐藏', !vis(q('#backList')));
       T('D3 桌面:⋯ 隐藏', !vis(rowA().querySelector('.actions .more')));
+      /* §8.41 的反面:那一行只在窄屏收,桌面照旧整条留着(窄屏判定源仍是 html.narrow) */
+      q('#chatOps').hidden = false;
+      q('#older').hidden = false;
+      T('D3a 桌面:「导出 / 在TUI打开 / 归档 / 加载更旧消息」那一行照旧都在',
+        vis(q('#chatOps')) && vis(q('#older')));
+      T('D3b 桌面:#older 仍是原来的高度(窄屏那条 min-height 只管窄屏)',
+        box(q('#older')).height > 0, box(q('#older')).height);
       T('D4 桌面:原来那六个按钮回来了', vis(rowA().querySelector('.actions button[data-act="open"]')) &&
         vis(rowA().querySelector('.actions button[data-act="del"]')));
       T('D5 桌面:表头回来了', vis(q('#list thead')));
