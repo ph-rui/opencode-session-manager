@@ -323,6 +323,14 @@ opencode-session-manager/
       > 增量重绘(`paintLiveDelta` / 压缩正文的 `paintCompactBody`)只读缓存。原因:改完 `#messages` 再读一次
       > `scrollHeight` 会把整篇强制重排(实测 100 条消息 / 7838 节点:干净 0.95ms,脏 23~34ms),而旧代码
       > **每个 token delta** 都这么读一次。
+      > 2026-10-16 追加(跟随判据,见 `2026-10-15-mobile-design.md` §8.23):上面那句「`renderMessages()` 把已算出的
+      > 布尔喂给它」**已作废** —— 拿一次几何读数当结论,会把「容器变矮」(状态条出现 / 底板展开 / `#asks` 弹出 /
+      > 软键盘顶起)误判成「用户往上滚」,表现是「明明一直贴在底,忽然不跟随,要动不动点一下跳到最新」。
+      > 现在 `store.nearBottom` 的含义是**用户意图**:离底 `< BOTTOM_SLACK` → 跟随;`scrollTop` 比 `store.lastTop`
+      > **变小**了(只有用户自己往上滚才做得到)→ 让路;其余(内容变长 / 容器变矮)→ 维持原样,跟随中就把底重新贴住。
+      > 贴底动作收敛成唯一的 `pinBottom()`(滚到底 + 记 `lastTop`),并加 `ResizeObserver` 在容器变矮时当场重贴;
+      > `restoreFromHash()` 也只在**真有存档**时才塞 `store.restoreScroll`(塞一个 `anchor` 为 `null` 的会拦住
+      > `selectSession()` 的 `forceBottom`,于是「没有存档」变成停在最上面 —— 与上面「没有就跳底部」正好相反)。
     - `scrollAnchor()` 用 `getBoundingClientRect` 而不是 `offsetTop`,不依赖 `offsetParent`;锚点消息不在了(被删/掉出这一页)才退回像素值。
       > 2026-10-16 追加(性能,见 `2026-10-15-mobile-design.md` §8.17):长会话(条数 ≥ `CV_MIN_MSGS = 30`)给 `#messages` 挂 `.cvmany`,
       > 离屏 `.msg` 走 `content-visibility: auto` 整块跳过渲染,那次强制排版从 24~36ms 掉到 0ms。

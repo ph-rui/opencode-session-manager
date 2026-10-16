@@ -427,14 +427,14 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 220（§8.21 之后）|
+| `smoke.sh` | 230（§8.23 之后）|
 | `netallow-run.js`（新）| 74 |
-| `ui-layout` / `ui-tools` / `ui-asks` | 162 / 110 / 57 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 164 / 134 / 57 |
 | `ui-controls` / `ui-capabilities` / `ui-stream` | 90 / 71 / 236 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 171 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
-| `ui-jump`（新，见 §8.6）| 47 |
+| `ui-jump`（新，见 §8.6）| 56 |
 | `e2e-asks` / `e2e-controls` / `e2e-capabilities` | 15 / 22（+1 跳）/ 26 |
 | `e2e-stream` / `e2e-attach` / `e2e-commands` | 4（+1 跳）/ 32 / 40 |
 
@@ -1206,6 +1206,91 @@ ctrl+p commands」。
 - 收官时那行读作 `Build · DeepSee…  /work/example-repo/n…  76% ctx  / 命令`（两处都按 TUI 截断）。
 
 **回归**：`smoke.sh` 218 → **220**（`#chatAgent` 与 `.armed` 各一条，费用那条并进子会话/费用一起查）；`ui-stream` 219 → **236**（agent·模型 4 例、子会话/shell/事件 13 例）；`ui-commands` 166 → **171**（输入框里无 Shift 的 `Tab` 3 例 + `.armed` 挂/摘 2 例）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
+### 8.22 追加：消息体工具卡照 TUI 对齐（图标 / 工具词 / 块标题 / diff 徽标 / 路径缩略）
+
+**起因**：§8.21 之后用户说「继续对齐」—— 对的是**消息体里的工具卡**：工具行、块标题、diff 徽标、
+诊断行、路径。
+
+**查到的 TUI 事实**（v2.0.28 的 `packages/tui/src/routes/session/index.tsx`、
+`message-parts.tsx`、`util/tool-display.ts`，都在 `/tmp/ocsm-probe/tui-*.tsx` / `tool-display.ts`）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 工具行 = `paddingLeft 3` + `[图标宽 2] [文案 muted]` | `INLINE_TOOL_ICON_WIDTH = 2`；`InlineToolRow` 的 spinner/complete 两个分支 |
+| 图标 read/list `→`、write `←`、glob/grep `✱`、webfetch `%`、websearch `◈`、subagent `✓`/`│`/`↳`、其余 `✓`/`✗` | 同上 + `BlockTool` / `Subagent` |
+| 标题 `Read <path>[:起-止]`、`Glob "<pat>"[ in <path>] (N matches)`、`Grep …`、`WebFetch <url>`、`Web Search via <provider> "<query>"`、`Write <path>`、`← Edit <path>`、`<Agent> Subagent — <desc> · <model>`、`Asked N question(s)`、`Skill "<name>"`、通用 `<tool> [k=v, …]` | 各工具组件 |
+| 块标题：write `# Wrote <path>`、question 已答 `# Questions`、ApplyPatch 每文件 `# Created` / `# Deleted` / `← Patched` | `BlockTool` / `ApplyPatch` / `Question` |
+| shell 块 `$ [cd <wd> && ]<cmd>` + 输出（muted、折叠 10 行）；pending 文案（`Reading file…` / `Writing command…`）只在关键入参还没到时出现 | `Shell` 组件 |
+| 工具名先归一 `canonicalToolName`：`bash`→`shell`、`task`→`subagent`、`apply_patch`→`patch` | `util/tool-display.ts` |
+| 路径缩略 `x4(path, {base: 会话目录, home})`：会话目录下取相对（base 自身 → `.`）、否则 `cm(abs, home)` → `~/…` | 调用点 + 二进制里的 `x4`/`cm` |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 图标 | 新 `TOOL_ICONS` + `toolIcon(p)`：按归一后的工具名给行首 `.tmark`；**运行中仍是 spinner**（这是面板自己的做法，TUI 只给 read/shell/edit/patch/subagent 转）|
+| 工具名 | 新 `TOOL_ALIAS`（照 `canonicalToolName`）→ `toolKind()` 统一口径 |
+| 拆名 / 描述 | `toolLine(p)` 产出 `{ head, tail }`：工具词进 `.tname`、余下上下文进 `.tdesc`；**shell 例外**（整条命令进 `.tname`，照 TUI 的 `$ <cmd>`）|
+| 状态字 | `.tstate` 只在**出错**时印「出错」；完成 / 运行中都不再另画标记（行首图标已经说了）|
+| 块标题 | write `# Wrote <路径>`、question `# Questions`、未答 `Asked N question(s)`、skill 无名时只印 `Skill`（不留空 `""`）；块工具**默认折叠**（面板自己的做法）|
+| diff | 徽标 added `# Created` / deleted `# Deleted` / 其余 `← Patched`；`.dnote` 改 `-N lines`；诊断行 `Error [行:列] msg` |
+| shell 正文 | 只留输出，不再铺入参 JSON |
+| 路径缩略 | 新 `normPath()` / `abbrevPath()`（会话目录下相对、home 下 `~/…`、取不到会话目录原样）；用在 `toolLine` 的展示路径、`Wrote` 的 tail、`diffHtml` 的 `.dpath`；`diagHtml(md, path)` 仍用**未缩**的绝对路径查诊断 |
+| CSS | `.tname` 加 `flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap`（shell 的长命令要能省略，否则撑破行）|
+| 语言 | 工具层文案照 TUI 用英文（TUI 的组件名本来就是英文，`.tname` 本来就印 `read`/`edit`/`bash`）；面板其余 chrome 仍中文 |
+
+**验证**：探针 `tools-shot.js`（`node tools-shot.js <sid> <宽> <高>`；代理真面板 + 注入探针 dump
+`#messages` 里每行 `.tmark/.tname/.tdesc/.tstate` 与 `.dfile/.dline`，并截图）。在
+`ses_demo`（393×894，46 行）读到：`→ Skill "brainstorming"`、
+`→ Read /media/.../default.xml`、`$ ls -la ...`、`# Questions`、`← Edit /media/.../local.xml`、
+`.dfile` = `← Patched` + 路径 + `+10-10`；第一行 skill 的空 `""` 已修掉。
+
+**回归**：`smoke.sh` 220 → **226**（N3 组六项：图标表 / `TOOL_ALIAS` / `toolLine` 的工具词 / 块标题 /
+diff 徽标 / 诊断行）；`ui-tools` 110 → **134**（`toolIcon` 6 例、`toolLine` 7 例、`normPath`+`abbrevPath` 9 例、
+块标题与 `-N lines` / 诊断行）；`ui-stream` 三处期望跟着改（shell 命令进 `.tname`、`tstate` 不再出现、
+行首回到 `$`）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
+### 8.23 追加：「贴不贴底」是用户意图，不是一次几何读数（修「忽然不跟随」）
+
+**起因**：用户报「对话框的内容有时不是实时跳转最新的输出，要动不动就要点击跳到最新」。
+
+**实测复现**（探针 `follow-repro.js`：`node follow-repro.js <sid> <宽> <高>`，用 `ACT_AT`/`ACT` 注入动作；
+真面板 + 真会话 + 真流式回合，全程**一次都不手动滚动**，只记 `store.nearBottom` 每次翻转的调用栈与几何
+`{scrollTop, scrollHeight, clientHeight}`）：
+
+- 贴在底（离底 `d = 0`）时把 `#messages` 矮掉 160px（等价于状态条出现 / 底板展开 / `#asks` 弹出 /
+  软键盘顶起）→ `d` 立刻变 161 → `nearBottom true → false`（栈：`updateJumpLatest ← renderMessages ←
+  loadMessages`）→ 之后一路不跟随，只能自己点「跳到最新」。
+- 根因：`renderMessages()` 拿**变更前**那一次 `atBottom(box)` 当结论，而「重贴底」写在这句的
+  `if (nearBottom)` 里 —— 变矮那一刻量到「离底远」，跟随就被关掉，而且不会自己恢复。
+
+**改法**（照 TUI 的 `stickyScroll` 思路：只有「用户自己离开底部」才停止跟随）：
+
+| 点 | 决定 |
+|---|---|
+| 判据 | `store.lastTop` 记上次看到的 `scrollTop`。离底 `< BOTTOM_SLACK` → 跟随；`scrollTop` 比它**变小了** → 用户往上滚了，让路；其余（内容变长 / 容器变矮）→ 维持原样，跟随中就把底部重新贴住 |
+| 贴底动作 | 收敛成唯一的 `pinBottom(box)`（滚到底 + 记下 `lastTop`）；`renderMessages` / `paintLiveDelta` / `paintCompactBody` / `jumpToLatest` 全走它，不再各写一行 `scrollTop = scrollHeight` |
+| 容器变矮 | 新 `ResizeObserver` 盯着 `#messages`：一变矮就在**跟随时**当场重贴底（不等下一次渲染 —— 一条消息都不再来的话就永远差一截）；用户往上翻着时一动不动 |
+| 深链 | `restoreFromHash()` 只在**真有存档**时才塞 `store.restoreScroll`：塞一个 `anchor` 为 `null` 的 pending 会拦住 `selectSession()` 里的 `forceBottom`，于是「没有存档」变成停在最上面 —— 与那句注释「没有就按老样子跳到底部」正好相反 |
+| `atBottom()` | 保持**纯几何**（离线可断言，`ui-jump` 直接喂 `{scrollHeight, scrollTop, clientHeight}`）；「这次离底变远算不算用户往上滚」的解释职责挪进 `updateJumpLatest()` |
+| 不变 | `store.nearBottom` 仍是增量重绘唯一读的缓存，唯一写点仍是 `updateJumpLatest()`；`BOTTOM_SLACK = 80` 不变（按钮显隐与跟随仍共用一个口径）|
+
+**验证**（同一次流式回合里做三件事，全在 393×894 的真面板上）：
+
+- 矮 160px：`nearBottom` 保持 `true`，`ResizeObserver` 当场把 `d` 贴回 0（改前：翻 `false` 并一路不跟）。
+- 往上滚 400px：`nearBottom true → false`（栈落在滚动事件那条线上），内容继续变长但**不把人拽回底部**。
+- 滚回底部：`nearBottom false → true`，按钮收起、跟随恢复。
+- 长会话深链（`NO_JUMP=1 NO_PROMPT=1`，全新 profile，sessionStorage 里没有存档）：
+  `ses_demo`（101 条、25007px）打开即 `d = 0`、按钮收起（改前会停在最上面）。
+
+**回归**：`ui-jump` 47 → **56**（容器变矮不关跟随 / `scrollTop` 往回走才关 / 当场贴底 / 让路期间不拽人，
+另加 `pinBottom` 记 `lastTop`）；`ui-layout` 162 → **164**（没有存档的长会话深链到底且处于跟随中）；
+`smoke.sh` 226 → **230**；其余套件与 `e2e-*` 全 0 失败。
 
 ---
 
