@@ -583,7 +583,7 @@ CHATLINE=$(printf '%s' "$HOME_HTML" | grep -o 'class="chline".*' | head -1)
 if printf '%s' "$CHATLINE" | grep -q 'id="progress"'; then
   echo "FAIL: 状态条还挂在聊天标题行里(TUI 是在输入框下面)"; fail=$((fail + 1))
 else
-  echo "PASS: 聊天标题行里没有状态条了(只剩「‹ 会话 + 标题 + ● 运行中」)"; pass=$((pass + 1))
+  echo "PASS: 聊天标题行里没有状态条了(只剩「‹ 会话 + 标题 + ● 运行中 + 上下文用量」)"; pass=$((pass + 1))
 fi
 # #progress 夹在输入框(.cinput)后面、而且在 #composer 里面 = 对话框下面那一行
 HTML_FLAT=$(printf '%s' "$HOME_HTML" | tr -d '\n')
@@ -1085,6 +1085,64 @@ if has "$(cat "$(dirname "$0")/ui-layout.html")" "list-peek"; then
   echo "PASS: ui-layout.html 里有临时展开的断言"; pass=$((pass + 1))
 else
   echo "FAIL: ui-layout.html 里没有 list-peek 的断言"; fail=$((fail + 1))
+fi
+
+# ---- Q 组:上下文用量(TUI 提示栏的 155.6K (78%)) ----
+# 用户报「网页版不显示 155.6K (78%)」。TUI 提示栏右边那个数不是存好的,是每次从消息现算
+# (见 app.js 的 contextUsage 顶上那段源码原文),面板把它画在会话头部标题行 —— 那个位置
+# 窄屏也一直看得见(底板收起时也在)。两条硬约束:
+#   ① 只认最后一次【已完成】压缩之后的助手消息(压缩把上下文清空了,之前的数不算);
+#   ② 全量 / 窄屏两档文案都印在 DOM 里,由 CSS 按 html.narrow 挑,不用 JS 判宽度。
+CLINE_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'class="chline"' | head -1 | cut -d: -f1)
+CTX_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="ctxInfo"' | head -1 | cut -d: -f1)
+META_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="chatMeta"' | head -1 | cut -d: -f1)
+if [ -n "$CTX_AT" ] && [ "$CLINE_AT" -lt "$CTX_AT" ] && [ "$CTX_AT" -lt "$META_AT" ]; then
+  echo "PASS: 上下文用量挂在会话头部标题行(#ctxInfo,窄屏也看得见)"; pass=$((pass + 1))
+else
+  echo "FAIL: #ctxInfo 不在标题行里(chline=$CLINE_AT ctx=$CTX_AT meta=$META_AT)"; fail=$((fail + 1))
+fi
+if has "$HOME_HTML" 'class="ctxFull"' && has "$HOME_HTML" 'class="ctxCompact"'; then
+  echo "PASS: 全量 / 窄屏两档文案都在 DOM 里(窄屏那档就是 TUI 的 compact)"; pass=$((pass + 1))
+else
+  echo "FAIL: #ctxInfo 缺 ctxFull/ctxCompact 两档"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #ctxInfo .ctxFull { display: none; }' &&
+   has "$CSS" 'html.narrow #ctxInfo .ctxCompact { display: inline; }'; then
+  echo "PASS: 窄屏由 CSS 换成 compact 档(横竖屏来回转也不用重画)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺窄屏切档规则"; fail=$((fail + 1))
+fi
+CTX_FN=$(printf '%s' "$APPJS" | awk '/^function contextUsage\(/{f=1} f{print} f&&/^\}$/{exit}')
+CTX_LAST_FN=$(printf '%s' "$APPJS" | awk '/^function lastUsageMessage\(/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$CTX_LAST_FN" "m.type === 'compaction' && m.status === 'completed'" &&
+   has "$CTX_FN" 'cache.read' && has "$CTX_FN" 'limit.context' &&
+   has "$APPJS" 'store.models.get(dir)'; then
+  echo "PASS: 用量照 TUI 现算(压缩后重算 + 五路 tokens 求和 + 该 location 的模型表得百分比)"; pass=$((pass + 1))
+else
+  echo "FAIL: contextUsage()/lastUsageMessage() 的算法不对"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function fmtSize(' && has "$APPJS" "(n / 1e6).toFixed(1) + 'M'" &&
+   has "$APPJS" "(n / 1000).toFixed(1) + 'K'"; then
+  echo "PASS: fmtSize 是 TUI 的 zN(155600 → 155.6K)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 fmtSize()/缩写规则"; fail=$((fail + 1))
+fi
+if has "$APPJS" "u.percent + '% ctx'"; then
+  echo "PASS: 窄屏文案就是 TUI 的 compact(78% ctx)"; pass=$((pass + 1))
+else
+  echo "FAIL: 窄屏文案没照 TUI"; fail=$((fail + 1))
+fi
+CTX_CALLS=$(printf '%s' "$APPJS" | grep -oF 'paintContextUsage();' | wc -l)
+if has "$APPJS" 'function paintContextUsage(' && has "$APPJS" 'function currentMessages(' &&
+   [ "$CTX_CALLS" = 3 ]; then
+  echo "PASS: paintContextUsage 三个调用点(updateChatStatus 两分支 + renderControls),口径与渲染共用 currentMessages()"; pass=$((pass + 1))
+else
+  echo "FAIL: paintContextUsage 的接线不对(got $CTX_CALLS 个调用点)"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-stream.html")" "#ctxInfo"; then
+  echo "PASS: ui-stream.html 里有上下文用量的断言"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-stream.html 里没有上下文用量的断言"; fail=$((fail + 1))
 fi
 
 echo

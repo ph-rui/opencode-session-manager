@@ -16,7 +16,7 @@
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">
       <div id="chatHeader">
-        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span></div>
         <div id="chatMeta"></div>
         <div id="chatOps" hidden>
           <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
@@ -56,7 +56,7 @@
         tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/b' } },
     ];
     var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
-    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
+    var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [], limit: { context: 200000, output: 32000 } }];
 
     /* 服务端消息:测试里手动推进,模拟「服务端慢慢才给出权威版本」 */
     window.SERVER = {
@@ -665,6 +665,108 @@
       msgEls.clear();
       q('#messages').innerHTML = '';
       renderMessages();
+
+      /* ---------------- 上下文用量(TUI 提示栏的 155.6K (78%)) ----------------
+       * 用户报的「网页版不显示 155.6K (78%)」:TUI 提示栏右边那个数面板一直没画。
+       * 算法照 TUI 现算(见 app.js contextUsage 顶上的源码原文),这里逐条锁:取最后
+       * 一条带 tokens 的助手消息、压缩之后重新起算、percent 可空、窄屏那档文案。 */
+      store.live.clear();
+      store.active.clear();
+      store.compacting.clear();
+      store.compactText.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      renderMessages();
+      T('还没跑过任何一轮时整块收起来(不印一个空壳)', q('#ctxInfo').hidden === true);
+
+      var CTX_M1 = {
+        id: 'm1', type: 'assistant', time: { created: 100, completed: 101 },
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+        tokens: { input: 10, output: 0, reasoning: 0, cache: { read: 90, write: 0 } },
+      };
+      var CTX_M2 = {
+        id: 'm2', type: 'assistant', time: { created: 200, completed: 201 },
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+        tokens: { input: 1000, output: 0, reasoning: 0, cache: { read: 149000, write: 0 } },
+      };
+      store.messages.set('m1', CTX_M1);
+      store.messages.set('m2', CTX_M2);
+      renderMessages();
+      T('取最后一条带 tokens 的助手消息(前一条不算)',
+        q('#ctxInfo .ctxFull').textContent === '150.0K (75%)', q('#ctxInfo .ctxFull').textContent);
+      T('窄屏那档是 TUI 的 compact(百分比已知就给「N% ctx」)',
+        q('#ctxInfo .ctxCompact').textContent === '75% ctx', q('#ctxInfo .ctxCompact').textContent);
+      T('整块露出来', q('#ctxInfo').hidden === false);
+      T('title 给出精确 tokens 与百分比',
+        q('#ctxInfo').title.indexOf('150,000 tokens') >= 0 && q('#ctxInfo').title.indexOf('(75%)') >= 0,
+        q('#ctxInfo').title);
+
+      /* 压缩把上下文清空了:只算最后一次【已完成】压缩之后的那些 */
+      store.messages.clear();
+      store.messages.set('m1', CTX_M1);
+      store.messages.set('m2', CTX_M2);
+      store.messages.set('cp1', {
+        id: 'cp1', type: 'compaction', status: 'completed', time: { created: 300 },
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+        tokens: { input: 5, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+        summary: '摘要',
+      });
+      store.messages.set('m3', {
+        id: 'm3', type: 'assistant', time: { created: 400, completed: 401 },
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+        tokens: { input: 200, output: 0, reasoning: 0, cache: { read: 1000, write: 0 } },
+      });
+      renderMessages();
+      T('压缩之后重新起算(压缩前那两条不再算进上下文)',
+        q('#ctxInfo .ctxFull').textContent === '1.2K (1%)', q('#ctxInfo .ctxFull').textContent);
+
+      /* 只有压缩、压缩之后还没有助手消息时,拿不到用量(和 TUI 的 Us 返回 undefined 一致) */
+      store.messages.delete('m3');
+      renderMessages();
+      T('压缩完还没回话就暂时不显示用量', q('#ctxInfo').hidden === true);
+
+      /* 模型不在表里(比如刚切会话、模型表还没回来)→ 只给 token 数,percent 可空 */
+      store.messages.clear();
+      store.messages.set('m4', {
+        id: 'm4', type: 'assistant', time: { created: 500, completed: 501 },
+        model: { providerID: 'ghost', id: 'nope' },
+        tokens: { input: 1500, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      });
+      renderMessages();
+      T('查不到 limit.context 时只给 token 数(和 TUI 一样 percent 可空)',
+        q('#ctxInfo .ctxFull').textContent === '1.5K' &&
+        q('#ctxInfo .ctxCompact').textContent === '1.5K' &&
+        q('#ctxInfo').title.indexOf('%') < 0,
+        q('#ctxInfo .ctxFull').textContent + ' / ' + q('#ctxInfo').title);
+
+      /* 流式那一轮:step.ended 把 tokens 打上,不必等服务端把消息落盘 */
+      store.messages.clear();
+      msgEls.clear();
+      store.live.clear();
+      feed('session.step.started', {
+        sessionID: 'ses_a', assistantMessageID: 'msg_ctx', started: 600,
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+      });
+      renderMessages();
+      T('(前置)刚开跑还没 tokens 时整块是收着的', q('#ctxInfo').hidden === true);
+      feed('session.step.ended', {
+        sessionID: 'ses_a', assistantMessageID: 'msg_ctx', finish: 'stop',
+        tokens: { input: 1000, output: 1000, reasoning: 0, cache: { read: 198000, write: 0 } },
+      });
+      renderMessages();
+      T('本地缓冲收工时立刻算出来(200000/200000)',
+        q('#ctxInfo .ctxFull').textContent === '200.0K (100%)', q('#ctxInfo .ctxFull').textContent);
+      T('窄屏那档是「100% ctx」', q('#ctxInfo .ctxCompact').textContent === '100% ctx',
+        q('#ctxInfo .ctxCompact').textContent);
+
+      /* 取消选中 → 收起 */
+      store.live.clear();
+      store.messages.clear();
+      store.selected = '';
+      updateChatStatus();
+      T('取消选中会话后整块收起来', q('#ctxInfo').hidden === true);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

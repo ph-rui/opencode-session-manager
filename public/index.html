@@ -77,6 +77,9 @@
           <button type="button" id="backList" class="chip" aria-label="返回会话列表">‹ 会话</button>
           <span id="chatTitle">未选择会话</span>
           <span id="chatState" class="state"></span>
+          <!-- 上下文用量(照 TUI 提示栏的 155.6K (78%)):两档文案都印着,由 CSS 按
+               html.narrow 挑一个 —— 窄屏那档就是 TUI 的 compact(/78% ctx/)。 -->
+          <span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span>
         </div>
         <div id="chatMeta" class="meta"></div>
         <div id="chatOps" hidden>

@@ -83,6 +83,14 @@ function fmtTokens(t) {
   return (i + o).toLocaleString();
 }
 
+/* 大数缩写(照 TUI 的 zN):155600 → "155.6K"、1234567 → "1.2M"。
+ * 上下文用量那块用它,和 TUI 提示栏里的 155.6K (78%) 是同一套算法。 */
+function fmtSize(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
 function dirBase(p) {
   if (!p) return '';
   const parts = String(p).replace(/\/+$/, '').split('/');
@@ -321,6 +329,8 @@ async function renderControls(s) {
 
   bar.hidden = false;
   store.ctrlKey = ctrlKeyOf(s);
+  /* 模型表刚拉回来,上下文用量的百分比这时才算得出来(updateChatStatus 早于这里跑过一遍) */
+  paintContextUsage();
   updateComposerControls();
 }
 
@@ -1428,6 +1438,10 @@ async function loadMessages(opts) {
   }
   try {
     const j = await api('/api/session/' + encodeURIComponent(id) + '/message?' + q.toString());
+    /* 等待期间可能已经切走了(SSE 事件驱动的防抖对账正好压在一次切换上):这份响应属于
+     * 上一个会话,写进去就会让新会话显示别人的消息,连头部那枚上下文用量也跟着错。
+     * store.messages 只有当前会话一份,所以这里按 id 复查一次再写。 */
+    if (store.selected !== id) return;
     (j.data || []).forEach((m) => store.messages.set(m.id, m));
     store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
     pruneLive();
@@ -2059,8 +2073,10 @@ function syncDetailsOpen(oldEl, newEl) {
   }
 }
 
-function renderMessages() {
-  const box = $('#messages');
+// 当前会话要渲染的消息全表:服务端消息 + 本地流式缓冲里服务端还没落盘的助手消息,
+// 按创建时间排好。渲染与「上下文用量」共用这一份口径 —— 两处口径一旦漂移,顶部那个
+// 数字就会和消息流对不上。
+function currentMessages() {
   const msgs = Array.from(store.messages.values());
   // 本地流式缓冲里已有、但服务端消息列表还没出现的助手消息,补进渲染列表
   for (const [id, L] of store.live) {
@@ -2070,6 +2086,12 @@ function renderMessages() {
     msgs.push(liveMessage(L));
   }
   msgs.sort((a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0));
+  return msgs;
+}
+
+function renderMessages() {
+  const box = $('#messages');
+  const msgs = currentMessages();
   const force = store.forceBottom;
   store.forceBottom = false;
   const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底
@@ -2276,6 +2298,7 @@ function updateChatStatus() {
   };
   if (!store.selected) {
     paint('', 'state', false);
+    paintContextUsage();
     updateComposerControls();
     return;
   }
@@ -2289,7 +2312,101 @@ function updateChatStatus() {
     disarmInterrupt();
     paint('空闲', 'state', false);
   }
+  paintContextUsage();
   updateComposerControls();
+}
+
+/* ------------------- 上下文用量(TUI 的 prompt.footer 那块) -------------------
+ * TUI 提示栏右边那个 `155.6K (78%)` 不是别处存好的数,而是每次现算(二进制里抠出的原文):
+ *
+ *   function Us(t,n){let i=n?t.findIndex((a)=>a.id===n):-1;if(n&&i===-1)return;
+ *     let s=i===-1?t.length:i,o=t.findLastIndex((a,c)=>a.type==="compaction"&&a.status==="completed"&&c<s);
+ *     return t.findLast((a,c)=>a.type==="assistant"&&a.tokens!==void 0&&c>o&&c<s)}
+ *   function XN(t,n,i){let s=Us(t,i);if(!s)return;
+ *     let o=s.tokens.input+s.tokens.output+s.tokens.reasoning+s.tokens.cache.read+s.tokens.cache.write;
+ *     if(o<=0)return; let a=n?.find((c)=>c.providerID===s.model.providerID&&c.id===s.model.id);
+ *     return {tokens:o,percent:a?.limit.context?Math.round(o/a.limit.context*100):void 0}}
+ *   function d4(t,n){let i=zN(t);return n===void 0?i:`${i} (${n}%)`}
+ *
+ * 也就是:① 只认「最后一次**已完成**的压缩之后」的 assistant 消息(压缩把上下文清空了,
+ * 之前的数不算);② 取最后一条带 tokens 的,求和 input+output+reasoning+cache.read+
+ * cache.write;③ 拿这条消息自己记的 (providerID,id) 去**该 location 的模型表**查
+ * limit.context 得百分比(模型表按目录分,因为某个模型可能在某个目录被 enabled:false
+ * 关掉 —— 全局表会给出这个目录其实不该有的百分比)。第三参是 `session.revert?.messageID`,
+ * 撤销暂存时只算到那条消息为止。
+ *
+ * TUI 另外在 `session.step.ended` 时把 state.usage 直接打上(不等重取);面板这里统一
+ * 走现算,`updateChatStatus()` 一个同步点就够(step.ended / usage.updated / 消息落盘
+ * 都会经过它)。
+ *
+ * 显示照 TUI 的两档:`全` = `155.6K (78%)`,`窄` = `78% ctx`(百分比拿不到时退回 `155.6K`)。
+ * 两档都印在 DOM 里,由 CSS 按 html.narrow 挑一个 —— 面板宽度变了也不用重画。 */
+function lastUsageMessage(msgs, boundID) {
+  const bound = boundID ? msgs.findIndex((m) => m.id === boundID) : -1;
+  if (boundID && bound === -1) return null;
+  const end = bound === -1 ? msgs.length : bound;
+  let cut = -1;
+  for (let i = end - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.type === 'compaction' && m.status === 'completed') {
+      cut = i;
+      break;
+    }
+  }
+  for (let i = end - 1; i > cut; i--) {
+    const m = msgs[i];
+    if (m.type === 'assistant' && m.tokens) return m;
+  }
+  return null;
+}
+
+function contextUsage(msgs, models, boundID) {
+  const m = lastUsageMessage(msgs, boundID);
+  if (!m || !m.tokens) return null;
+  const cache = m.tokens.cache || {};
+  const total =
+    (m.tokens.input || 0) + (m.tokens.output || 0) + (m.tokens.reasoning || 0) +
+    (cache.read || 0) + (cache.write || 0);
+  if (total <= 0) return null;
+  const info = m.model && models
+    ? models.find((x) => x.providerID === m.model.providerID && x.modelID === m.model.id)
+    : null;
+  const limit = info && info.limit ? info.limit.context : undefined;
+  return { tokens: total, percent: limit ? Math.round((total / limit) * 100) : undefined };
+}
+
+/* 头部那个数字:全量文案 + 窄屏文案一起写进去,CSS 按 html.narrow 显示哪一个。
+ * 拿不到用量(还没跑过一轮 / 模型不在表里给不出百分比)就整块收起来。 */
+function paintContextUsage() {
+  const el = $('#ctxInfo');
+  if (!el) return; // 测试页可能没这个元素
+  const sid = store.selected;
+  const s = sid ? store.sessions.get(sid) : null;
+  const dir = (s && s.location && s.location.directory) || '';
+  const u = sid
+    ? contextUsage(currentMessages(), store.models.get(dir), (s && s.revert && s.revert.messageID) || '')
+    : null;
+  if (!u) {
+    el.hidden = true;
+    el.removeAttribute('title');
+    return;
+  }
+  const size = fmtSize(u.tokens);
+  const full = u.percent === undefined ? size : size + ' (' + u.percent + '%)';
+  const compact = u.percent === undefined ? size : u.percent + '% ctx';
+  const f = el.querySelector('.ctxFull');
+  const c = el.querySelector('.ctxCompact');
+  if (f && c) {
+    if (f.textContent !== full) f.textContent = full;
+    if (c.textContent !== compact) c.textContent = compact;
+  } else if (el.textContent !== full) {
+    el.textContent = full; // 没有两档子节点(老结构)时的兜底
+  }
+  const title =
+    '上下文用量 ' + u.tokens.toLocaleString() + ' tokens' +
+    (u.percent === undefined ? '' : '(' + u.percent + '%)');
+  if (el.title !== title) el.title = title;
+  el.hidden = false;
 }
 
 /* ----------------------------- 问询(表单 / 权限) ----------------------------- */

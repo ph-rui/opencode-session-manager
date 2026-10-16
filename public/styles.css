@@ -218,6 +218,13 @@ table#list { width: 100%; border-collapse: collapse; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { font-size: 0.96em; color: var(--muted); white-space: nowrap; }
 .state.running { color: var(--accent); }
+/* 上下文用量(TUI 提示栏的 155.6K (78%))。两档子节点都在 DOM 里,窄屏换成 TUI 的
+   compact 档 `78% ctx` —— 不用 JS 判宽度,横竖屏来回转也不会漏画。 */
+#ctxInfo { font-size: 0.9em; color: var(--muted); white-space: nowrap; }
+#ctxInfo[hidden] { display: none; }
+#ctxInfo .ctxCompact { display: none; }
+html.narrow #ctxInfo .ctxFull { display: none; }
+html.narrow #ctxInfo .ctxCompact { display: inline; }
 #chatMeta { font-size: 0.88em; color: var(--muted); margin-top: 3px; word-break: break-all; }
 #older { width: auto; margin-top: 8px; padding: 4px 10px; font-size: 0.96em; }
 
