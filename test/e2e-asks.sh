@@ -43,6 +43,8 @@ FIELDS='[
  {"key":"steps","type":"multiselect","title":"附加步骤","maxItems":3,"custom":true,
   "options":[{"value":"uboot","label":"重建 U-Boot"},{"value":"kernel","label":"重建内核"}]},
  {"key":"hwinfo","type":"string","title":"硬件版本"},
+ {"key":"pick","type":"string","title":"单选(question 工具的形状)","custom":true,
+  "options":[{"value":"fast","label":"快"},{"value":"safe","label":"稳"}]},
  {"key":"timeout","type":"integer","title":"超时","default":300,"minimum":10,"maximum":600},
  {"key":"remember","type":"boolean","title":"记住","default":true},
  {"key":"extra","type":"string","title":"额外","required":true,"when":[{"key":"board","op":"eq","value":"board-b"}]},
@@ -73,7 +75,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST -H 'content-t
 ck "$code" 400 "external 未确认 → 400"
 
 # 正例:前端 collectFormAnswer 的真实产物
-ANSWER='{"board":["board-a"],"timeout":300,"remember":true,"auth":true}'
+ANSWER='{"board":["board-a"],"timeout":300,"remember":true,"auth":true,"pick":"fast"}'
 code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST -H 'content-type: application/json' \
   -d "{\"answer\":$ANSWER}" "$PROXY/api/session/$SID/form/$FID/reply")
 ck "$code" 204 "应答提交返回 204"
@@ -81,8 +83,18 @@ ck "$(curl -s "${AUTH[@]}" "$PROXY/api/session/$SID/form/$FID" | jqget "d['data'
 ck "$(curl -s "${AUTH[@]}" "$PROXY/api/session/$SID/form/$FID" | jqget "json.dumps(d['data']['state'].get('answer'),ensure_ascii=False,sort_keys=True)")" \
   "$(python3 -c "import json;print(json.dumps(json.loads('$ANSWER'),ensure_ascii=False,sort_keys=True))")" \
   "服务端保存的答案与提交一致"
+ck "$(curl -s "${AUTH[@]}" "$PROXY/api/session/$SID/form/$FID" | jqget "d['data']['state']['answer']['pick']")" \
+  fast "string+options 字段收字符串答案(question 工具的单选形状)"
 ck "$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST -H 'content-type: application/json' \
   -d "{\"answer\":$ANSWER}" "$PROXY/api/session/$SID/form/$FID/reply")" 409 "重复应答已处理表单 → 409(前端据此静默收敛卡片)"
+
+# 代理必须吞掉 Expect: 100-continue —— curl 对 >1KB 的 POST 会自动加;转发给上游会两边都等 100 而死等
+FIDX="frm_e2e_x_$$"
+ck "$(curl -s -m 20 -o /dev/null -w '%{http_code}' -H 'Expect: 100-continue' "${AUTH[@]}" -X POST \
+  -H 'content-type: application/json' \
+  -d "{\"id\":\"$FIDX\",\"title\":\"Expect 探测\",\"metadata\":{\"kind\":\"question\"},\"fields\":$FIELDS}" \
+  "$PROXY/api/session/$SID/form")" 200 "带 Expect: 100-continue 的大请求不卡死"
+curl -s -o /dev/null "${AUTH[@]}" -X DELETE "$PROXY/api/session/$SID/form/$FIDX?message=$(enc 'expect 探测收尾')"
 
 # 取消路径
 FID2="frm_e2e_c_$$"

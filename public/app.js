@@ -2149,9 +2149,15 @@ function fldActive(f, values) {
   });
 }
 
-function fldOptsHtml(f) {
-  const def = Array.isArray(f.default) ? f.default : [];
-  const single = f.maxItems === 1;
+/* forceSingle:type:'string' 带 options 时是单选(question 工具的单选就是这种形状),
+ * 它没有 maxItems,所以由调用方显式传 true。 */
+function fldOptsHtml(f, forceSingle) {
+  const def = Array.isArray(f.default)
+    ? f.default
+    : typeof f.default === 'string' && f.default
+    ? [f.default]
+    : [];
+  const single = forceSingle === true || f.maxItems === 1;
   return (f.options || [])
     .map((o, i) => {
       const id = 'o_' + f.key + '_' + i;
@@ -2211,13 +2217,12 @@ function fldCtlHtml(f) {
   const valueAttr = val ? ' value="' + esc(val) + '"' : '';
   if (f.options && f.options.length) {
     if (f.custom === true) {
+      /* 单选:选项必须**看得见**(question 工具的单选就是 string + options + custom),
+       * 手机上没有可点的选项等于没法选 —— TUI 对同一字段也是给选项列表。 */
       return (
-        '<input type="text" list="dl_' + esc(f.key) + '"' + valueAttr + ph + '>' +
-        '<datalist id="dl_' + esc(f.key) + '">' +
-        f.options
-          .map((o) => '<option value="' + esc(o.value) + '">' + esc(o.label || o.value) + '</option>')
-          .join('') +
-        '</datalist>'
+        '<div class="opts">' + fldOptsHtml(f, true) + '</div>' +
+        '<input class="custom" type="text" placeholder="' +
+        esc(f.placeholder || '其它(自填)…') + '"' + valueAttr + '>'
       );
     }
     return (
@@ -2294,11 +2299,16 @@ function formCard(a) {
   el.addEventListener('input', () => refreshFields(el));
   el.addEventListener('change', () => refreshFields(el));
 
-  /* 单选 + 自填:二者互斥(question 工具的单选即 maxItems=1 + custom) */
+  /* 单选 + 自填:二者互斥(question 工具的单选即 string+options / multiselect+maxItems=1) */
   el.querySelectorAll('.ask-field').forEach((w) => {
     const fld = fields[Number(w.dataset.idx)];
     const custom = w.querySelector('input.custom');
-    if (!fld || fld.type !== 'multiselect' || !custom || fld.maxItems !== 1) return;
+    if (!fld || !custom) return;
+    const single =
+      fld.type === 'multiselect'
+        ? fld.maxItems === 1
+        : fld.type === 'string' && !!(fld.options || []).length;
+    if (!single) return;
     w.querySelectorAll('input[type=radio]').forEach((r) =>
       r.addEventListener('change', () => {
         if (r.checked) custom.value = '';
@@ -2386,6 +2396,13 @@ function readFieldValue(w, f) {
       if (arr.indexOf(t) < 0) arr.push(t);
     }
     return arr.length ? arr : undefined;
+  }
+  if (f.type === 'string' && w.querySelector('input[type=radio]')) {
+    /* 单选(选项行):选了就是那个字符串;自填优先,与选项互斥 */
+    const custom = w.querySelector('input.custom');
+    if (custom && custom.value.trim()) return custom.value.trim();
+    const r = w.querySelector('input[type=radio]:checked');
+    return r ? r.value : undefined;
   }
   const inp = w.querySelector('input, select, textarea');
   if (!inp) return undefined;
