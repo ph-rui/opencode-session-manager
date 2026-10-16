@@ -6064,11 +6064,26 @@ function setupResizers() {
  * 入口就是分栏条顶部那个手柄(#btnList 在 #resizer-mid 里):收起后分栏条本身
  * 会保留成一条 16px 窄槽,所以手柄不会跟着消失,列表随时能拉回来。
  *
- * 「收起」【不跨刷新记忆】(用户要求:打开网页时列表应该是展开的)。它和「鼠标靠左边缘
- * 临时拉出来」是同一个性质 —— 只作用于当前这一屏(给对话区让地方),不是一条要一直
- * 生效的设置。所以这里既不写 localStorage 也不读它:每次页面加载一律 paint(false)。
- * 想再收起来点手柄,想临时瞥一眼把鼠标贴到左边缘;列宽 ocs.listW 照旧记忆。
- * (曾经记过 ocs.listHidden,现在留着那个键也没人读 —— 别被老存储里的值误导。) */
+ * 「收起」记在 sessionStorage —— 它只活在这【一个标签页】里,于是两句话都成立:
+ *   - 刷新(F5)之后还是收起的(用户:「本来是没展开的,刷新之后就展开了」);
+ *   - 新开一个标签页是展开的(§8.13 用户:「第一次打开网页时应该展开对话列表」)。
+ * 记 localStorage 会把「顺手收过一次」变成跨标签页、跨重启的永久状态(§8.13 那次
+ * 困扰就是这么来的);记 sessionStorage 则跟滚动位置(ocs.scroll)一个存法:本标签页的事。
+ *
+ * 只有【点手柄】才算显式,才写这份记忆;鼠标靠左边缘的临时拉出(list-peek)一个字都不写
+ * —— 那是「路过看一眼」。列宽 ocs.listW 照旧记在 localStorage。
+ * (v1 把折叠记在 localStorage['ocs.listHidden'];那个键现在没人读,也别再写它。) */
+const LIST_KEY = 'ocs.listHiddenTab';
+
+/* 这一档现在该不该收起:记过就听记的;没记过 = 展开(列表是主入口)。 */
+function listCollapsed() {
+  try {
+    return sessionStorage.getItem(LIST_KEY) === '1';
+  } catch (_) {
+    return false; // 存储被禁(隐私模式)时当作没记过 —— 折叠本身照用
+  }
+}
+
 function setupListToggle() {
   const main = document.querySelector('main');
   const btn = document.getElementById('btnList');
@@ -6081,12 +6096,19 @@ function setupListToggle() {
     btn.title = hidden ? '展开会话列表(分栏条上拖动可改宽度)' : '收起会话列表(分栏条上拖动可改宽度)';
   };
 
-  paint(false); // 打开网页时一定是展开的
-  // 重复接线只重画(回到展开),不重复挂监听 —— 否则点一下会触发两次、看起来没反应
+  paint(listCollapsed()); // 刷新后还是上次的样子;新标签页 / 从没碰过 = 展开
+  // 重复接线只重画(画成记住的样子),不重复挂监听 —— 否则点一下会触发两次、看起来没反应
   if (btn.dataset.wired === '1') return;
   btn.dataset.wired = '1';
   // 以 DOM 上的类为准(别再引一份可能对不上的状态):点一下就是「现在收着就展开、开着就收起」
-  btn.addEventListener('click', () => paint(!main.classList.contains('list-hidden')));
+  btn.addEventListener('click', () => {
+    const hidden = !main.classList.contains('list-hidden');
+    paint(hidden);
+    try {
+      if (hidden) sessionStorage.setItem(LIST_KEY, '1');
+      else sessionStorage.removeItem(LIST_KEY);
+    } catch (_) {} // 记不住就算了,别把折叠本身弄坏
+  });
 }
 
 /* 临时展开的「宽限期」:动手(改名/移动/删除/归档)会弹原生 confirm/prompt。原生弹窗期间

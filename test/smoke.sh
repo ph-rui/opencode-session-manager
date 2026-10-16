@@ -227,15 +227,25 @@ else
   echo "PASS: 收起时不隐藏分栏条(展开入口不会丢)"; pass=$((pass + 1))
 fi
 
-# 前端逻辑:打开网页时列表【一定】是展开的(用户要求「第一次打开网页时应该展开对话列表」)
-# → 折叠不跨刷新:setupListToggle 一律 paint(false),不再读写 localStorage 里的 ocs.listHidden
+# 前端逻辑:折叠记忆只认 sessionStorage —— 刷新(F5)保持收起,新开标签页则是展开的(§8.38)。
+# 老键 localStorage['ocs.listHidden'] 谁也不许再读写(§8.13 那次「打开网页就是收起的」就是它)
 APPJS=$(curl -s "${AUTH[@]}" "$PROXY/app.js")
-if has "$APPJS" 'paint(false); // 打开网页时一定是展开的' &&
+if has "$APPJS" "const LIST_KEY = 'ocs.listHiddenTab';" && has "$APPJS" 'function listCollapsed()' &&
+   has "$APPJS" 'paint(listCollapsed());' && has "$APPJS" 'sessionStorage.getItem(LIST_KEY)' &&
+   has "$APPJS" "sessionStorage.setItem(LIST_KEY, '1')" && has "$APPJS" 'sessionStorage.removeItem(LIST_KEY)' &&
    ! has "$APPJS" "localStorage.getItem('ocs.listHidden')" &&
    ! has "$APPJS" "localStorage.setItem('ocs.listHidden')"; then
-  echo "PASS: app.js 打开网页时列表一律展开(折叠不跨刷新,不再读写 ocs.listHidden)"; pass=$((pass + 1))
+  echo "PASS: 折叠记忆记在 sessionStorage(刷新同一标签页保持 / 新标签页展开),localStorage 里那个老键谁也不碰"; pass=$((pass + 1))
 else
-  echo "FAIL: app.js 仍会恢复 localStorage 里的收起态(打开网页时列表不是展开的)"; fail=$((fail + 1))
+  echo "FAIL: 折叠记忆没接在 sessionStorage 上,或又去碰 localStorage 里的老 ocs.listHidden"; fail=$((fail + 1))
+fi
+if has "$APPJS" "return sessionStorage.getItem(LIST_KEY) === '1';" &&
+   has "$APPJS" 'return false; // 存储被禁(隐私模式)时当作没记过' &&
+   has "$(cat "$(dirname "$0")/ui-layout.html")" '刷新同一个标签页' &&
+   has "$(cat "$(dirname "$0")/ui-layout.html")" '新开一个标签页'; then
+  echo "PASS: 「没记过 = 展开」(存储被禁也只当没记过),ui-layout 里正反两面都锁着"; pass=$((pass + 1))
+else
+  echo "FAIL: 默认档不是展开,或隐私模式会炸,或 ui-layout.html 里没有这两面断言"; fail=$((fail + 1))
 fi
 if has "$APPJS" 'history.replaceState' && has "$APPJS" 'restoreFromHash'; then
   echo "PASS: app.js 把选中会话写进 URL hash 并在加载时恢复"; pass=$((pass + 1))

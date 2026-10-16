@@ -142,6 +142,7 @@
     try {
       /* ============ 1. 列表折叠:默认展开 ============ */
       localStorage.clear();
+      sessionStorage.removeItem('ocs.listHiddenTab'); // 没有这份记忆 = 新开一个标签页
       setupListToggle();
       T('初始是展开的', !main.classList.contains('list-hidden'));
       T('初始箭头是「‹」(露出 .ao)', arrow() === 'ao', arrow());
@@ -163,6 +164,7 @@
       T('点击后 aria-expanded=false', btn.getAttribute('aria-expanded') === 'false');
       T('点击后 aria-label 改成「展开会话列表」', btn.getAttribute('aria-label') === '展开会话列表', btn.getAttribute('aria-label'));
       T('点击后收起只落在 DOM 类上(localStorage 不再记它)', localStorage.getItem('ocs.listHidden') === null);
+      T('点手柄收起会记住(只认这一次显式动作,记在 sessionStorage)', sessionStorage.getItem('ocs.listHiddenTab') === '1');
       T('收起时列表被 display:none', hiddenOf(listPane));
       /* 回归锁:分栏条是唯一的展开入口,收起后它【必须】还在 ——
          一旦跟着 display:none,列表就再也拉不回来了 */
@@ -183,13 +185,20 @@
       T('收起后仍是三列(第一列为 0)', getComputedStyle(main).gridTemplateColumns.split(' ').length === 3,
         getComputedStyle(main).gridTemplateColumns);
 
-      /* ============ 2b. 折叠【不跨刷新】:重新打开网页时列表一定是展开的 ============
-       * 用户要求「第一次打开网页时,应该展开对话列表」。收起和「鼠标靠左边缘临时拉出来」
-       * 一个性质 —— 只作用于当前这一屏,不是一条要一直生效的设置。 */
-      setupListToggle(); // 重新接线 = 模拟「重新打开网页」
-      T('重新打开网页时列表是展开的', !main.classList.contains('list-hidden'));
-      T('重新打开网页时箭头回到「‹」', arrow() === 'ao', arrow());
-      T('重新打开网页时列表可见', !hiddenOf(listPane));
+      /* ============ 2b. 折叠【跨刷新保持】,但新标签页仍是展开的(§8.38) ============
+       * 用户两句话都要:刷新(F5)之后还想收着(「本来是没展开的,刷新之后就展开了」),
+       * 而「第一次打开网页」要看得见列表。所以记在 sessionStorage —— 只活在这一个标签页里:
+       * 刷新还在,新标签页从零开始。 */
+      setupListToggle(); // 重新接线 = 模拟「刷新这个标签页」(脚本从头跑一遍)
+      T('刷新同一个标签页:列表仍是收起的', main.classList.contains('list-hidden'));
+      T('刷新后箭头还是「›」(露出 .ac)', arrow() === 'ac', arrow());
+      T('刷新后列表仍藏着', hiddenOf(listPane));
+      T('刷新后 aria-expanded 仍为 false', btn.getAttribute('aria-expanded') === 'false');
+      sessionStorage.removeItem('ocs.listHiddenTab'); // 新标签页:这份记忆不存在
+      setupListToggle();
+      T('新开一个标签页:列表是展开的', !main.classList.contains('list-hidden'));
+      T('新标签页里箭头回到「‹」', arrow() === 'ao', arrow());
+      T('新标签页里列表可见', !hiddenOf(listPane));
       main.classList.add('list-hidden'); // 回到收起态,接着验「收起了也还能点手柄展开」
 
       /* ============ 3. 收起态点手柄能重新展开(入口没丢) ============ */
@@ -198,6 +207,7 @@
       T('箭头回到「‹」', arrow() === 'ao', arrow());
       T('aria-expanded 回到 true', btn.getAttribute('aria-expanded') === 'true');
       T('展开后 localStorage 里没有收起记录(不记忆)', localStorage.getItem('ocs.listHidden') === null);
+      T('展开后那份标签页内的记忆也清掉了(下次刷新还是展开)', sessionStorage.getItem('ocs.listHiddenTab') === null);
       T('展开后列表回来了', !hiddenOf(listPane) && !hiddenOf(resizer));
       T('展开后自定义列宽没被吃掉', main.style.getPropertyValue('--list-w') === '420px',
         main.style.getPropertyValue('--list-w'));
@@ -247,7 +257,8 @@
       T('鼠标贴到左边缘 → 临时拉出来(list-peek)', main.classList.contains('list-peek'));
       T('临时拉出来时列表是看得见的', !hiddenOf(listPane));
       T('临时拉出来时不写记忆:list-hidden 还在', main.classList.contains('list-hidden'));
-      T('临时拉出来不改折叠状态:localStorage 里没有收起记录', localStorage.getItem('ocs.listHidden') === null);
+      T('临时拉出来不改折叠状态:两份存储里都没有收起记录',
+        localStorage.getItem('ocs.listHidden') === null && sessionStorage.getItem('ocs.listHiddenTab') === null);
       T('临时展开后分栏槽跟着列表挪到右边(不再是最左边那条)', resizer.getBoundingClientRect().right > rzEdge + 100,
         [rzEdge, resizer.getBoundingClientRect().right]);
       T('临时展开后对话区仍有宽度(不会整片变白)', chatPane.getBoundingClientRect().width > 100,
@@ -342,18 +353,27 @@
       await onAction('del', 'ses_e'); // 列表好好开着的时候动手
       T('列表本来就开着时不武装(别把正常的收回也挡了)', peekHoldUntil === 0, peekHoldUntil);
 
-      /* ============ 4. 折叠【不跨刷新】(用户要求:打开网页时列表应该是展开的) ============ */
-      btn.click(); // 先收起来
+      /* ============ 4. 重复接线:只重画成记住的样子,不重复挂监听(§8.38) ============ */
+      sessionStorage.removeItem('ocs.listHiddenTab');
+      setupListToggle();
+      btn.click(); // 先收起来(这一下会记住)
       T('(前置)收起了', main.classList.contains('list-hidden'));
-      setupListToggle(); // 重复接线 = 模拟「重新打开网页」:只重画,不应重复挂监听
-      T('重新打开网页时列表是展开的', !main.classList.contains('list-hidden'));
-      T('重新打开网页时箭头为「‹」', arrow() === 'ao', arrow());
-      T('重新打开网页时列表可见', !hiddenOf(listPane));
-      T('收起态没被存进 localStorage(没人在读它)', localStorage.getItem('ocs.listHidden') === null);
+      setupListToggle(); // 重复接线 = 模拟「刷新」:重画成记住的样子,不重复挂监听
+      T('重复接线后列表还是收起的(画的是记住的样子)', main.classList.contains('list-hidden'));
+      T('重复接线后箭头还是「›」', arrow() === 'ac', arrow());
+      T('重复接线后列表仍藏着', hiddenOf(listPane));
+      T('收起态只记在 sessionStorage,localStorage 里没有(老键退休了)',
+        localStorage.getItem('ocs.listHidden') === null && sessionStorage.getItem('ocs.listHiddenTab') === '1');
       btn.click();
-      T('重复接线后单击只切换一次(不会一次点两下)', main.classList.contains('list-hidden'));
+      T('重复接线后单击只切换一次(不会一次点两下)', !main.classList.contains('list-hidden'));
+      T('这一下展开把记忆清掉了', sessionStorage.getItem('ocs.listHiddenTab') === null);
       btn.click();
-      T('(收尾)再点一下回到展开', !main.classList.contains('list-hidden'));
+      T('(收尾)再点一下回到收起,记忆也跟着记上',
+        main.classList.contains('list-hidden') && sessionStorage.getItem('ocs.listHiddenTab') === '1');
+      sessionStorage.removeItem('ocs.listHiddenTab');
+      setupListToggle();
+      T('(收尾复位)回到展开、不留记忆(后面的用例不受这份状态影响)',
+        !main.classList.contains('list-hidden') && sessionStorage.getItem('ocs.listHiddenTab') === null);
 
       /* ============ 5. hash 解析(hashToID) ============ */
       T('hashToID:#ses_a → ses_a', hashToID('#ses_a') === 'ses_a');
