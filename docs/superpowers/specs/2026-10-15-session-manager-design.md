@@ -315,6 +315,11 @@ opencode-session-manager/
     - 存 `sessionStorage['ocs.scroll']`(本标签页刚才读到哪,关标签即丢、不跨标签串味),最多 20 条,超额淘汰最久没用过的。
     - **只在刷新恢复时还原**;从列表点进会话仍跳底部看最新消息。通道是 `store.restoreScroll`(`restoreFromHash` 塞,`renderMessages` 消费一次);
       有它就不许跳底部,且 `msgs` 为空时不消费(免得被提前触发的渲染吃掉)。
+    - > 2026-10-16 追加(性能,见 `2026-10-15-mobile-design.md` §8.16):「在不在底部」加了 `store.nearBottom`
+      > 缓存,唯一写点是 `updateJumpLatest()`;`renderMessages()` 把已算出的布尔喂给它(省掉刚改完 DOM 后那次读),
+      > 增量重绘(`paintLiveDelta` / 压缩正文的 `paintCompactBody`)只读缓存。原因:改完 `#messages` 再读一次
+      > `scrollHeight` 会把整篇强制重排(实测 100 条消息 / 7838 节点:干净 0.95ms,脏 23~34ms),而旧代码
+      > **每个 token delta** 都这么读一次。
     - `scrollAnchor()` 用 `getBoundingClientRect` 而不是 `offsetTop`,不依赖 `offsetParent`;锚点消息不在了(被删/掉出这一页)才退回像素值。
     - 记录时机:滚动时按**时间戳**节流 200ms、离开会话前、`pagehide` 各兜一次。
       **刻意不用定时器** —— UI 测试页把 `setTimeout` 打桩了(返回 0、永不触发),用定时器会让这部分在测试里根本跑不起来。

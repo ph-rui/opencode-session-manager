@@ -427,14 +427,14 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 202 |
+| `smoke.sh` | 204 |
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 160 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 87 / 71 / 195 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 87 / 71 / 205 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 166 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
-| `ui-jump`（新，见 §8.6）| 44 |
+| `ui-jump`（新，见 §8.6）| 47 |
 | `e2e-asks` / `e2e-controls` / `e2e-capabilities` | 15 / 22（+1 跳）/ 26 |
 | `e2e-stream` / `e2e-attach` / `e2e-commands` | 4（+1 跳）/ 32 / 40 |
 
@@ -981,6 +981,49 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 **回归**：`smoke.sh` 194 → 202（Q 组 8 条：`#ctxInfo` 在标题行里、两档文案、CSS 切档、压缩那一步、
 五路求和 + `limit.context`、`fmtSize`、窄屏文案、三个调用点 + 共用口径）；`ui-stream` 183 → 195
 （上下文用量 12 条，含压缩后重新起算、percent 可空、`step.ended` 立刻算出）；其余套件与 `e2e-*` 全 0 失败。
+
+### 8.16 追加：压缩/输出不再每个 delta 强制排版（性能）
+
+**起因**：用户——「上下文压缩时，不会崩溃无响应了，但还是有点卡顿，输出卡，我怀疑进度条一动的时候就卡」。
+先量再改（探针 `/tmp/ocsm-probe/perf/live-perf2.js`：真面板 + 一个 100 条消息 / 7838 节点的大会话，
+把 `renderMessages()` 内部各步拆开计时，并记时间线）。
+
+**量到的事实**（无头 Firefox，软件渲染，绝对数偏大，但相对关系清楚）：
+
+| 动作 | 耗时 |
+|---|---|
+| `drawProgressFrame()` 一帧（8 格换 `content`） | **0.007ms** |
+| 进度条换一帧**再读** `scrollHeight` | **1.1ms**（它不脏 `#messages`）|
+| `md()` 解析 8~11 KB 摘要 | 0.1~1.5ms |
+| `host.innerHTML = md(正文)`（写 DOM） | 0.3ms |
+| **改完 `#messages` 再读 `scrollHeight`/`atBottom`** | **28~34ms**（**强制同步排版**）|
+| 干净时读 `scrollHeight` | 0ms |
+| 往 `#messages` 塞一个**空 div** 再读 | 24ms（**与改动大小无关**）|
+| **流式**：每个 token delta 走一遍 `atBottom()` | **28ms/delta** |
+| spinner 每 80ms 改一次 `#messages` 里的 `textContent`，再读 | 39ms |
+
+也就是说：**卡的不是进度条**，是「改一下 `#messages` 的东西 → 紧接着读 `scrollHeight`」那次**强制整篇排版**；
+`renderMessages()` 压缩期一次 70~76ms 基本全是它（其中干净读只要 0.95ms）。而旧代码里
+`renderMessages()` 一次要读 2~3 回（开头 `atBottom()`、跟底 `scrollTop = scrollHeight`、收尾
+`updateJumpLatest()` 又读一次），`paintLiveDelta()` 更是**每个 token delta 都读一次**。
+
+**决定**：
+
+| 点 | 决定 | 理由 |
+|---|---|---|
+| 压缩正文 | 走**局部**重绘 `paintCompactBody()`：只换 `details.compact > .content` 那一个节点 | 正文只有这一处在长；整表 `renderMessages()` 会重建压缩块（脏树）+ 重算全表签名。结构还没建出来（空正文时块里没有 `<details>`）才返回 false 退回整表 |
+| 「贴不贴底」 | 新增 `store.nearBottom` 缓存，**唯一写点** `updateJumpLatest()`（滚动事件、每次渲染收尾都汇到这里）| 增量重绘（`paintLiveDelta` / `paintCompactBody`）不再自己读布局 —— 用户往上滚，滚动事件照样立刻把缓存刷掉，跟随不会失灵 |
+| 整表收尾 | `renderMessages()` 把**已经算出来的**「贴不贴底」布尔喂给 `updateJumpLatest(atB)` | 省掉它自己再读一次 —— 那次读正好落在刚改完 DOM 之后，是整个函数里最贵的一步。只有「还原滚动锚点」位置不确定时才量一次 |
+| 参数 | `updateJumpLatest(atB)` 只认 `boolean` | 它同时是 `scroll` 监听器（会被塞 Event 对象），非 boolean 就自己量一次 |
+| 没上 | `content-visibility:auto;contain-intrinsic-size:auto …` 能把那次 flush 从 ~30ms 砍到 6~12ms（**4×**）| 但它会让 `scrollHeight` 先按估值算 —— 影响「一键回底 / 锚点还原 / 总在底部」这几处的准头，先不动；以后想再快可以让它只上给老消息 |
+
+**验证**（`live-perf2.js` 对拍，同一页面同一夹具）：流式每个 delta 的强制排版
+**28ms → 0ms**（`streamOldPerDeltaMs` / `streamNewPerDeltaMs`）；进度条那条 **1.1ms** 顺手证了它的清白
+（用户怀疑的对象）。探针同时确认 `atBottom` 干净读 0.95ms、脏读 23~29ms，`md`/`innerHTML` 都不是瓶颈。
+
+**回归**：`smoke.sh` 202 → **204**（自动跟随那条改成「整表量、增量读缓存」，另加 nearBottom 单一写点、
+压缩正文局部重绘两条）；`ui-stream` 195 → **205**（压缩正文局部重绘 8 条 + 结构没建出来时退回整表 2 条）；
+`ui-jump` 44 → **47**（缓存的唯一写点、Event 不会被误当 boolean）；其余套件与 `e2e-*` 全 0 失败。
 
 ---
 
