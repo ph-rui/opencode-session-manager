@@ -403,7 +403,7 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .md-table .ta-center { text-align: center; }
 
 /* 工具调用 */
-.toolrow, .tool > summary {
+.toolrow, .tool > summary, .explore > summary {
   cursor: pointer;
   list-style: none;
   display: flex;
@@ -412,12 +412,13 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   margin: 3px 0;
 }
 .toolrow { cursor: default; }
-.tool > summary::-webkit-details-marker { display: none; }
-.tool .tmark, .toolrow .tmark { color: #b0893a; }
+.tool > summary::-webkit-details-marker,
+.explore > summary::-webkit-details-marker { display: none; }
+.tool .tmark, .toolrow .tmark, .explore > summary .tmark { color: #b0893a; }
 /* 运行中的行首标记(照 TUI 换成盲文 spinner):定宽,免得逐帧换字形把这一行抖起来 */
-.tool .tmark.spin, .toolrow .tmark.spin { display: inline-block; min-width: 1em; text-align: center; }
+.tool .tmark.spin, .toolrow .tmark.spin, .explore > summary .tmark.spin { display: inline-block; min-width: 1em; text-align: center; }
 /* 工具词(shell 那一格放整条命令,会长)也要能省略,不然手机上把这一行撑破 */
-.tool .tname, .toolrow .tname {
+.tool .tname, .toolrow .tname, .explore > summary .tname {
   color: var(--fg);
   flex: 0 1 auto;
   min-width: 0;
@@ -444,7 +445,7 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 /* ---------------- 工具卡片里的改动内容(diff / 代码 / 诊断) ---------------- */
 
 /* 摘要行:工具名后面的上下文摘要与增删统计 */
-.tool .tdesc, .toolrow .tdesc {
+.tool .tdesc, .toolrow .tdesc, .explore > summary .tdesc {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -458,6 +459,11 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 
 /* 正文整体限高内滚:长改动不会把消息流撑爆 */
 .toolbody { margin: 4px 0 2px; max-height: 420px; overflow: auto; }
+
+/* 折起来的探索组(照 TUI 的 exploration 分组):摊开后正文里就是原来那些工具行,
+   整体往里缩一格表示从属。收着的时候只有那一行摘要。 */
+.explore > summary { cursor: pointer; }
+.explore .gbody { margin: 2px 0 4px; padding-left: 12px; }
 
 /* 文件头:状态徽标 + 路径 + 增删统计 */
 .dfile {

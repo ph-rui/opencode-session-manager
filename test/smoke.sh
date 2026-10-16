@@ -643,7 +643,7 @@ if has "$CSS" '.msg.compaction' && has "$CSS" '.msg.compaction .tmark.spin'; the
 else
   echo "FAIL: styles.css 缺 .msg.compaction 的样式"; fail=$((fail + 1))
 fi
-if has "$APPJS" '<details class="compact" open><summary>摘要</summary>'; then
+if has "$APPJS" '<details class="compact" data-def="1" open><summary>摘要</summary>'; then
   echo "PASS: 压缩摘要跟着正文印出来(摊开,外层留 details 当折叠抓手 —— TUI 就是把概要原样印在块里)"; pass=$((pass + 1))
 else
   echo "FAIL: 压缩摘要没有印出来(还是只留一个 ▸ 摘要)"; fail=$((fail + 1))
@@ -962,7 +962,7 @@ if has "$TOOLHEAD_FN" 'toolRunning(p)' && has "$TOOLHEAD_FN" "spin ? ' spin' : '
 else
   echo "FAIL: toolHead 没有按运行状态换行首标记"; fail=$((fail + 1))
 fi
-SPIN_CSS=$(printf '%s' "$CSS" | awk '/^\.tool \.tmark\.spin, \.toolrow \.tmark\.spin \{/{f=1} f{print} f&&/^\}$/{exit}')
+SPIN_CSS=$(printf '%s' "$CSS" | awk '/^\.tool \.tmark\.spin, \.toolrow \.tmark\.spin, \.explore > summary \.tmark\.spin \{/{f=1} f{print} f&&/^\}$/{exit}')
 if has "$SPIN_CSS" 'min-width: 1em'; then
   echo "PASS: spinner 定宽占位(逐帧换字不抖行)"; pass=$((pass + 1))
 else
@@ -1346,6 +1346,62 @@ if has "$APPJS" 'const CV_MIN_MSGS' && has "$APPJS" "classList.toggle('cvmany'" 
   echo "PASS: 开关由 renderMessages() 按条数挂,ui-layout 有正反两面的断言"; pass=$((pass + 1))
 else
   echo "FAIL: .cvmany 开关的接线不对(或缺 ui-layout 断言)"; fail=$((fail + 1))
+fi
+
+# ---- R 组:探索类工具行的分组(照 TUI 的 exploration 分组) ----
+# TUI 的 explorationTools 就是 read/glob/grep/webfetch/websearch 这五类
+# (packages/tui/src/routes/session/grouping/session.ts);相邻的挂同一条路径的被并进一组,
+# GroupContent(group-view.tsx)在 groupExploration()(默认开)时把整组折成一行:
+# 「→ Explored: 2 reads, 1 search」,点一下才摊开。面板按同一套规矩做。
+if has "$APPJS" "const EXPLORE_TOOLS = ['read', 'glob', 'grep', 'webfetch', 'websearch']"; then
+  echo "PASS: 探索工具表照 TUI 的 explorationTools(五类)"; pass=$((pass + 1))
+else
+  echo "FAIL: EXPLORE_TOOLS 跟 TUI 的 explorationTools 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" "k === 'grep' || k === 'glob' || k === 'websearch' ? 'search' : k === 'webfetch' ? 'fetch' : k" &&
+   has "$APPJS" "name === 'search' || name === 'fetch' ? name + 'es' : name + 's'"; then
+  echo "PASS: 分组计数照 TUI 的 label()(grep/glob/websearch 算 search,webfetch 算 fetch;复数加 es)"; pass=$((pass + 1))
+else
+  echo "FAIL: 分组的计数/复数跟 TUI 的 label() 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" "const done = !parts.some(toolRunning)" && has "$APPJS" "done ? 'Explored' : 'Exploring'"; then
+  echo "PASS: 跑着时是 Exploring、收工后是 Explored(照 TUI 的 InlineToolRow)"; pass=$((pass + 1))
+else
+  echo "FAIL: 探索组的 Explored/Exploring 文案不对"; fail=$((fail + 1))
+fi
+if has "$APPJS" '<details class="explore" data-def="0"><summary>'; then
+  echo "PASS: 探索组默认折着(照 TUI),用户摊开的状态靠 data-def 留住"; pass=$((pass + 1))
+else
+  echo "FAIL: 探索组不是默认折叠"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const run = [p];' &&
+   has "$APPJS" "content[i + 1].type === 'tool' && isExploreTool(content[i + 1])" &&
+   has "$APPJS" 'html += exploreGroupHtml(run);'; then
+  echo "PASS: 相邻的探索工具在 renderMessage() 里并成一组"; pass=$((pass + 1))
+else
+  echo "FAIL: renderMessage 里没把相邻的探索工具并成组"; fail=$((fail + 1))
+fi
+if has "$CSS" '.explore > summary' && has "$CSS" '.explore .gbody'; then
+  echo "PASS: 探索组那一行与展开后的正文都有样式"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺 .explore 的样式"; fail=$((fail + 1))
+fi
+
+# ---- R2 组:思考块摘要(照 TUI 的 reasoningSummary + ReasoningHeader) ----
+if has "$APPJS" 'const REASONING_TITLE_RE = /^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/'; then
+  echo "PASS: 思考块的标题正则照 TUI 的 reasoningSummary(只认最前面那段加粗 + 空行)"; pass=$((pass + 1))
+else
+  echo "FAIL: 思考块没照 TUI 抓加粗标题"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function reasoningHead(part, m)' && has "$APPJS" "(title ? ': ' + esc(title) : '')"; then
+  echo "PASS: 思考块摘要印「思考: 标题 · 时长」"; pass=$((pass + 1))
+else
+  echo "FAIL: 思考块摘要的文案不对"; fail=$((fail + 1))
+fi
+if has "$APPJS" "if (ms < 60000) return (ms / 1000).toFixed(1) + 's'"; then
+  echo "PASS: 时长格式照 TUI 的 Locale.duration"; pass=$((pass + 1))
+else
+  echo "FAIL: 时长格式跟 TUI 的 Locale.duration 对不上"; fail=$((fail + 1))
 fi
 
 echo

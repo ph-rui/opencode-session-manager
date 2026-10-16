@@ -192,7 +192,7 @@
         eh.indexOf('class="tmark">←<') >= 0 && eh.indexOf('class="tname">Edit<') >= 0 &&
         eh.indexOf('class="tdesc">default.xml<') >= 0, eh.slice(0, 300));
       T('toolHtml(edit):摘要带增删统计', eh.indexOf('tadd">+1') >= 0 && eh.indexOf('tdel">-1') >= 0);
-      T('toolHtml(edit):默认展开', eh.indexOf('<details class="tool" open>') === 0, eh.slice(0, 60));
+      T('toolHtml(edit):默认展开', eh.indexOf('<details class="tool" data-def="1" open>') === 0, eh.slice(0, 60));
       T('toolHtml(edit):正文有 diff', eh.indexOf('<div class="diff">') >= 0 && eh.indexOf('dl add') >= 0);
       T('toolHtml(edit):不再把原始入参 JSON 铺开', eh.indexOf('oldString') < 0, eh);
 
@@ -224,7 +224,7 @@
       var wh = toolHtml(writePart);
       T('toolHtml(write):完成后的块标题写「# Wrote <路径>」', wh.indexOf('class="tmark">#<') >= 0 &&
         wh.indexOf('class="tname">Wrote<') >= 0 && wh.indexOf('docs/a.md') >= 0, wh);
-      T('toolHtml(write):默认展开', wh.indexOf('<details class="tool" open>') === 0);
+      T('toolHtml(write):默认展开', wh.indexOf('<details class="tool" data-def="1" open>') === 0);
       T('toolHtml(write):写进正文的内容带行号', wh.indexOf('diff code') >= 0 && wh.indexOf('标题') >= 0);
       var writeRun = { type: 'tool', id: 'c5', name: 'write', state: { status: 'streaming', input: {}, metadata: {} } };
       T('toolHtml(write 运行中):不显示空正文',
@@ -244,7 +244,7 @@
         ph.indexOf('class="tdesc">2 files<') >= 0, ph.slice(0, 300));
       T('toolHtml(patch):汇总增删统计', ph.indexOf('tadd">+1') >= 0 && ph.indexOf('tdel">-3') >= 0);
       T('toolHtml(patch):两个文件各一块', qaOf(ph, 'dfile') === 2, qaOf(ph, 'dfile'));
-      T('toolHtml(patch):默认展开', ph.indexOf('<details class="tool" open>') === 0);
+      T('toolHtml(patch):默认展开', ph.indexOf('<details class="tool" data-def="1" open>') === 0);
 
       row('patch', ph);
 
@@ -505,6 +505,138 @@
           return r === '/proj/a/src/x.js';
         })());
       T('abbrevPath:空值原样(不当成 / )', abbrevPath('') === '', abbrevPath(''));
+
+      /* ================= 探索类工具行的分组(照 TUI 的 exploration 分组) ================= */
+      var so = function (html) { var d = document.createElement('div'); d.innerHTML = html; return d; };
+      var rd = function (p) {
+        return { type: 'tool', id: 'r:' + p, name: 'read',
+          state: { status: 'completed', input: { path: p } }, time: { created: 1, completed: 2 } };
+      };
+      var gr = function (p) {
+        return { type: 'tool', id: 'g:' + p, name: 'grep',
+          state: { status: 'completed', input: { pattern: p } }, time: { created: 1, completed: 2 } };
+      };
+      var bashTool = function (cmd) {
+        return { type: 'tool', id: 's:' + cmd, name: 'bash',
+          state: { status: 'completed', input: { command: cmd } }, time: { created: 1, completed: 2 } };
+      };
+      T('explore:五类探索工具都认(read / glob / grep / webfetch / websearch)',
+        ['read', 'glob', 'grep', 'webfetch', 'websearch'].every(function (n) { return isExploreTool({ name: n }); }));
+      T('explore:别的工具不成组(shell 的别名 bash 也认出来)',
+        !['bash', 'edit', 'write', 'apply_patch', 'task', 'question', 'skill', 'list'].some(function (n) {
+          return isExploreTool({ name: n });
+        }));
+      T('explore:计数照 TUI 的 label()(2 reads, 1 search)',
+        exploreLabel([rd('a'), rd('b'), gr('x')]) === '2 reads, 1 search',
+        exploreLabel([rd('a'), rd('b'), gr('x')]));
+      T('explore:只有一条时用单数', exploreLabel([rd('a')]) === '1 read', exploreLabel([rd('a')]));
+      T('explore:grep / glob / websearch 都算 search,复数加 es',
+        exploreLabel([gr('a'), gr('b'), { name: 'glob' }, { name: 'websearch' }]) === '4 searches',
+        exploreLabel([gr('a'), gr('b'), { name: 'glob' }, { name: 'websearch' }]));
+      T('explore:webfetch 算 fetch,复数 fetches',
+        exploreLabel([{ name: 'webfetch' }, { name: 'webfetch' }]) === '2 fetches',
+        exploreLabel([{ name: 'webfetch' }, { name: 'webfetch' }]));
+      T('explore:数组为空时不给文案', exploreLabel([]) === '', exploreLabel([]));
+
+      var egDone = exploreGroupHtml([rd('a'), gr('x')]);
+      T('explore:收工后是「→ Explored: …」',
+        egDone.indexOf('class="tmark">→<') >= 0 && egDone.indexOf('class="tname">Explored:<') >= 0,
+        egDone.slice(0, 160));
+      T('explore:计数进 .tdesc(冒号留在工具词那格,TUI 就是这么连着的)',
+        egDone.indexOf('class="tdesc">1 read, 1 search<') >= 0, egDone.slice(0, 220));
+      T('explore:默认折着(照 TUI),并带 data-def=0 好让用户摊开的状态不丢',
+        egDone.indexOf('<details class="explore" data-def="0">') === 0, egDone.slice(0, 120));
+      T('explore:正文里原来那些工具行一条不少(一块 .gbody 里两条)',
+        so(egDone).querySelectorAll('.gbody > .tool, .gbody > .toolrow').length === 2,
+        qaOf(egDone, 'gbody'));
+      T('explore:单独一条也成组,文案是 Explored: 1 read(size=1 照 TUI 也折)',
+        so(exploreGroupHtml([rd('only')])).querySelectorAll('.explore').length === 1 &&
+        so(exploreGroupHtml([rd('only')])).querySelector('.explore > summary').textContent === '→Explored:1 read',
+        so(exploreGroupHtml([rd('only')])).querySelector('.explore > summary').textContent);
+      var egRun = exploreGroupHtml([{ type: 'tool', id: 'r1', name: 'read', state: { status: 'running' }, time: {} }]);
+      T('explore:跑着时行首是 spinner、词是 Exploring',
+        egRun.indexOf('class="tmark spin"') >= 0 && egRun.indexOf('class="tname">Exploring:<') >= 0,
+        egRun.slice(0, 200));
+
+      /* 落进真实消息里:相邻的探索工具合成一组,别的工具照旧一条一行 */
+      var mGroup = renderMessage({
+        id: 'mg', type: 'assistant', time: { created: 1, completed: 2 },
+        content: [
+          { type: 'reasoning', text: '**看看代码**\n\n正文', time: { created: 1000, completed: 2200 } },
+          rd('a'), rd('b'), gr('x'), bashTool('ls'),
+        ],
+      });
+      var mgh = mGroup.innerHTML;
+      T('renderMessage:相邻的 read/read/grep 合成一组', mGroup.querySelectorAll('.explore').length === 1);
+      T('renderMessage:组正文里就是那三条工具行',
+        mGroup.querySelectorAll('.explore > .gbody > .tool, .explore > .gbody > .toolrow').length === 3,
+        mGroup.querySelectorAll('.explore > .gbody > *').length);
+      T('renderMessage:组外那条 shell 不被吞进去(整条消息里只有它一条裸工具行)',
+        mGroup.querySelectorAll('.toolrow').length === 1 &&
+        mGroup.querySelector('.toolrow').textContent.indexOf('ls') >= 0,
+        mGroup.querySelectorAll('.toolrow').length);
+      T('renderMessage:单独一条探索工具也成组',
+        renderMessage({ id: 'm2', type: 'assistant', content: [rd('only')] })
+          .querySelectorAll('.explore').length === 1);
+      T('renderMessage:被 shell 隔开的探索工具各成一组',
+        renderMessage({ id: 'm3', type: 'assistant', content: [rd('a'), bashTool('ls'), rd('b')] })
+          .querySelectorAll('.explore').length === 2);
+
+      /* ================= 思考块摘要(照 TUI 的 reasoningSummary / ReasoningHeader) ================= */
+      T('reasoningTitle:捞出正文最前面那段加粗的概要标题',
+        reasoningTitle('**Inspecting PR workflow**\n\nbody') === 'Inspecting PR workflow',
+        reasoningTitle('**Inspecting PR workflow**\n\nbody'));
+      T('reasoningTitle:整块就只有标题也算',
+        reasoningTitle('**t**') === 't', reasoningTitle('**t**'));
+      T('reasoningTitle:没有加粗标题就没有标题',
+        reasoningTitle('just text') === '' && reasoningTitle('') === '' && reasoningTitle(null) === '');
+      T('reasoningTitle:加粗后面不是空行就不算(照 TUI 的正则)',
+        reasoningTitle('**t** rest') === '', reasoningTitle('**t** rest'));
+      T('reasoningTitle:标题里的首尾空白去掉', reasoningTitle('**  t  **\n\nb') === 't');
+      T('fmtDur:照 TUI 的 Locale.duration(ms / s / m s / h m / d h)',
+        fmtDur(456) === '456ms' && fmtDur(1234) === '1.2s' && fmtDur(65000) === '1m 5s' &&
+        fmtDur(3700000) === '1h 1m' && fmtDur(90000000) === '1d 1h',
+        [fmtDur(456), fmtDur(1234), fmtDur(65000), fmtDur(3700000), fmtDur(90000000)]);
+      T('fmtDur:0 与负数不给时长', fmtDur(0) === '' && fmtDur(-5) === '');
+      T('思考头:标题 + 时长都进摘要',
+        mgh.indexOf('<summary>思考: 看看代码 · 1.2s</summary>') >= 0, mgh.slice(0, 240));
+      T('思考头:没有加粗标题时就只有「思考」+ 时长',
+        renderMessage({ id: 'm4', type: 'assistant',
+          content: [{ type: 'reasoning', text: 'plain', time: { created: 1000, completed: 2200 } }] }).innerHTML
+          .indexOf('<summary>思考 · 1.2s</summary>') >= 0);
+      T('思考头:连时间都没有时就只有「思考」',
+        renderMessage({ id: 'm4b', type: 'assistant',
+          content: [{ type: 'reasoning', text: 'plain' }] }).innerHTML
+          .indexOf('<summary>思考</summary>') >= 0);
+      T('思考头:流式期间不给时长(时长还没定)',
+        renderMessage({ id: 'm5', type: 'assistant', live: true,
+          content: [{ type: 'reasoning', text: '**T**\n\nbody', time: { created: 1000, completed: 2200 } }] }).innerHTML
+          .indexOf('<summary>思考: T</summary>') >= 0);
+      T('思考头:标题里的 HTML 被转义',
+        renderMessage({ id: 'm6', type: 'assistant',
+          content: [{ type: 'reasoning', text: '**<img src=x>**\n\nb', time: { created: 1, completed: 2 } }] }).innerHTML
+          .indexOf('&lt;img') >= 0);
+
+      /* syncDetailsOpen:带 data-def 的 details 两头都搬(用户摊开过就留住) */
+      var sOld = so('<details class="explore" data-def="0"><summary>x</summary></details>');
+      var sNew = so('<details class="explore" data-def="0"><summary>x</summary></details>');
+      sOld.querySelector('details').setAttribute('open', '');
+      syncDetailsOpen(sOld, sNew);
+      T('syncDetailsOpen:用户摊开过的探索组,整块重绘后仍然摊着', sNew.querySelector('details').open === true);
+      var cOld = so('<details class="tool" data-def="1" open><summary>y</summary></details>');
+      var cNew = so('<details class="tool" data-def="1" open><summary>y</summary></details>');
+      cOld.querySelector('details').removeAttribute('open');
+      syncDetailsOpen(cOld, cNew);
+      T('syncDetailsOpen:用户折起来过的卡片,整块重绘后仍然折着', cNew.querySelector('details').open === false);
+      var rOld = so('<details class="reasoning"><summary>思考</summary></details>');
+      var rNew = so('<details class="reasoning" open><summary>思考</summary></details>');
+      syncDetailsOpen(rOld, rNew);
+      T('syncDetailsOpen:思考块没带 data-def,老规矩不变(用户折过就折着)',
+        rNew.querySelector('details').open === false);
+      var dOld = so('<details class="explore" data-def="0"><summary>x</summary></details>');
+      var dNew = so('<details class="explore" data-def="0"><summary>x</summary></details>');
+      syncDetailsOpen(dOld, dNew);
+      T('syncDetailsOpen:用户没动过就维持这次的默认(折着)', dNew.querySelector('details').open === false);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

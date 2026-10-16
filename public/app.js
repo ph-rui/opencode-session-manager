@@ -2079,9 +2079,10 @@ function toolHead(p, line, counts) {
 }
 
 // open=true 的卡片默认展开(改动内容要一眼看到),与 TUI 的 edit / write / patch 一致。
+// data-def 记下这个默认值,用户手动折/摊的状态才不会在整块重绘后丢掉(见 syncDetailsOpen)。
 function toolCard(p, line, counts, body, open) {
   return (
-    '<details class="tool"' + (open ? ' open' : '') + '><summary>' +
+    '<details class="tool" data-def="' + (open ? '1' : '0') + '"' + (open ? ' open' : '') + '><summary>' +
     toolHead(p, line, counts) + '</summary>' +
     '<div class="toolbody">' + body + '</div></details>'
   );
@@ -2159,6 +2160,59 @@ function toolHtml(p) {
   return toolCard(p, line, null, body, false);
 }
 
+/* 探索类工具行的分组,照 TUI 的 exploration 分组。
+ *
+ * TUI(packages/tui/src/routes/session/grouping/session.ts)里 explorationTools 就是
+ * read / glob / grep / webfetch / websearch 这五类:`partPath()` 给它们挂 ["exploration"],
+ * 相邻的挂同一条路径的被 grouping/tree.ts 并进一个组;GroupContent(见 group-view.tsx)
+ * 在 groupExploration()(默认开着)时把整组折成一行 —— 行首 `→`(跑着时是 spinner)、
+ * 词是 Explored/Exploring、后面跟计数,点一下才摊开成原来那一行行的工具行。
+ * size=1 的组也是这么折的(GroupContent 的 grouped() 分支没有条数下限),所以这里
+ * 不设下限;EXPLORE_MIN_RUN 留着当开关 —— 想「只折两条以上的那种」,把它改成 2 即可。 */
+const EXPLORE_MIN_RUN = 1;
+const EXPLORE_TOOLS = ['read', 'glob', 'grep', 'webfetch', 'websearch'];
+
+function isExploreTool(p) {
+  return EXPLORE_TOOLS.indexOf(toolKind(p)) >= 0;
+}
+
+/* 计数照 TUI 的 GroupContent.label():grep / glob / websearch 都算 search,webfetch 算
+ * fetch,其余用工具名本身;复数照 TUI —— search/fetch 加 es,别的加 s(1 read / 2 reads,
+ * 1 search / 2 searches,1 fetch / 2 fetches),几条之间用 `, ` 连。 */
+function exploreLabel(parts) {
+  const counts = {};
+  for (const p of parts) {
+    const k = toolKind(p);
+    const name = k === 'grep' || k === 'glob' || k === 'websearch' ? 'search' : k === 'webfetch' ? 'fetch' : k;
+    counts[name] = (counts[name] || 0) + 1;
+  }
+  return Object.keys(counts)
+    .map((name) => {
+      const n = counts[name];
+      const one = n === 1;
+      return n + ' ' + (one ? name : name === 'search' || name === 'fetch' ? name + 'es' : name + 's');
+    })
+    .join(', ');
+}
+
+/* 一组探索工具折成一行(TUI 的 InlineToolRow):跑着时行首是 spinner、词是 Exploring,
+ * 全部收工后换成 `→` 和 Explored。正文【默认折着】(照 TUI),但原来那些工具行一个都不少,
+ * 就挪进 .gbody 里 —— 点开这一行才看得见。data-def 让用户摊开的状态在整块重绘后不丢
+ * (见 syncDetailsOpen)。 */
+function exploreGroupHtml(parts) {
+  const done = !parts.some(toolRunning);
+  const word = done ? 'Explored' : 'Exploring';
+  return (
+    '<details class="explore" data-def="0"><summary>' +
+    '<span class="tmark' + (done ? '' : ' spin') + '">' + (done ? '→' : SPIN_FRAMES[spinFrame]) + '</span>' +
+    '<span class="tname">' + word + ':</span>' +
+    '<span class="tdesc">' + esc(exploreLabel(parts)) + '</span>' +
+    '</summary>' +
+    '<div class="gbody">' + parts.map((q) => toolHtml(q)).join('') + '</div>' +
+    '</details>'
+  );
+}
+
 // 用户消息上的提及标记:agent(@)与 skill(#)。H 组 5 补的,延续终端风
 // (不加气泡,只用色条 + 标记);附件在 H 组 6 一起补。
 function userRefsHtml(m) {
@@ -2208,6 +2262,36 @@ function userFilesHtml(m) {
     );
   }
   return out.length ? '<div class="atts">' + out.join('') + '</div>' : '';
+}
+
+/* 思考块的摘要(照 TUI 的 context/thinking.ts:reasoningSummary):模型有时会把概要标题
+ * 加粗放在正文最前面(`**Inspecting PR workflow**\n\n正文…`),TUI 就把那段拎出来单独当
+ * 标题使。这里同样只认最前面那一段加粗 + 空行(或整块就到这儿)。 */
+const REASONING_TITLE_RE = /^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/;
+
+function reasoningTitle(text) {
+  const m = String(text == null ? '' : text).trim().match(REASONING_TITLE_RE);
+  return m ? m[1].trim() : '';
+}
+
+/* 时长照 TUI 的 Locale.duration(packages/tui/src/util/locale.ts):1s / 1.2s / 1m 5s / 1h 5m / 1d 5h。 */
+function fmtDur(ms) {
+  if (!(ms > 0)) return '';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  if (ms < 3600000) return Math.floor(ms / 60000) + 'm ' + Math.floor((ms % 60000) / 1000) + 's';
+  if (ms < 86400000) return Math.floor(ms / 3600000) + 'h ' + Math.floor((ms % 3600000) / 60000) + 'm';
+  return Math.floor(ms / 86400000) + 'd ' + Math.floor((ms % 86400000) / 3600000) + 'h';
+}
+
+/* 思考块摘要的文案(照 TUI 的 ReasoningHeader):收工后是「思考: 标题 · 12.3s」,
+ * 标题拿不到就只有「思考」;还在流式时只给标题,不给时长(时长还没有)。 */
+function reasoningHead(part, m) {
+  const title = reasoningTitle(part && part.text);
+  const t = (part && part.time) || {};
+  const done = t.created !== undefined && t.completed !== undefined;
+  const dur = m.live || !done ? 0 : t.completed - t.created;
+  return '思考' + (title ? ': ' + esc(title) : '') + (dur ? ' · ' + esc(fmtDur(dur)) : '');
 }
 
 function renderMessage(m, opts) {
@@ -2260,9 +2344,23 @@ function renderMessage(m, opts) {
         nReason++;
         // 流式期间展开思考块,回合结束后仍回落成折叠态(与服务端版本一致)
         html +=
-          '<details class="reasoning"' + (m.live ? ' open' : '') + '><summary>思考</summary>' +
+          '<details class="reasoning"' + (m.live ? ' open' : '') + '><summary>' + reasoningHead(p, m) + '</summary>' +
           '<div class="content"' + lk + '>' + shown + '</div></details>';
       } else if (p.type === 'tool') {
+        // 相邻的探索类工具(read/glob/grep/webfetch/websearch)折成一组,照 TUI 的
+        // exploration 分组 —— 见 EXPLORE_TOOLS 那段的说明。
+        if (isExploreTool(p)) {
+          const run = [p];
+          while (i + 1 < content.length && content[i + 1].type === 'tool' && isExploreTool(content[i + 1])) {
+            run.push(content[++i]);
+          }
+          if (run.length >= EXPLORE_MIN_RUN) {
+            html += exploreGroupHtml(run);
+            continue;
+          }
+          for (const q of run) html += toolHtml(q);
+          continue;
+        }
         html += toolHtml(p);
       }
     }
@@ -2301,7 +2399,7 @@ function renderMessage(m, opts) {
         : '') +
       '</div>' +
       (body
-        ? '<details class="compact" open><summary>摘要</summary>' +
+        ? '<details class="compact" data-def="1" open><summary>摘要</summary>' +
           '<div class="content">' + md(body) + '</div></details>'
         : '') +
       (failed && m.error && m.error.message
@@ -2319,17 +2417,24 @@ function renderMessage(m, opts) {
 
 const msgEls = new Map(); // message id -> { sig, el }
 
-/* 签名一变就整块换元素,<details> 的展开状态会跟着丢。压缩块在压缩期间一直在长,
- * 每长一点就换一次元素 —— 用户刚把它折起来,下一段正文一来又自己摊开了。
- * 所以只搬【用户折起来过】这一种:新元素默认是摊开的(压缩块就是),旧的被折过就跟着折回去。
- * 反方向不搬:流式思考块的「开」是渲染时按 m.live 决定的,回合结束就该自己回落 ——
- * 那是渲染的规矩,不是用户的动作(ui-stream 有断言锁着)。 */
+/* 签名一变就整块换元素,<details> 的展开状态会跟着丢。渲染出来的每个 details 都带
+ * data-def(它【天生】开还是合):新旧一对比,只要旧的开合跟它的默认对不上,就说明用户
+ * 动过手,照搬到新元素上(两头都搬 —— 探索组、shell 卡天生是合的,用户摊开了就得留住)。
+ * 没带 data-def 的(思考块:开还是合由 m.live 决定)维持老规矩:只搬【用户折起来过】这一种,
+ * 反方向不搬 —— 那是渲染的规矩,不是用户的动作(ui-stream 有断言锁着)。 */
 function syncDetailsOpen(oldEl, newEl) {
   const o = oldEl.querySelectorAll('details');
   const n = newEl.querySelectorAll('details');
   const len = Math.min(o.length, n.length);
   for (let i = 0; i < len; i++) {
-    if (n[i].open && !o[i].open) n[i].removeAttribute('open');
+    const def = n[i].getAttribute('data-def');
+    if (def === null) {
+      if (n[i].open && !o[i].open) n[i].removeAttribute('open');
+      continue;
+    }
+    if (o[i].open === (def === '1')) continue; // 与默认一致 → 用户没动过,维持这次渲染的默认
+    if (o[i].open) n[i].setAttribute('open', '');
+    else n[i].removeAttribute('open');
   }
 }
 
