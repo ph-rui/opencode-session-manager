@@ -149,6 +149,9 @@ opencode-session-manager/
   - 运行状态:`GET /api/session/active` → `{data:{<sid>:{type:"running"}}}`;事件 `session.status`(`status.type ∈ idle|retry|busy`)、`session.idle`(`{sessionID}`)、`session.execution.started|succeeded|failed|interrupted`(`{sessionID,...}`,interrupted 另带 `reason ∈ user|shutdown|superseded|inactivity`)。前端以事件为主、8 秒轮询兜底。
   - 中断:`POST /api/session/:sid/interrupt?resume=` → `{interrupted:boolean}`;空闲会话返回 `false`,会话不存在 `404`。
   - 投递方式:`prompt` body 的 `delivery ∈ steer|queue`;响应 `{data: Session.Inbox.User}` 里回带 `delivery`。空闲时不带该字段即立即执行。
+    > 2026-10-16 追加(对齐 TUI,见 `2026-10-15-mobile-design.md` §8.18):TUI 里**光按 `Enter`** 是 `prompt.submit`(→ `delivery:"steer"`),
+    > 排队要额外按 `<leader>return`(`prompt.queue`),所以面板运行中的默认投递从「排队」改成「插话」(`DEFAULT_DELIVERY = 'steer'`,工具栏照旧可切);
+    > 中断后把队列里的 `user` 项改成 `steer` 放行那段照旧保留。
   - 待发送队列:`GET /api/session/:sid/inbox` → `{data: Session.Inbox.Info[]}`,`Info = User|Synthetic|Compaction|Move`(均有 `id/sessionID/time/type/delivery/payload`)。
     `PATCH .../inbox/:iid` `{delivery}` → `204`(不可改时 `409`);`DELETE .../inbox/:iid` → `204`(幂等)。切换 agent 会注入 `synthetic` 系统提醒,前端按 `type` 过滤不展示。
   - 切换:`GET /api/agent?location[directory]=`(Agent.Info:`id/name/mode ∈ subagent|primary|all/hidden/model`)、`GET /api/model?location[directory]=`(Model.Info:`providerID/modelID/name/enabled/variants[]`)、`GET /api/model/default`。
@@ -321,6 +324,11 @@ opencode-session-manager/
       > `scrollHeight` 会把整篇强制重排(实测 100 条消息 / 7838 节点:干净 0.95ms,脏 23~34ms),而旧代码
       > **每个 token delta** 都这么读一次。
     - `scrollAnchor()` 用 `getBoundingClientRect` 而不是 `offsetTop`,不依赖 `offsetParent`;锚点消息不在了(被删/掉出这一页)才退回像素值。
+      > 2026-10-16 追加(性能,见 `2026-10-15-mobile-design.md` §8.17):长会话(条数 ≥ `CV_MIN_MSGS = 30`)给 `#messages` 挂 `.cvmany`,
+      > 离屏 `.msg` 走 `content-visibility: auto` 整块跳过渲染,那次强制排版从 24~36ms 掉到 0ms。
+      > 因为「量出锚点相对滚动口上沿的差再滚掉它」滚完锚点正好落在 `off` 处、随后重排的是锚点**下方**刚露头那一屏,
+      > 估值高度不影响锚点在屏上的位置(实测冷现场偏 1px),所以 `applyScrollAnchor()` **不用**改;
+      > 短会话不挂 `.cvmany`,行为与从前完全一致。
     - 记录时机:滚动时按**时间戳**节流 200ms、离开会话前、`pagehide` 各兜一次。
       **刻意不用定时器** —— UI 测试页把 `setTimeout` 打桩了(返回 0、永不触发),用定时器会让这部分在测试里根本跑不起来。
   - **H4 顶栏筛选 / 排序 / 搜索持久化**
@@ -506,7 +514,7 @@ opencode-session-manager/
 - [ ] 触发一次 `question` 工具问询:底部出现卡片,提交后助手继续;列表徽标消失。
 - [ ] 触发一次需批准的权限请求(需在配置里把某动作设为 `ask`):三个按钮可用,应答后工具继续。
 - [ ] 助手运行中:标题栏显示 `● 运行中`,输入区出现「排队/插话」与「■ 中断」;点中断后回到空闲。
-- [ ] 运行中发送消息选「排队」:消息进入待发送队列(不立刻出现在消息流),回合结束后自动执行;选「插话」则立即并入当前回合。
+- [ ] 运行中发送消息默认「插话」:立即并入当前回合(下一个 step 边界执行);切到「排队」则进入待发送队列(不立刻出现在消息流),回合结束后自动执行。
 - [ ] 待发送项可「改为排队/改为插话」与「取消」,操作后队列即时刷新。
 - [ ] 切换智能体/模型后,重新打开该会话仍显示新值(已持久化)。
 - [ ] 顶栏「+ 新建」填绝对路径目录后能建出会话并自动打开;留空目录或填相对路径会就地报错。
@@ -527,7 +535,7 @@ opencode-session-manager/
 
 ### 会话控制的自动化验证(本次已执行)
 - 端到端 `test/e2e-controls.sh`(22 项;`OCS_E2E_LLM=1` 时 31 项,全部通过):agent 切到 `plan`/`build` 并核对持久化;`model` 缺 `providerID` 被拒 `400`、正常切换 `204` 且持久化;空闲中断 `interrupted=false`;未知会话的 `interrupt`/`inbox` 均 `404`;`synthetic` 项被前端规则过滤;`inbox` 改投递方式与取消的负例(`409`/`204`);真实运行中 `queue` 投递→队列可见→改 `steer`→取消→`interrupt` 返回 `true` 且回到空闲。
-- 浏览器内断言 `test/ui-controls-run.js`(77 项,真实 `public/app.js`,无头 Firefox):agent/model 选择器的过滤与分组、变体显隐、切换请求体形状、中断/投递控件显隐、运行状态文案与列表标记、待发送队列渲染与 PATCH/DELETE 请求、发送时的 `delivery` 选择、事件→运行状态映射。
+- 浏览器内断言 `test/ui-controls-run.js`(90 项,真实 `public/app.js`,无头 Firefox):agent/model 选择器的过滤与分组、变体显隐、切换请求体形状、中断/投递控件显隐、运行状态文案与列表标记、待发送队列渲染与 PATCH/DELETE 请求、发送时的 `delivery` 选择(含默认「插话」)、事件→运行状态映射。
 - 离线渲染核对:`/tmp/ocsm-probe/controls-preview.html`(真实 `app.js` + `styles.css` + 假数据)在运行中与空闲两种状态下的截图,确认工具栏、待发送队列与提示条不遮挡输入框。
 
 ### 能力扩展的自动化验证(本次已执行)

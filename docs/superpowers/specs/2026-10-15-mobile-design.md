@@ -427,10 +427,10 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 204 |
+| `smoke.sh` | 209（§8.17/§8.18 之后）|
 | `netallow-run.js`（新）| 74 |
-| `ui-layout` / `ui-tools` / `ui-asks` | 160 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 87 / 71 / 205 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 162 / 110 / 57 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 90 / 71 / 205 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 166 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
@@ -1015,7 +1015,7 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 | 「贴不贴底」 | 新增 `store.nearBottom` 缓存，**唯一写点** `updateJumpLatest()`（滚动事件、每次渲染收尾都汇到这里）| 增量重绘（`paintLiveDelta` / `paintCompactBody`）不再自己读布局 —— 用户往上滚，滚动事件照样立刻把缓存刷掉，跟随不会失灵 |
 | 整表收尾 | `renderMessages()` 把**已经算出来的**「贴不贴底」布尔喂给 `updateJumpLatest(atB)` | 省掉它自己再读一次 —— 那次读正好落在刚改完 DOM 之后，是整个函数里最贵的一步。只有「还原滚动锚点」位置不确定时才量一次 |
 | 参数 | `updateJumpLatest(atB)` 只认 `boolean` | 它同时是 `scroll` 监听器（会被塞 Event 对象），非 boolean 就自己量一次 |
-| 没上 | `content-visibility:auto;contain-intrinsic-size:auto …` 能把那次 flush 从 ~30ms 砍到 6~12ms（**4×**）| 但它会让 `scrollHeight` 先按估值算 —— 影响「一键回底 / 锚点还原 / 总在底部」这几处的准头，先不动；以后想再快可以让它只上给老消息 |
+| 没上（当轮） | `content-visibility:auto;contain-intrinsic-size:auto …` 能把那次 flush 从 ~30ms 砍到 6~12ms（**4×**）| 但它会让 `scrollHeight` 先按估值算 —— 影响「一键回底 / 锚点还原 / 总在底部」这几处的准头，当轮先不动。**下一轮上了（只给长会话），见 §8.17** |
 
 **验证**（`live-perf2.js` 对拍，同一页面同一夹具）：流式每个 delta 的强制排版
 **28ms → 0ms**（`streamOldPerDeltaMs` / `streamNewPerDeltaMs`）；进度条那条 **1.1ms** 顺手证了它的清白
@@ -1024,6 +1024,78 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 **回归**：`smoke.sh` 202 → **204**（自动跟随那条改成「整表量、增量读缓存」，另加 nearBottom 单一写点、
 压缩正文局部重绘两条）；`ui-stream` 195 → **205**（压缩正文局部重绘 8 条 + 结构没建出来时退回整表 2 条）；
 `ui-jump` 44 → **47**（缓存的唯一写点、Event 不会被误当 boolean）；其余套件与 `e2e-*` 全 0 失败。
+
+### 8.17 追加：长会话里离屏消息整块跳过渲染（性能，上更猛的）
+
+**起因**：用户——「上更猛的优化」。上一轮把「每个 delta 都读一次布局」掐掉了，但**每次真要读**的那一下
+（`renderMessages()` 收尾、`paintCompactBody()` 之后、`paintLiveDelta()` 跟底）仍然是强制整篇排版，
+绝对值 24~36ms 取决于会话里**有多少内容**。这一轮直接把「看不见的东西」从排版里摘出去。
+
+**做法**：
+
+| 点 | 做法 |
+|---|---|
+| 离屏消息 | `#messages.cvmany > .msg { content-visibility: auto; contain-intrinsic-size: auto 220px; }` —— 离屏的 `.msg` 整块跳过渲染，只留估值高度占位（`auto` 表示渲染过一次就记住真实高度，滚回去不跳） |
+| 开关 | `renderMessages()` 按条数挂：`box.classList.toggle('cvmany', msgs.length >= CV_MIN_MSGS)`，`CV_MIN_MSGS = 30` |
+| 短会话 | **不挂** —— 短会话离屏内容本来就没多少，省不下几个钱，却要拿估值高度去占位；实测它会把「短会话压根不用滚」的场景撑出 118px 的假滚动条（`ui-layout` 里那条「没有存档时刷新仍按老样子」当场抓到） |
+
+**实测**（探针 `/tmp/ocsm-probe/perf/cv-perf.js`，同一个 100 条消息 / 6900 节点的大会话，
+同一页里用 `!important` 反过来关掉 cv 对拍）：
+
+| 动作 | cv 关 | cv 开 |
+|---|---|---|
+| **改 DOM(往最后一条塞个字) 再读 `scrollHeight`** | **28/31/36ms**（min/med/max） | **0/0/0ms** |
+| 「跳到最新」落点 | — | `gap = 0`、`atBottom = true`（连着量两回都是 0，不会冒出「跳到最新」按钮）|
+
+**准头为什么没被估值带坏**（这轮专门验的，探针里先「把所有 `.msg` 换成新元素 + 滚口拉回顶部」造一个冷加载现场）：
+
+- **锚点还原**：`applyScrollAnchor()` 是「量出锚点相对滚动口上沿的差，再滚掉它」——
+  滚完之后锚点**正好**落在 `off` 处，而接下来重排的是锚点**下方**刚露头那一屏，锚点自己不动。
+  上面那些离屏消息就算还按 220px 估值占位，也只让**滚动条比例**不准，不影响锚点在屏上的位置。
+  实测：冷现场还原后偏 **1px**，再强制一次布局还是 1px。
+- **一键回底**：`scrollTop = scrollHeight` 后 `gap = 0`；再量两次、再跳一次都是 0。
+  估值偏大在这里是**安全方向**（内容随后缩回真实高度时，`scrollTop` 被夹回新的底部）。
+- 所以**没有**动 `applyScrollAnchor`（试过「量→滚→再量」迭代，实测收益 0，白多几次强制布局，撤了）。
+
+**回归**：`smoke.sh` 204 → **209**（`.cvmany` 三件套在、**反向封锁**不许挂成无条件的 `#messages > .msg`、
+开关由 `renderMessages()` 按 `CV_MIN_MSGS` 挂且 `ui-layout` 有正反两面断言）；`ui-layout` 160 → **162**
+（长会话挂 `.cvmany`、短会话不挂）；`ui-commands` 166、`ui-stream` 205、`ui-jump` 47 等其余套件与 `e2e-*` 全 0 失败。
+
+**本地没能验到的（如实记下）**：
+
+- 本机只有**无头 Firefox** 能跑，而它**根本不给 `content-visibility: auto` 跳过的内容上色**：
+  截图里消息区只剩左边框、正文一片空白（连跑 1.6 秒 CSS 动画想让刷新驱动转起来也一样，）
+  —— 所以「肉眼看起来对不对」在本地**验不了**。能确定的只有**尺寸/落点**（那批实测都是尺寸量出来的）。
+- 因此另跑了一组**安全候选对拍**（`/tmp/ocsm-probe/perf/contain-perf.js`，同一页里换注入的样式）:
+  `contain: layout` 28ms、`contain: layout style` 30ms、`contain: layout style paint` 32ms、包在 `.content` 上 27ms
+  —— **都没用**（比 baseline 还慢）；只有 `content-visibility: auto` 与 `contain: strict` 是 0ms，
+  而 `contain: strict` 带 `contain: size`（消息高度直接塌掉）不能用。**结论：想要这个收益就绕不开 cv 的跳过绘制。**
+- 另外两处**已知代价**（不是 bug，是这套做法的固有代价）：① 滚动条比例按估值算，
+  **第一次**往上翻时逐条换回真实高度，内容会有小幅抖动（`contain-intrinsic-size` 的 `auto` 记住之后就稳了）；
+  ② 估值的准头决定抖动大小 —— 这个会话 100 条 / 24400px，平均 244px，与 220 的估值差 ~10%，实测锚点落点仍只差 1px。
+- **兜底（一行就能退）**：手机上真看着闪/空，把 `styles.css` 里 `#messages.cvmany > .msg` 那三条删掉即可
+  （静态资源，后台不用重启）；要看备选做法见上面的对拍数字。参考:open-webui 的消息列表也是拿
+  `content-visibility: auto` 替掉了它自己那套 JS 裁剪。
+
+### 8.18 追加：运行中发消息默认「插话」，不是「排队」（对齐 TUI）
+
+**起因**：用户——「还在会话中，再次发送信息，tui 里发送的新信息不是放入 queued 的，好像是等候区，
+不用等完整会话结束就发出去了？但是网页版的就是放入 queued」。
+
+**查到的 TUI 行为**（从 `opencode` 二进制里抠出来的键位表）：TUI 里**光按 `Enter`** 是
+`"prompt.submit": c("none","Submit prompt")`，落到 `session.prompt({delivery:"steer"})`；
+**排队要额外按 `<leader>return`**，即 `"prompt.queue": c("<leader>return","Queue prompt")`。
+`session.compact` 的描述也写着「Steers by default: it runs at the next step boundary instead of waiting
+behind queued prompts」——**steer = 下一个 step 边界就并进当前回合；queue = 排在队尾等回合边界**。
+所以 TUI 里「接着打一句」本来就发得出去，正是用户看到的那样。
+
+**做法**：新增 `const DEFAULT_DELIVERY = 'steer'`（一处说了算），`store.delivery` 与 `setDelivery()`
+都走它：非法值回**默认**而不是写死回排队。工具栏「排队 / 插话」两个按钮照旧，只是默认高亮插话。
+
+**回归**：`ui-controls` 87 → **90**（默认是插话 + 默认高亮插话 + 切排队两边都对 + 非法值回默认）、
+`ui-commands` 里那条「忙时带上 `delivery`」的期望从 `queue` 改成 `steer`、`smoke.sh` +2（常量在、
+`store.delivery` 不许写死字面量）。中断后把队列里的 `user` 项改成 `steer` 放行那段**照旧保留**
+（那管的是「用户真的显式排了队，然后被中断」的情形）。
 
 ---
 
