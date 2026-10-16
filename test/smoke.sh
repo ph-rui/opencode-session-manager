@@ -1027,6 +1027,21 @@ if has "$PEEK_FN" "btn.addEventListener('click', hide)"; then
 else
   echo "FAIL: 点手柄没有把临时态摘掉"; fail=$((fail + 1))
 fi
+# 动手(改名/移动/删除/归档)会弹原生 confirm/prompt:一弹浏览器就把指针当「离开文档」,
+# mouseleave 一收,分栏槽缩回 x=0..16,再动一下就被判成「挪进对话区」,列表再也拉不回来。
+# 所以 onAction() 动手前叫一声 listPeekHold(),宽限期里那一次 mouseleave 吞掉。
+if has "$PEEK_FN" 'PEEK_HOLD_MS' && has "$PEEK_FN" 'if (Date.now() < peekLeaveGuard)' &&
+   has "$PEEK_FN" 'peekHold'; then
+  echo "PASS: 弹窗抢指针那一次 mouseleave 有宽限期兜着(动手前 listPeekHold())"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺「动手后别被弹窗收掉列表」的宽限期"; fail=$((fail + 1))
+fi
+ONACTION_FN=$(printf '%s' "$APPJS" | awk '/^async function onAction\(/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$ONACTION_FN" 'if (listPeekHold) listPeekHold();'; then
+  echo "PASS: onAction() 动手之前先武装宽限期"; pass=$((pass + 1))
+else
+  echo "FAIL: onAction() 没有叫 listPeekHold()(删完一个列表就当场收了)"; fail=$((fail + 1))
+fi
 INIT_FN_P=$(printf '%s' "$APPJS" | awk '/^function init\(\)/{f=1} f{print} f&&/^\}$/{exit}')
 if has "$INIT_FN_P" 'setupListPeek()' &&
    [ "$(printf '%s' "$APPJS" | grep -oF 'setupListPeek' | wc -l)" = 2 ]; then

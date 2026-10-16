@@ -286,6 +286,41 @@
       T('(收尾)回到展开态、不留临时态',
         !main.classList.contains('list-hidden') && !main.classList.contains('list-peek'));
 
+      /* ============ 3d. 动手之前先武装宽限期(原生弹窗会抢走指针) ============
+       * 用户报的:靠左边缘把列表临时拉出来,删掉一个会话,列表「当场收回」;
+       * 收回后分栏槽缩回 x=0..16,指针已经不在槽里,再动一下就被判成「挪进对话区」,
+       * 于是再也拉不回来 —— 想接着删下一个都不行。根子是原生 confirm 一弹,
+       * 浏览器就把指针当成离开了文档,main 收到 mouseleave 把临时态摘了。
+       * 改法:onAction() 动手之前叫一声 listPeekHold(),宽限期里那一次 mouseleave 吞掉。 */
+      localStorage.setItem('ocs.listHidden', '1');
+      setupListToggle();
+      setupListPeek();
+      mv(5);
+      T('(前置)临时展开着', main.classList.contains('list-peek'));
+      store.sessions.set('ses_c', { id: 'ses_c', title: '会话 C', time: { created: 1, updated: 3 } });
+      await onAction('del', 'ses_c'); // 真走一遍删除(本页 confirm 被桩成 true)
+      T('(前置)会话确实删掉了', !store.sessions.has('ses_c'));
+      T('删完之后列表还留着(没被弹窗抢指针那一下收掉)', main.classList.contains('list-peek'));
+      main.dispatchEvent(new MouseEvent('mouseleave'));
+      T('宽限期里那一次 mouseleave 被吞掉', main.classList.contains('list-peek'));
+      main.dispatchEvent(new MouseEvent('mouseleave'));
+      T('宽限期只管一次:再离开还是照常收', !main.classList.contains('list-peek'));
+      T('收掉之后列表也藏起来了', hiddenOf(listPane));
+
+      mv(5);
+      T('(前置)又拉出来了', main.classList.contains('list-peek'));
+      store.sessions.set('ses_d', { id: 'ses_d', title: '会话 D', time: { created: 1, updated: 2 } });
+      await onAction('del', 'ses_d');
+      T('(前置)删完还留着', main.classList.contains('list-peek'));
+      mv(resizer.getBoundingClientRect().right + 5);
+      T('宽限期不挡真实移动:挪进对话区照样立刻收', !main.classList.contains('list-peek'));
+
+      localStorage.removeItem('ocs.listHidden');
+      setupListToggle();
+      setupListPeek();
+      await onAction('del', 'ses_e'); // 列表好好开着的时候动手
+      T('列表本来就开着时不武装(别把正常的 mouseleave 也吞掉)', peekLeaveGuard === 0, peekLeaveGuard);
+
       /* ============ 4. 折叠状态被记住(模拟刷新后重新接线) ============ */
       localStorage.setItem('ocs.listHidden', '1');
       setupListToggle(); // 重复接线:只按存储重画,不应重复挂监听

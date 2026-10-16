@@ -2785,6 +2785,10 @@ async function guard(fn) {
 
 async function onAction(act, id) {
   const s = store.sessions.get(id);
+  // 这几项里有原生 confirm/prompt(改名/移动/删除/归档):一弹就把指针从文档里「抢走」,
+  // 列表的临时展开(main.list-peek)会当场被 mouseleave 收掉。动手之前先武装宽限期,
+  // 让「删完这一个还能接着删下一个」不至于变成「列表一收就再也拉不回来」。
+  if (listPeekHold) listPeekHold();
   if (act === 'open') return selectSession(id);
 
   // 窄屏:列表行右侧只留一个「⋯」,把这几项收进通用的选择框(桌面那排按钮照旧)
@@ -4614,6 +4618,15 @@ function setupListToggle() {
   });
 }
 
+/* 临时展开的「宽限期」:动手(改名/移动/删除/归档)会弹原生 confirm/prompt,一弹浏览器就
+ * 把指针当成离开了文档 → main 收到 mouseleave → 列表当场收回;收回后分栏槽缩回 x=0..16,
+ * 指针已经不在槽里,再动一下就被判成「挪进对话区」,再也拉不回来 —— 想「删完这个接着删
+ * 下一个」都做不到。所以动手之前先武装一下:这 3 秒里来的第一次 mouseleave 直接吞掉
+ * (就是弹窗抢走指针那一次),之后照旧。真实移动(mousemove)不受影响:挪进对话区立刻收。 */
+const PEEK_HOLD_MS = 3000;
+let peekLeaveGuard = 0; // > Date.now() 表示「下一次 mouseleave 不算数」
+let listPeekHold = null; // 由列表临时展开那段接线装上,onAction() 动手前叫一声
+
 /* -------------------- 鼠标靠左边缘:列表临时拉出来 --------------------
  * 列表收起之后,左侧那条 16px 分栏槽是鼠标最容易撞到的边界(它就在最左边)。
  * 靠上去就把列表临时拉出来,移开就收回去 —— 省掉「点手柄 → 看一眼 → 再点回去」。
@@ -4633,7 +4646,10 @@ function setupListPeek() {
   const pane = document.getElementById('listpane');
   if (!main || !rz || !pane) return;
 
-  const hide = () => main.classList.remove('list-peek');
+  const hide = () => {
+    main.classList.remove('list-peek');
+    peekLeaveGuard = 0; // 显式收掉了,宽限期一并取消
+  };
   const onMove = (e) => {
     // 常态(列表好好开着)不 measure、也不留残留的临时态 —— 早退
     if (!main.classList.contains('list-hidden')) {
@@ -4644,11 +4660,22 @@ function setupListPeek() {
     if (e.clientX < rz.getBoundingClientRect().right) main.classList.add('list-peek');
     else hide();
   };
+  const peekHold = () => {
+    if (document.documentElement.classList.contains('narrow')) return;
+    if (!main.classList.contains('list-hidden')) return; // 列表本来就开着,没什么可保的
+    if (!main.classList.contains('list-peek')) return; // 没在临时展开
+    peekLeaveGuard = Date.now() + PEEK_HOLD_MS;
+  };
+  listPeekHold = peekHold; // 给 onAction() 用:动手之前叫一声
 
   if (main.dataset.peekWired !== '1') {
     main.dataset.peekWired = '1';
     main.addEventListener('mousemove', onMove);
-    main.addEventListener('mouseleave', hide); // 移出整个主区(含移出窗口)就收回
+    main.addEventListener('mouseleave', () => {
+      // 宽限期内来的第一次「离开」吞掉:那就是弹窗把指针抢走那一下
+      if (Date.now() < peekLeaveGuard) { peekLeaveGuard = 0; return; }
+      hide();
+    }); // 移出整个主区(含移出窗口)就收回
     const btn = document.getElementById('btnList');
     // 临时展开期间点手柄 = 显式展开并保持(setupListToggle 已经写好记忆与类),这里只摘掉临时态
     if (btn) btn.addEventListener('click', hide);
