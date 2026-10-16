@@ -1666,6 +1666,23 @@ else
   echo "FAIL: ui-jump.html 里没有页大小的断言"; fail=$((fail + 1))
 fi
 
+# ---- R13 组:贴完底再跟几帧(cvmany 的离屏估值是贴完之后才落定的;§8.36)----
+if has "$APPJS" 'function repinUntilStable(box)' && has "$APPJS" 'const REPIN_BUDGET_MS = 800' &&
+   has "$APPJS" 'requestAnimationFrame(step)' &&
+   has "$APPJS" "if (pinned && box.classList.contains('cvmany')) repinUntilStable(box)" &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'repinSeq++' | wc -l)" = 3 ]; then
+  echo "PASS: 贴完底再跟几帧:只在 cvmany 下、有预算上限,切会话/取消选中/再渲染三处都作废"; pass=$((pass + 1))
+else
+  echo "FAIL: 「贴完底再跟几帧」没接对(或缺作废点/预算上限)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'if (seq !== repinSeq || !store.nearBottom) return;' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" 'repinUntilStable' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" 'REPIN_BUDGET_MS'; then
+  echo "PASS: 采样停下来有两条硬条件(又渲染了 / 用户往上滚了),ui-jump 里有这组断言"; pass=$((pass + 1))
+else
+  echo "FAIL: 采样没有停手条件,或 ui-jump.html 里没有这组断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

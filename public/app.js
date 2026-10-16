@@ -1254,6 +1254,7 @@ function clearSelection() {
   $('#older').hidden = true;
   store.msgError = ''; // 没选中会话:失败提示也一并撤掉(否则它会跟着下一个会话)
   store.msgSeq++; // 在途的响应与重试就地作废
+  repinSeq++; // 「贴完底再跟几帧」那一轮也一起作废(不然它会去动下一个会话的位置)
   setMsgLoading(false);
   paintMsgState();
   updateJumpLatest(); // 没选中会话了 → 收起来
@@ -1428,6 +1429,37 @@ function updateJumpLatest(atB) {
 function jumpToLatest() {
   pinBottom($('#messages'));
   updateJumpLatest(true); // 刚贴的底,位置已知,不用再量
+}
+
+/* cvmany(content-visibility: auto)下 scrollHeight 是【估值】:贴完底之后浏览器才把
+ * 离屏元素的估值落定 —— 估值一动 scrollHeight 就变,浏览器还会把 scrollTop 夹回去。
+ * 于是「明明贴了底」变成停在最新消息上面几百像素(§8.35 实测竖屏 466px,桌面那档
+ * 历史上 1473px),而且【不再有渲染来纠正它】:那条会话要是安静下来,就永远停在那儿。
+ *
+ * 贴完底之后补几帧,跟到 scrollHeight 稳住为止:
+ *   - 只有真的变了才重新贴(干净时读 scrollHeight 是一次廉价读,不白贴);
+ *   - 用户一往上滚就停手(store.nearBottom 被滚动监听翻成 false);
+ *   - 又渲染/又切会话就作废(repinSeq,见 renderMessages 与 selectSession);
+ *   - 短会话压根没有 cvmany,不走这条路。
+ * 估值落定实测在贴底后 400ms 内,预算给到 800ms 有余量。 */
+const REPIN_BUDGET_MS = 800;
+let repinSeq = 0;
+
+function repinUntilStable(box) {
+  if (!box) return;
+  const seq = ++repinSeq;
+  const t0 = performance.now();
+  let prev = -1;
+  const step = () => {
+    if (seq !== repinSeq || !store.nearBottom) return;
+    const h = box.scrollHeight;
+    if (h !== prev) {
+      prev = h;
+      pinBottom(box);
+    }
+    if (performance.now() - t0 < REPIN_BUDGET_MS) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 function setupJumpLatest() {
@@ -1629,6 +1661,7 @@ async function selectSession(id) {
   $('#messages').innerHTML = '';
   store.msgError = ''; // 切会话了:上一个会话的失败/加载状态都不该跟过来
   store.msgSeq++; // 这一下就把在途的响应与重试作废(下面 loadMessages 还会再记一代)
+  repinSeq++; // 上一会话「贴完底再跟几帧」那一轮也作废
   setMsgLoading(false);
   paintMsgState();
   renderAsks();
@@ -3026,6 +3059,7 @@ const CV_MIN_MSGS = 30;
 function renderMessages() {
   const box = $('#messages');
   const msgs = currentMessages();
+  repinSeq++; // 这一轮渲染一来,上一轮「贴完底再跟几帧」就地作废(免得它去动新会话说位置)
   // 够长才让离屏消息跳过渲染(CV_MIN_MSGS);短会话维持原样,滚动行为一个字节都不变
   box.classList.toggle('cvmany', msgs.length >= CV_MIN_MSGS);
   const force = store.forceBottom;
@@ -3092,6 +3126,7 @@ function renderMessages() {
   // 布局。那次读正好落在刚改完 DOM 之后,是整个 renderMessages() 里最贵的一步
   // (脏树 atBottom 实测 23~29ms)。只有「还原了滚动锚点」这种位置不确定的情况才量一次。
   let atB = null;
+  let pinned = false;
   if (pending && msgs.length) {
     store.restoreScroll = null; // 消费掉:只在这次渲染还原一次
     applyScrollAnchor(pending);
@@ -3099,12 +3134,15 @@ function renderMessages() {
   } else if (nearBottom) {
     pinBottom(box);
     atB = true;
+    pinned = true;
   } else if (!pending) {
     atB = false; // 没锚点要还原、也没跟底 → 就是不在底部
   }
   $('#older').hidden = !store.msgOlderCursor;
   // 内容高度刚变过,底部判定跟着变 —— 往上翻着的时候新内容进来,这里就把按钮露出来
   updateJumpLatest(atB);
+  // 贴完底之后再跟几帧:cvmany 的离屏估值是【贴完之后】才落定的,一落定就把底顶歪(见 repinUntilStable)
+  if (pinned && box.classList.contains('cvmany')) repinUntilStable(box);
 
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;

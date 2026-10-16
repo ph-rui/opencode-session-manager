@@ -527,6 +527,43 @@
         MSG_PAGE_WIDE === 100 && MSG_PAGE_NARROW === 30 && msgPageSize() === 100,
         MSG_PAGE_WIDE + '/' + MSG_PAGE_NARROW);
 
+      /* ============ 10. 贴完底再跟几帧:估值落定不许把底顶歪(§8.36) ============
+       * cvmany 下 scrollHeight 是估值,浏览器是【贴完之后】才把它落定的 —— 一落定
+       * scrollTop 就被夹回去,而这时往往已经没有下一次渲染来纠正(事件不来就永远停着)。
+       * 这一段用「内容突然变高」模拟那次落定:老写法里没人管,于是停在最新消息上面一截。 */
+      T('有 repinUntilStable 与预算常数(跟帧是有上限的)', typeof repinUntilStable === 'function' && REPIN_BUDGET_MS >= 400,
+        typeof repinUntilStable + '/' + REPIN_BUDGET_MS);
+      await selectSession('ses_long'); // 60 条 → cvmany 挂着
+      await tick(); await tick();
+      T('(前置)长会话挂着 cvmany', box.classList.contains('cvmany'));
+      T('(前置)此刻在底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
+      var grow = document.createElement('div');
+      grow.style.height = '600px';
+      box.appendChild(grow);
+      await tick(); await tick(); await tick();
+      T('贴完底之后内容又变高(≈估值落定)→ 自动贴回底部', maxTop() - box.scrollTop < 2,
+        box.scrollTop + '/' + maxTop());
+      T('而且按钮没冒出来(面板仍认为在底部)', btn.hidden === true);
+
+      /* 用户往上滚之后必须停手 —— 跟帧不许把人拽回来 */
+      box.scrollTop = Math.max(0, maxTop() - 500);
+      await tick();
+      T('(前置)往上滚了 → 已让路', store.nearBottom === false);
+      var held = box.scrollTop;
+      grow.style.height = '1200px';
+      await tick(); await tick(); await tick();
+      T('让路之后再变高 → 一动不动(没把人拽回底部)', box.scrollTop === held, box.scrollTop + ' vs ' + held);
+      T('按钮这时该露着', btn.hidden === false);
+      grow.remove();
+      box.scrollTop = box.scrollHeight;
+      await tick();
+      T('(复位)清掉那块高的、回到底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
+
+      /* 新一轮渲染要把上一轮采样作废 —— 否则它会在新内容上乱贴位置 */
+      var seq0 = repinSeq;
+      await loadMessages();
+      T('每一次渲染都把上一轮采样作废(repinSeq 涨了)', repinSeq > seq0, seq0 + '→' + repinSeq);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));
