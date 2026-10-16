@@ -137,7 +137,7 @@
 
       /* ================= diffHtml ================= */
       var dh = diffHtml(files);
-      T('diffHtml:带状态徽标「修改」', dh.indexOf('dbadge mod') >= 0 && dh.indexOf('修改') >= 0);
+      T('diffHtml:带状态徽标「← Patched」', dh.indexOf('dbadge mod') >= 0 && dh.indexOf('← Patched') >= 0);
       T('diffHtml:显示文件路径', dh.indexOf('default.xml') >= 0);
       T('diffHtml:统计用服务端的 additions', dh.indexOf('>+1<') >= 0, dh);
       T('diffHtml:统计用服务端的 deletions', dh.indexOf('>-1<') >= 0, dh);
@@ -148,9 +148,9 @@
         { file: 'b.json', status: 'deleted', additions: 0, deletions: 3, patch: '' },
       ]);
       T('diffHtml:多文件各有一块文件头', qaOf(dh2, 'dfile') === 2, qaOf(dh2, 'dfile'));
-      T('diffHtml:added 徽标是「新建」', dh2.indexOf('dbadge add') >= 0);
-      T('diffHtml:deleted 徽标是「删除」', dh2.indexOf('dbadge del') >= 0);
-      T('diffHtml:没有 patch 的删除文件退化为「- N 行」', dh2.indexOf('dnote') >= 0 && dh2.indexOf('- 3 行') >= 0, dh2);
+      T('diffHtml:added 徽标是「# Created」', dh2.indexOf('dbadge add') >= 0 && dh2.indexOf('# Created') >= 0);
+      T('diffHtml:deleted 徽标是「# Deleted」', dh2.indexOf('dbadge del') >= 0 && dh2.indexOf('# Deleted') >= 0);
+      T('diffHtml:没有 patch 的删除文件退化为「-N lines」', dh2.indexOf('dnote') >= 0 && dh2.indexOf('-3 lines') >= 0, dh2);
       T('diffHtml:空数组返回空串', diffHtml([]) === '' && diffHtml(null) === '');
 
       /* ================= codeHtml(write 正文) ================= */
@@ -188,7 +188,9 @@
         state: { status: 'completed', input: { path: 'default.xml', oldString: 'a', newString: 'b' },
           content: [{ type: 'text', text: 'ok' }], metadata: { files: files, truncated: false } } };
       var eh = toolHtml(editPart);
-      T('toolHtml(edit):摘要写「← 编辑 <路径>」', eh.indexOf('← 编辑 default.xml') >= 0, eh.slice(0, 300));
+      T('toolHtml(edit):标题行写「← Edit <路径>」(图标进 .tmark,词进 .tname)',
+        eh.indexOf('class="tmark">←<') >= 0 && eh.indexOf('class="tname">Edit<') >= 0 &&
+        eh.indexOf('class="tdesc">default.xml<') >= 0, eh.slice(0, 300));
       T('toolHtml(edit):摘要带增删统计', eh.indexOf('tadd">+1') >= 0 && eh.indexOf('tdel">-1') >= 0);
       T('toolHtml(edit):默认展开', eh.indexOf('<details class="tool" open>') === 0, eh.slice(0, 60));
       T('toolHtml(edit):正文有 diff', eh.indexOf('<div class="diff">') >= 0 && eh.indexOf('dl add') >= 0);
@@ -200,7 +202,7 @@
       var editRun = { type: 'tool', id: 'c2', name: 'edit',
         state: { status: 'running', input: { path: 'src/main.c', oldString: 'x', newString: 'y' }, metadata: {} } };
       var erh = toolHtml(editRun);
-      T('toolHtml(edit 运行中):只写目标路径', erh.indexOf('← 编辑 src/main.c') >= 0, erh);
+      T('toolHtml(edit 运行中):只写目标路径', erh.indexOf('class="tname">Edit<') >= 0 && erh.indexOf('src/main.c') >= 0, erh);
       T('toolHtml(edit 运行中):不泄漏 oldString/newString', erh.indexOf('oldString') < 0, erh);
       T('toolHtml(edit 运行中):没有正文因此不是 details',
         erh.indexOf('class="toolrow"') >= 0 && erh.indexOf('<details') < 0, erh);
@@ -220,7 +222,8 @@
           content: [{ type: 'text', text: 'Wrote' }],
           metadata: { filepath: 'docs/a.md', exists: false, diagnostics: {} } } };
       var wh = toolHtml(writePart);
-      T('toolHtml(write):摘要写「# 写入 <路径>」', wh.indexOf('# 写入 docs/a.md') >= 0, wh);
+      T('toolHtml(write):完成后的块标题写「# Wrote <路径>」', wh.indexOf('class="tmark">#<') >= 0 &&
+        wh.indexOf('class="tname">Wrote<') >= 0 && wh.indexOf('docs/a.md') >= 0, wh);
       T('toolHtml(write):默认展开', wh.indexOf('<details class="tool" open>') === 0);
       T('toolHtml(write):写进正文的内容带行号', wh.indexOf('diff code') >= 0 && wh.indexOf('标题') >= 0);
       var writeRun = { type: 'tool', id: 'c5', name: 'write', state: { status: 'streaming', input: {}, metadata: {} } };
@@ -237,7 +240,8 @@
             { file: 'b.json', status: 'deleted', additions: 0, deletions: 3, patch: '' },
           ] } } };
       var ph = toolHtml(patchPart);
-      T('toolHtml(patch):多文件摘要写「← N 个文件」', ph.indexOf('← 2 个文件') >= 0, ph.slice(0, 300));
+      T('toolHtml(patch):多文件摘要写「← Patch N files」', ph.indexOf('class="tname">Patch<') >= 0 &&
+        ph.indexOf('class="tdesc">2 files<') >= 0, ph.slice(0, 300));
       T('toolHtml(patch):汇总增删统计', ph.indexOf('tadd">+1') >= 0 && ph.indexOf('tdel">-3') >= 0);
       T('toolHtml(patch):两个文件各一块', qaOf(ph, 'dfile') === 2, qaOf(ph, 'dfile'));
       T('toolHtml(patch):默认展开', ph.indexOf('<details class="tool" open>') === 0);
@@ -249,31 +253,93 @@
         state: { status: 'completed', input: { questions: [{ question: '改哪些文件?' }, { question: '是否全跟?' }] },
           content: [], metadata: { answers: [['default.xml'], ['是']] } } };
       var qh = toolHtml(qPart);
-      T('toolHtml(question 已答):摘要写「已提问 N 个问题」', qh.indexOf('→ 已提问 2 个问题') >= 0, qh);
+      T('toolHtml(question 已答):块标题是「# Questions」', qh.indexOf('class="tmark">#<') >= 0 &&
+        qh.indexOf('class="tname">Questions<') >= 0, qh);
       T('toolHtml(question 已答):列出问题', qh.indexOf('改哪些文件?') >= 0 && qh.indexOf('是否全跟?') >= 0);
       T('toolHtml(question 已答):列出答案', qh.indexOf('default.xml') >= 0 && qh.indexOf('>是<') >= 0, qh);
       var qpend = { type: 'tool', id: 'c8', name: 'question',
         state: { status: 'running', input: { questions: [{ question: 'x' }] }, metadata: {} } };
-      T('toolHtml(question 未答):只写「提问中…」', toolHtml(qpend).indexOf('→ 提问中…') >= 0);
+      T('toolHtml(question 未答):写「Asked N question(s)」', (function () {
+        var qph = toolHtml(qpend);
+        return /class="tmark spin"/.test(qph) && qph.indexOf('class="tname">Asked 1<') >= 0 &&
+          qph.indexOf('class="tdesc">question<') >= 0;
+      })(), toolHtml(qpend));
+      T('toolHtml(question 未答):复数用 questions',
+        toolHtml({ type: 'tool', id: 'c8b', name: 'question',
+          state: { status: 'completed', input: { questions: [{ question: 'a' }, { question: 'b' }] }, metadata: {} } })
+          .indexOf('class="tdesc">questions<') >= 0);
       var skillPart = { type: 'tool', id: 'c9', name: 'skill',
         state: { status: 'completed', input: { id: 'brainstorming' }, content: [], metadata: { name: 'brainstorming' } } };
-      T('toolHtml(skill):写「→ Skill "名字"」',
-        toolHtml(skillPart).indexOf('→ Skill &quot;brainstorming&quot;') >= 0, toolHtml(skillPart));
+      T('toolHtml(skill):写「→ Skill "名字"」', (function () {
+        var sh = toolHtml(skillPart);
+        return sh.indexOf('class="tmark">→<') >= 0 && sh.indexOf('class="tname">Skill<') >= 0 &&
+          sh.indexOf('&quot;brainstorming&quot;') >= 0;
+      })(), toolHtml(skillPart));
+      T('toolHtml(skill 没名字时):只写 Skill,不留一对空引号',
+        toolHtml({ type: 'tool', name: 'skill', state: { status: 'completed', input: {}, metadata: {} } })
+          .indexOf('class="tdesc"') < 0);
 
-      /* ================= toolHtml:通用工具 ================= */
+      /* ================= toolHtml:shell / 通用工具 ================= */
       var bashPart = { type: 'tool', id: 'c10', name: 'bash',
         state: { status: 'completed', input: { command: 'git log --oneline -5', description: '看提交' },
           content: [{ type: 'text', text: '8546aa617 fix\n' }], metadata: { exit: 0 } } };
       var bh = toolHtml(bashPart);
-      T('toolHtml(通用):摘要取 command', bh.indexOf('→ git log --oneline -5') >= 0, bh);
-      T('toolHtml(通用):默认折叠(保留点开看细节)', bh.indexOf('<details class="tool"') === 0 && bh.indexOf(' open>') < 0, bh.slice(0, 60));
-      T('toolHtml(通用):入参仍在 pre 里', bh.indexOf('<pre>') >= 0 && bh.indexOf('echo') < 0 && bh.indexOf('git log') >= 0);
+      T('toolHtml(shell):行首 `$`、命令进 .tname(TUI 的 ShellDisplay)',
+        bh.indexOf('class="tmark">$<') >= 0 && bh.indexOf('class="tname">git log --oneline -5<') >= 0, bh);
+      T('toolHtml(shell):带 workdir 时照 TUI 接 `cd <dir> && `', (function () {
+        var w = toolHtml({ type: 'tool', name: 'bash',
+          state: { status: 'completed', input: { command: 'make', workdir: '/work/src' }, content: [] } });
+        return w.indexOf('cd /work/src &amp;&amp; make') >= 0;
+      })());
+      T('toolHtml(shell):默认折叠(保留点开看细节)', bh.indexOf('<details class="tool"') === 0 && bh.indexOf(' open>') < 0, bh.slice(0, 60));
+      T('toolHtml(shell):正文只留输出,不再铺入参 JSON',
+        bh.indexOf('<pre>8546aa617 fix</pre>') >= 0 && bh.indexOf('&quot;command&quot;') < 0 &&
+        bh.indexOf('description') < 0, bh);
       var bare = { type: 'tool', id: 'c11', name: 'read',
         state: { status: 'completed', input: {}, content: [] } };
-      T('toolHtml(通用):无入参无输出时是单行', toolHtml(bare).indexOf('class="toolrow"') >= 0);
+      T('toolHtml(read):无入参无输出时是单行', toolHtml(bare).indexOf('class="toolrow"') >= 0);
+
+      /* 没进 TUI 专用组件的工具落进通用卡片:标题是「工具名 + 摘要」 */
+      var genPart = { type: 'tool', id: 'c14', name: 'todowrite',
+        state: { status: 'completed', input: { note: '写测试' }, content: [] } };
+      T('toolHtml(通用):标题行是「工具名 + 摘要」', (function () {
+        var g = toolHtml(genPart);
+        return g.indexOf('class="tname">todowrite<') >= 0 && g.indexOf('class="tdesc">note: 写测试<') >= 0;
+      })(), toolHtml(genPart));
+
+      /* 各工具的图标照 TUI(read/list →、write/edit ←、glob/grep ✱、webfetch %、
+       * websearch ◈、shell $、其余 ✓、出错 ✗)、别名照 canonicalToolName */
+      T('toolIcon:read/list 是 →', toolIcon({ name: 'read' }) === '→' && toolIcon({ name: 'list' }) === '→');
+      T('toolIcon:write/edit/patch 是 ←',
+        toolIcon({ name: 'write' }) === '←' && toolIcon({ name: 'edit' }) === '←' &&
+        toolIcon({ name: 'patch' }) === '←' && toolIcon({ name: 'apply_patch' }) === '←');
+      T('toolIcon:glob/grep 是 ✱', toolIcon({ name: 'glob' }) === '✱' && toolIcon({ name: 'grep' }) === '✱');
+      T('toolIcon:webfetch 是 %、websearch 是 ◈',
+        toolIcon({ name: 'webfetch' }) === '%' && toolIcon({ name: 'websearch' }) === '◈');
+      T('toolIcon:bash 当 shell($)、task 当 subagent(✓)',
+        toolIcon({ name: 'bash' }) === '$' && toolIcon({ name: 'task' }) === '✓');
+      T('toolIcon:别的工具兜底 ✓、出错一律 ✗',
+        toolIcon({ name: 'todowrite' }) === '✓' &&
+        toolIcon({ name: 'read', state: { status: 'error' } }) === '✗');
+      T('toolLine(glob/grep):模式加引号 + in <路径> + 命中数', (function () {
+        var g = toolLine({ name: 'glob', state: { status: 'completed', input: { pattern: '*.ts', path: 'src' }, metadata: { count: 3 } } });
+        var r = toolLine({ name: 'grep', state: { status: 'completed', input: { pattern: 'foo', path: 'src' }, metadata: { matches: 1 } } });
+        return g.head === 'Glob' && g.tail === '"*.ts" in src (3 matches)' &&
+          r.head === 'Grep' && r.tail === '"foo" in src (1 match)';
+      })());
+      T('toolLine(read):offset/limit 印成 `:起-止`',
+        toolLine({ name: 'read', state: { status: 'completed', input: { path: 'a.c', offset: 10, limit: 20 } } }).tail === 'a.c:10-29' &&
+        toolLine({ name: 'read', state: { status: 'completed', input: { path: 'a.c', limit: 5 } } }).tail === 'a.c:1-5');
+      T('toolLine(subagent):`<Agent> Subagent — 说明 · 模型`', (function () {
+        var t = toolLine({ name: 'task', state: { status: 'completed', input: { agent: 'explore', description: '找接口', model: 'x/y' } } });
+        return t.head === 'Explore Subagent' && t.tail === '— 找接口 · x/y';
+      })());
+      T('toolLine(webfetch/websearch):URL 与 provider 照 TUI 印',
+        toolLine({ name: 'webfetch', state: { status: 'completed', input: { url: 'https://a/b' } } }).tail === 'https://a/b' &&
+        toolLine({ name: 'websearch', state: { status: 'completed', input: { query: 'q' }, metadata: { provider: 'exa' } } }).tail === 'via exa "q"');
 
       /* ================= 运行中的工具:行首标记会转(TUI 同款) =================
-       * TUI 实测:行首标记 running 时由 `$` 变成盲文 spinner(dots 组,80ms 一帧)。 */
+       * TUI 实测:行首标记 running 时由该工具自己的图标变成盲文 spinner(dots 组,80ms 一帧)。 */
       T('toolRunning:running / streaming 都算在跑',
         toolRunning({ state: { status: 'running' } }) === true &&
         toolRunning({ state: { status: 'streaming' } }) === true);
@@ -287,13 +353,17 @@
       var rh = toolHtml(runPart);
       T('toolHtml(运行中):行首标记是 spinner',
         /class="tmark spin">[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]</.test(rh), rh.slice(0, 120));
-      T('toolHtml(运行中):不再画静态 ⏺', rh.indexOf('⏺') < 0, rh.slice(0, 120));
-      T('toolHtml(运行中):命令照常在(标记就贴在它前面)', rh.indexOf('→ sleep 12') >= 0, rh.slice(0, 200));
-      T('toolHtml(已完成):行首仍是 ⏺ 不是 spinner',
-        bh.indexOf('class="tmark">⏺<') >= 0 && bh.indexOf('tmark spin') < 0, bh.slice(0, 120));
-      T('toolHtml(出错):行首也回到 ⏺',
-        toolHtml({ type: 'tool', id: 'c13', name: 'bash',
-          state: { status: 'error', input: { command: 'x' }, content: [] } }).indexOf('class="tmark">⏺<') >= 0);
+      T('toolHtml(运行中):不再画静态图标', rh.indexOf('⏺') < 0 && rh.indexOf('class="tmark">$<') < 0, rh.slice(0, 120));
+      T('toolHtml(运行中):命令照常在(标记就贴在它前面)', rh.indexOf('class="tname">sleep 12<') >= 0, rh.slice(0, 200));
+      T('toolHtml(已完成):行首回到自己的图标(不是 spinner)',
+        bh.indexOf('class="tmark">$<') >= 0 && bh.indexOf('tmark spin') < 0, bh.slice(0, 120));
+      T('toolHtml(已完成):不再另画对勾的状态 <span>', bh.indexOf('tstate') < 0, bh.slice(0, 120));
+      T('toolHtml(出错):行首换成 ✗、右边留一个「出错」',
+        (function () {
+          var e = toolHtml({ type: 'tool', id: 'c13', name: 'bash',
+            state: { status: 'error', input: { command: 'x' }, content: [] } });
+          return e.indexOf('class="tmark">✗<') >= 0 && e.indexOf('class="tstate err">出错<') >= 0;
+        })());
 
       /* ================= toolMetaSig ================= */
       T('toolMetaSig:无 metadata 为空', toolMetaSig({ state: {} }) === '');
@@ -362,8 +432,9 @@
       T('文件头也渲染进了 DOM', !!el(AID).querySelector('.dfile .dpath'));
       T('行号列渲染出来', el(AID).querySelector('.dl.add .ln.n').textContent === '4',
         el(AID).querySelector('.dl.add .ln.n') && el(AID).querySelector('.dl.add .ln.n').textContent);
-      T('摘要里的增删统计上屏', el(AID).querySelector('.tdesc').textContent.indexOf('← 编辑') >= 0,
-        el(AID).querySelector('.tdesc') && el(AID).querySelector('.tdesc').textContent);
+      T('摘要里的增删统计上屏', el(AID).querySelector('.tname').textContent === 'Edit' &&
+        !!el(AID).querySelector('.tadd') && !!el(AID).querySelector('.tdel'),
+        el(AID).querySelector('.tname') && el(AID).querySelector('.tname').textContent);
 
       /* 若 metadata 没变,不该因为一条 progress 就整条重建 */
       var elAfter = el(AID);
@@ -397,11 +468,43 @@
         statusInfo({ state: { status: 'completed' } }).icon === '✓' &&
         statusInfo({ state: { status: 'completed' } }).label === '' &&
         statusInfo({ state: { status: 'error' } }).label === '出错');
-      T('完成/出错照旧在工具行上画标记',
+      T('完成不再另画标记(行首图标说了),只有出错在工具行上留一个字',
         toolHtml({ type: 'tool', name: 'bash', state: { status: 'completed', input: { command: 'true' } } })
-          .indexOf('class="tstate ok"') >= 0 &&
+          .indexOf('tstate') < 0 &&
         toolHtml({ type: 'tool', name: 'bash', state: { status: 'error', input: { command: 'false' } } })
-          .indexOf('class="tstate err"') >= 0);
+          .indexOf('class="tstate err">出错<') >= 0);
+
+      /* ================= 路径缩略(照 TUI 的 x4 / cm) =================
+       * 会话目录下 → 相对;home 下 → ~/…;都不是 → 原样。手机竖屏上一串
+       * /work/example/... 会被省略号截掉半截,缩完才一眼看出是哪个文件。 */
+      T('normPath:折掉 . 与多余的 /', normPath('/a//b/./c/') === '/a/b/c', normPath('/a//b/./c/'));
+      T('normPath:.. 回退一层', normPath('/a/b/../c') === '/a/c', normPath('/a/b/../c'));
+      T('abbrevPath:会话目录下 → 相对路径(照 TUI 的 x4,base = 会话目录)',
+        abbrevPath('/proj/a/src/x.js') === 'src/x.js', abbrevPath('/proj/a/src/x.js'));
+      T('abbrevPath:会话目录自身 → .', abbrevPath('/proj/a') === '.', abbrevPath('/proj/a'));
+      T('abbrevPath:home 下 → ~/…(照 TUI 的 cm)',
+        (function () {
+          var h = store.home;
+          store.home = '/home/u';
+          var r = abbrevPath('/home/u/w/y.md');
+          store.home = h;
+          return r === '~/w/y.md';
+        })());
+      T('abbrevPath:两个都不是 → 原样', abbrevPath('/etc/hosts') === '/etc/hosts', abbrevPath('/etc/hosts'));
+      T('abbrevPath:相对路径只去掉 ./ 前缀',
+        abbrevPath('./x/y') === 'x/y', abbrevPath('./x/y'));
+      T('abbrevPath:取不到会话目录时也不瞎缩(原样/~/…),排版函数仍可离线断言',
+        (function () {
+          var sel = store.selected;
+          var h = store.home;
+          store.selected = null;
+          store.home = '';
+          var r = abbrevPath('/proj/a/src/x.js');
+          store.selected = sel;
+          store.home = h;
+          return r === '/proj/a/src/x.js';
+        })());
+      T('abbrevPath:空值原样(不当成 / )', abbrevPath('') === '', abbrevPath(''));
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

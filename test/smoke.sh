@@ -931,7 +931,7 @@ else
   echo "FAIL: statusInfo 的 running/streaming 又带上图标或标签了"; fail=$((fail + 1))
 fi
 TOOLHEAD_FN=$(printf '%s' "$APPJS" | awk '/^function toolHead\(/{f=1} f{print} f&&/^\}$/{exit}')
-if has "$TOOLHEAD_FN" 's.icon || s.label'; then
+if has "$TOOLHEAD_FN" 's.label ?'; then
   echo "PASS: 状态标记空着就整个 <span> 都不输出(不留空壳)"; pass=$((pass + 1))
 else
   echo "FAIL: toolHead 无条件画状态 <span>"; fail=$((fail + 1))
@@ -967,6 +967,50 @@ if has "$SPIN_CSS" 'min-width: 1em'; then
   echo "PASS: spinner 定宽占位(逐帧换字不抖行)"; pass=$((pass + 1))
 else
   echo "FAIL: .tmark.spin 没定宽"; fail=$((fail + 1))
+fi
+
+# ---- N3 组:工具行的标题照 TUI 的每个工具组件 ----
+# TUI(packages/tui/src/routes/session/index.tsx)里每类工具有自己的组件:Read / Glob /
+# Grep / WebFetch / WebSearch / Write / Edit / ApplyPatch / Shell / Subagent / Question /
+# Skill,其余落进 GenericTool。那一行统一是「行首图标 + 一段文案」,图标表在 TOOL_ICONS,
+# 别名与 packages/tui/src/util/tool-display.ts 的 canonicalToolName 一致。
+if has "$APPJS" "const TOOL_ALIAS = { bash: 'shell', task: 'subagent', apply_patch: 'patch' }"; then
+  echo "PASS: 工具别名与 TUI 的 canonicalToolName 一致"; pass=$((pass + 1))
+else
+  echo "FAIL: TOOL_ALIAS 跟 TUI 对不上"; fail=$((fail + 1))
+fi
+TOOLICONS_DECL=$(printf '%s' "$APPJS" | awk '/^const TOOL_ICONS = \{/{f=1} f{print} f&&/^\};$/{exit}')
+if has "$TOOLICONS_DECL" "read: '→', list: '→'" && has "$TOOLICONS_DECL" "write: '←', edit: '←', patch: '←'" &&
+   has "$TOOLICONS_DECL" "glob: '✱', grep: '✱'" && has "$TOOLICONS_DECL" "webfetch: '%'" &&
+   has "$TOOLICONS_DECL" "websearch: '◈'" && has "$TOOLICONS_DECL" "shell: '\$'"; then
+  echo "PASS: 每个工具的图标照 TUI(→ ← ✱ % ◈ \$)"; pass=$((pass + 1))
+else
+  echo "FAIL: TOOL_ICONS 跟 TUI 的图标表对不上"; fail=$((fail + 1))
+fi
+TOOLLINE_FN=$(printf '%s' "$APPJS" | awk '/^function toolLine\(/{f=1} f{print} f&&/^\}$/{exit}')
+if has "$TOOLLINE_FN" "'Read'" && has "$TOOLLINE_FN" "'Glob'" && has "$TOOLLINE_FN" "'Grep'" &&
+   has "$TOOLLINE_FN" "'WebFetch'" && has "$TOOLLINE_FN" "'Web Search'" && has "$TOOLLINE_FN" "'Edit'" &&
+   has "$TOOLLINE_FN" "'Skill'" && has "$TOOLLINE_FN" "'Asked '"; then
+  echo "PASS: 标题行的工具词照 TUI 的组件名(Read / Glob / Grep / …)"; pass=$((pass + 1))
+else
+  echo "FAIL: toolLine 少认了某个工具"; fail=$((fail + 1))
+fi
+if has "$APPJS" "head: 'Wrote', tail: abbrevPath(path), icon: '#'" && has "$APPJS" "head: 'Questions', tail: '', icon: '#'"; then
+  echo "PASS: write / question 的块标题照 TUI 的「# Wrote」「# Questions」"; pass=$((pass + 1))
+else
+  echo "FAIL: 块标题跟 TUI 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" "added: { label: '# Created', cls: 'add' }" &&
+   has "$APPJS" "deleted: { label: '# Deleted', cls: 'del' }" &&
+   has "$APPJS" "modified: { label: '← Patched', cls: 'mod' }"; then
+  echo "PASS: diff 文件头徽标照 TUI 的「# Created / # Deleted / ← Patched」"; pass=$((pass + 1))
+else
+  echo "FAIL: diff 徽标文案跟 TUI 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" "Error [' + line + ':' + col + '] '"; then
+  echo "PASS: 诊断行照 TUI 印「Error [行:列]」"; pass=$((pass + 1))
+else
+  echo "FAIL: 诊断行文案跟 TUI 对不上"; fail=$((fail + 1))
 fi
 
 # ---- O 组:一键回底(TUI 的 "Jump to latest ↓") ----

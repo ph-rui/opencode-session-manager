@@ -1817,12 +1817,13 @@ function diffRowHtml(r) {
 }
 
 function diffBadge(status) {
+  // 文案照 TUI 的 ApplyPatch 块标题(added → `# Created`、deleted → `# Deleted`、其余 → `← Patched`)
   const map = {
-    added: { label: '新建', cls: 'add' },
-    deleted: { label: '删除', cls: 'del' },
-    modified: { label: '修改', cls: 'mod' },
+    added: { label: '# Created', cls: 'add' },
+    deleted: { label: '# Deleted', cls: 'del' },
+    modified: { label: '← Patched', cls: 'mod' },
   };
-  return map[status] || { label: '变更', cls: 'mod' };
+  return map[status] || { label: '← Patched', cls: 'mod' };
 }
 
 function diffCounts(files) {
@@ -1846,12 +1847,12 @@ function diffHtml(files) {
     html +=
       '<div class="dfile">' +
       '<span class="dbadge ' + b.cls + '">' + b.label + '</span>' +
-      '<span class="dpath">' + esc((f && f.file) || '') + '</span>' +
+      '<span class="dpath">' + esc(abbrevPath((f && f.file) || '')) + '</span>' +
       (adds ? '<span class="tadd">+' + adds + '</span>' : '') +
       (dels ? '<span class="tdel">-' + dels + '</span>' : '') +
       '</div>';
     if (!rows.length) {
-      html += '<div class="dnote">' + (dels ? '- ' + dels + ' 行' : '(无内容)') + '</div>';
+      html += '<div class="dnote">' + (dels ? '-' + dels + ' line' + (dels !== 1 ? 's' : '') : '(no content)') + '</div>';
       continue;
     }
     html += '<div class="diff">' + rows.map(diffRowHtml).join('') + '</div>';
@@ -1887,7 +1888,7 @@ function diagHtml(metadata, path) {
     const r = (d && d.range && d.range.start) || {};
     const line = (typeof r.line === 'number' ? r.line : 0) + 1;
     const col = (typeof r.character === 'number' ? r.character : 0) + 1;
-    return '<div class="dline">错误 [' + line + ':' + col + '] ' + esc((d && d.message) || '') + '</div>';
+    return '<div class="dline">Error [' + line + ':' + col + '] ' + esc((d && d.message) || '') + '</div>';
   }).join('') + '</div>';
 }
 
@@ -1909,81 +1910,199 @@ function inputSummary(input) {
     .trim();
 }
 
-function toolHead(p, s, desc, counts) {
-  // 行首标记:运行中时照 TUI 换成会转的 spinner(命令前面那个),其余时候还是 ⏺
+/* 行首图标照 TUI 的每个工具组件(packages/tui/src/routes/session/index.tsx:
+ * Read / Glob / Grep / WebFetch / WebSearch / Write / Edit / ApplyPatch / Shell /
+ * Subagent / Question / Skill,其余落进 GenericTool)。别名与 TUI 的
+ * packages/tui/src/util/tool-display.ts 里 canonicalToolName 一致。 */
+const TOOL_ALIAS = { bash: 'shell', task: 'subagent', apply_patch: 'patch' };
+const TOOL_ICONS = {
+  read: '→', list: '→',
+  glob: '✱', grep: '✱',
+  webfetch: '%',
+  websearch: '◈',
+  write: '←', edit: '←', patch: '←',
+  shell: '$',
+  subagent: '✓',
+  question: '→', skill: '→',
+};
+
+function toolKind(p) {
+  const n = String((p && p.name) || '').toLowerCase();
+  return TOOL_ALIAS[n] || n;
+}
+
+// 图标只分「出错 / 其余」两档;运行中由 toolHead 换成 spinner。
+function toolIcon(p, override) {
+  const st = (p && p.state && p.state.status) || (p && p.executed ? 'completed' : 'running');
+  if (st === 'error') return '✗';
+  if (override) return override;
+  return TOOL_ICONS[toolKind(p)] || '✓';
+}
+
+function toolStr(v) {
+  return v == null ? '' : String(v);
+}
+
+function toolNum(v) {
+  return typeof v === 'number' && isFinite(v) ? v : null;
+}
+
+/* 每个工具那一行的文案照 TUI 拆成两段:
+ *   head → .tname(工具词:Read / Glob / # Wrote / …,shell 放命令本身)
+ *   tail → .tdesc(余下上下文:路径、模式、命令 …)
+ * TUI 是「行首图标 + 整行文案」,这边多切一刀只是让两个 span 各管各的省略号。 */
+function toolLine(p) {
+  const st = p.state || {};
+  const md = st.metadata || {};
+  const input = st.input && typeof st.input === 'object' ? st.input : {};
+  const files = Array.isArray(md.files) ? md.files : [];
+  const path = toolStr(input.path) || toolStr(md.filepath) || toolStr(files[0] && files[0].file);
+  const show = abbrevPath(path); // 上屏用的缩略路径(会话目录下取相对、home 下取 ~)
+  const kind = toolKind(p);
+
+  if (kind === 'read') {
+    let tail = show;
+    const off = toolNum(input.offset);
+    const lim = toolNum(input.limit);
+    if (off !== null || lim !== null) {
+      const from = off !== null && off > 0 ? off : 1; // TUI:offset 缺省当下起 1
+      tail += ':' + from + (lim ? '-' + (from + lim - 1) : '');
+    }
+    return { head: 'Read', tail: tail };
+  }
+  if (kind === 'list') return { head: 'List', tail: show };
+  // edit / write / patch:跑起来但还没拿到 files / content 时的那一行(拿到之后的块标题在 toolHtml 里)
+  if (kind === 'edit') return { head: 'Edit', tail: show };
+  if (kind === 'patch') return { head: 'Patch', tail: files.length > 1 ? files.length + ' files' : show };
+  if (kind === 'write') return { head: 'Write', tail: show };
+  if (kind === 'glob' || kind === 'grep') {
+    let tail = '"' + toolStr(input.pattern) + '"';
+    if (toolStr(input.path)) tail += ' in ' + abbrevPath(input.path);
+    const n = toolNum(kind === 'glob' ? md.count : md.matches);
+    if (n !== null) tail += ' (' + n + (n === 1 ? ' match)' : ' matches)');
+    return { head: kind === 'glob' ? 'Glob' : 'Grep', tail: tail };
+  }
+  if (kind === 'webfetch') return { head: 'WebFetch', tail: toolStr(input.url) };
+  if (kind === 'websearch') {
+    const via = toolStr(md.provider);
+    return { head: 'Web Search', tail: (via ? 'via ' + via + ' ' : '') + '"' + toolStr(input.query) + '"' };
+  }
+  if (kind === 'shell') {
+    // TUI 的 ShellDisplay:命令前面按需接 `cd <workdir> && `,正文留给输出
+    const wd = toolStr(input.workdir);
+    const cmd = toolStr(input.command);
+    const prefix = wd && wd !== '.' ? 'cd ' + wd + ' && ' : '';
+    if (!cmd) return { head: '', tail: 'Writing command…' };
+    return { head: prefix + cmd, tail: '' };
+  }
+  if (kind === 'subagent') {
+    // TUI:`<Agent> Subagent — <说明> · <模型>`
+    const agent = toolStr(input.agent) || toolStr(input.subagent_type) || 'General';
+    const desc = toolStr(input.description);
+    const model = toolStr(input.model);
+    return {
+      head: agent.charAt(0).toUpperCase() + agent.slice(1) + ' Subagent',
+      tail: desc ? '— ' + desc + (model ? ' · ' + model : '') : model,
+    };
+  }
+  if (kind === 'question') {
+    const n = Array.isArray(input.questions) ? input.questions.length : 0;
+    return { head: 'Asked ' + n, tail: n === 1 ? 'question' : 'questions' };
+  }
+  if (kind === 'skill') {
+    const sk = toolStr(md.name) || toolStr(input.id);
+    return { head: 'Skill', tail: sk ? '"' + sk + '"' : '' };
+  }
+  // 通用工具:TUI 是 `✓ <工具名> [k=v, …]`,文案沿用面板原来的摘要(更好读)
+  return { head: toolStr(p.name) || 'tool', tail: inputSummary(input) };
+}
+
+function toolHead(p, line, counts) {
+  // 行首标记:运行中时照 TUI 换成会转的 spinner,其余时候是各工具自己的图标
+  const s = statusInfo(p);
   const spin = toolRunning(p);
   return (
     '<span class="tmark' + (spin ? ' spin' : '') + '">' +
-    (spin ? SPIN_FRAMES[spinFrame] : '⏺') +
+    (spin ? SPIN_FRAMES[spinFrame] : toolIcon(p, line.icon)) +
     '</span>' +
-    '<span class="tname">' + esc(p.name || 'tool') + '</span>' +
-    (desc ? '<span class="tdesc">' + esc(desc) + '</span>' : '') +
+    (line.head ? '<span class="tname">' + esc(line.head) + '</span>' : '') +
+    (line.tail ? '<span class="tdesc">' + esc(line.tail) + '</span>' : '') +
     (counts && counts.additions ? '<span class="tadd">+' + counts.additions + '</span>' : '') +
     (counts && counts.deletions ? '<span class="tdel">-' + counts.deletions + '</span>' : '') +
-    // 状态标记:运行中/流式两个都空 → 什么都不输出(别留一个空 <span> 占着位置)
-    (s.icon || s.label
-      ? '<span class="tstate ' + s.cls + '">' + s.icon + (s.label ? ' ' + esc(s.label) : '') + '</span>'
-      : '')
+    // 完成不另画对勾(行首图标已经说了),运行中照旧什么都不画,只有出错留一个字
+    (s.label ? '<span class="tstate ' + s.cls + '">' + esc(s.label) + '</span>' : '')
   );
 }
 
 // open=true 的卡片默认展开(改动内容要一眼看到),与 TUI 的 edit / write / patch 一致。
-function toolCard(p, s, desc, counts, body, open) {
+function toolCard(p, line, counts, body, open) {
   return (
     '<details class="tool"' + (open ? ' open' : '') + '><summary>' +
-    toolHead(p, s, desc, counts) + '</summary>' +
+    toolHead(p, line, counts) + '</summary>' +
     '<div class="toolbody">' + body + '</div></details>'
   );
 }
 
+/* 工具输出统一拼进 <pre>(shell 与通用工具共用)。 */
+function toolOutputHtml(st) {
+  if (!Array.isArray(st.content)) return '';
+  const txt = st.content.map((c) => (c && c.text) || '').join('\n').trim();
+  return txt ? '<pre>' + esc(txt) + '</pre>' : '';
+}
+
 function toolHtml(p) {
-  const s = statusInfo(p);
   const st = p.state || {};
   const md = st.metadata || {};
-  const name = String(p.name || 'tool');
   const input = st.input;
+  const kind = toolKind(p);
   const files = Array.isArray(md.files) ? md.files : [];
   const path = (input && input.path) || md.filepath || (files[0] && files[0].file) || '';
+  const line = toolLine(p);
 
-  // edit / patch:服务端算好的多文件 unified diff
-  if (name === 'edit' || name === 'patch') {
-    const label = name === 'patch' ? '补丁' : '编辑';
+  // edit / patch:服务端算好的多文件 unified diff(TUI 的 BlockTool:edit 是「← Edit <路径>」)
+  if (kind === 'edit' || kind === 'patch') {
     if (files.length) {
-      const desc = files.length > 1 ? '← ' + files.length + ' 个文件' : '← ' + label + ' ' + path;
-      return toolCard(p, s, desc, diffCounts(files), diffHtml(files) + diagHtml(md, path), true);
+      return toolCard(p, line, diffCounts(files), diffHtml(files) + diagHtml(md, path), true);
     }
     // 还在跑:服务端尚未给出 files,只显示目标(与服务端 TUI 的「← Edit <path>」一致)
-    return '<div class="toolrow">' + toolHead(p, s, path ? '← ' + label + ' ' + path : '← 准备' + label + '…') + '</div>';
+    return '<div class="toolrow">' + toolHead(p, line) + '</div>';
   }
 
-  // write:正文在入参里(服务端不给 write 的 diff)
-  if (name === 'write') {
+  // write:正文在入参里(服务端不给 write 的 diff),TUI 的块标题是「# Wrote <路径>」
+  if (kind === 'write') {
+    const wrote = { head: 'Wrote', tail: abbrevPath(path), icon: '#' };
     if (input && typeof input.content === 'string') {
-      return toolCard(p, s, '# 写入 ' + path, null, codeHtml(input.content) + diagHtml(md, path), true);
+      return toolCard(p, wrote, null, codeHtml(input.content) + diagHtml(md, path), true);
     }
-    return '<div class="toolrow">' + toolHead(p, s, path ? '# 写入 ' + path : '# 准备写入…') + '</div>';
+    return '<div class="toolrow">' + toolHead(p, line) + '</div>';
   }
 
-  // question:已答时展示「问题 → 答案」
-  if (name === 'question') {
+  // question:已答时展示「问题 → 答案」(TUI 的 `# Questions` 块)
+  if (kind === 'question') {
     const qs = Array.isArray(input && input.questions) ? input.questions : [];
     if (Array.isArray(md.answers)) {
       let body = '<div class="qalist">';
       for (let i = 0; i < qs.length; i++) {
         const a = md.answers[i];
-        const ans = Array.isArray(a) && a.length ? a.join(', ') : '(未回答)';
+        const ans = Array.isArray(a) && a.length ? a.join(', ') : '(no answer)';
         body +=
           '<div class="qa"><div class="qq">' + esc((qs[i] && qs[i].question) || '') + '</div>' +
           '<div class="aa">' + esc(ans) + '</div></div>';
       }
-      return toolCard(p, s, '→ 已提问 ' + qs.length + ' 个问题', null, body + '</div>', true);
+      return toolCard(p, { head: 'Questions', tail: '', icon: '#' }, null, body + '</div>', true);
     }
-    return '<div class="toolrow">' + toolHead(p, s, '→ 提问中…') + '</div>';
+    return '<div class="toolrow">' + toolHead(p, line) + '</div>';
   }
 
-  if (name === 'skill') {
-    const sk = md.name || (input && input.id) || '';
-    return '<div class="toolrow">' + toolHead(p, s, sk ? '→ Skill "' + sk + '"' : '') + '</div>';
+  if (kind === 'skill') {
+    return '<div class="toolrow">' + toolHead(p, line) + '</div>';
+  }
+
+  // shell:TUI 的 ShellDisplay 正文只留输出(命令已经进了标题行)
+  if (kind === 'shell') {
+    const out = toolOutputHtml(st);
+    if (!out) return '<div class="toolrow">' + toolHead(p, line) + '</div>';
+    return toolCard(p, line, null, out, false);
   }
 
   // 其它工具:摘要行 + 点开展开入参/输出(与 TUI 的通用卡片一致)
@@ -1991,14 +2110,9 @@ function toolHtml(p) {
   if (input && (typeof input !== 'object' || Object.keys(input).length)) {
     body += '<pre>' + esc(typeof input === 'string' ? input : JSON.stringify(input, null, 2)) + '</pre>';
   }
-  if (Array.isArray(st.content)) {
-    const txt = st.content.map((c) => (c && c.text) || '').join('\n').trim();
-    if (txt) body += '<pre>' + esc(txt) + '</pre>';
-  }
-  const sum = inputSummary(input);
-  const desc = sum ? '→ ' + sum : '';
-  if (!body) return '<div class="toolrow">' + toolHead(p, s, desc) + '</div>';
-  return toolCard(p, s, desc, null, body, false);
+  body += toolOutputHtml(st);
+  if (!body) return '<div class="toolrow">' + toolHead(p, line) + '</div>';
+  return toolCard(p, line, null, body, false);
 }
 
 // 用户消息上的提及标记:agent(@)与 skill(#)。H 组 5 补的,延续终端风
@@ -2526,6 +2640,34 @@ function abbrevHome(dir) {
   if (dir === home) return '~';
   if (dir.indexOf(home + '/') === 0) return '~/' + dir.slice(home.length + 1);
   return dir;
+}
+
+/* 工具行里那些路径照 TUI 的路径格式化缩一下(见 packages/tui/src/util 里的 x4/cm):
+ * 先看能不能落到【会话目录】下的相对路径,不能再看在不在 home 下(~/…),都不行就原样。
+ * 手机竖屏上一串 /work/example/... 会被省略号截掉半截,缩完才能一眼看出是哪个文件。
+ * 会话目录取不到时(离线断言、列表还没回来)原样返回,保证这几个排版函数还是纯的。 */
+function normPath(p) {
+  const out = [];
+  for (const seg of String(p).split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return '/' + out.join('/');
+}
+
+function abbrevPath(p) {
+  const v = toolStr(p);
+  if (!v) return v;
+  const dir = sessionDir(store.selected);
+  if (v.charAt(0) !== '/') return dir ? v.replace(/^\.\//, '') : v;
+  const abs = normPath(v);
+  if (dir) {
+    const base = normPath(dir);
+    if (abs === base) return '.';
+    if (abs.indexOf(base + '/') === 0) return abs.slice(base.length + 1);
+  }
+  return abbrevHome(abs);
 }
 
 /* 提示栏最左边那格(照 TUI 的 `Ss`):`智能体 · 模型`(有变体再 ` · 变体`)。

@@ -269,7 +269,10 @@
       var r3 = handleStreamEvent(ev('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', name: 'shell' }));
       T('tool.input.started 判定为结构变化', r3 === true);
       renderMessages();
-      T('工具卡片出现且名为 shell', q('#messages .toolrow, #messages details.tool') && el(AID).textContent.indexOf('shell') >= 0);
+      T('工具卡片出现且落进 shell 那一款(还没给命令时是 TUI 的 pending 文案)',
+        q('#messages .toolrow, #messages details.tool') &&
+        el(AID).querySelector('.tdesc').textContent === 'Writing command…',
+        el(AID).querySelector('.tdesc') && el(AID).querySelector('.tdesc').textContent);
       T('工具初始为运行中', statusInfo(view(AID).byKey['tool:call_1']).cls === 'run');
 
       /* ---------------- 运行中的工具:行首标记转起来(TUI 同款) ---------------- */
@@ -294,17 +297,17 @@
       feed('session.tool.called', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', input: { command: 'echo ONE' } });
       T('tool.called 写入 input', view(AID).byKey['tool:call_1'].state.input.command === 'echo ONE');
       T('工具状态变化触发整条重绘(状态在结构指纹里)', el(AID) !== elBeforeTool);
-      T('工具卡片在 DOM 里展开出参数',
-        !!el(AID).querySelector('details.tool pre') &&
-        el(AID).querySelector('details.tool pre').textContent.indexOf('echo ONE') >= 0);
+      T('工具卡片在 DOM 里带上命令(shell 把命令放在标题行)',
+        el(AID).querySelector('.tname').textContent.indexOf('echo ONE') >= 0,
+        el(AID).querySelector('.tname') && el(AID).querySelector('.tname').textContent);
       var elBeforeOk = el(AID);
       feed('session.tool.success', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_1', content: [{ type: 'text', text: 'ONE\n' }], metadata: { exit: 0 } });
       T('tool.success 变为已完成', statusInfo(view(AID).byKey['tool:call_1']).cls === 'ok');
       T('工具输出进入 DOM', el(AID).textContent.indexOf('ONE') >= 0);
-      T('完成后状态标记出现在 DOM', el(AID).querySelector('.tstate.ok') !== null && el(AID) !== elBeforeOk);
-      T('完成后行首回到 ⏺',
+      T('完成后不再另画对勾的状态标记', el(AID).querySelector('.tstate') === null && el(AID) !== elBeforeOk);
+      T('完成后行首回到该工具自己的图标($)',
         el(AID).querySelector('.tmark.spin') === null &&
-        el(AID).querySelector('.tmark').textContent === '⏺',
+        el(AID).querySelector('.tmark').textContent === '$',
         el(AID).querySelector('.tmark') && el(AID).querySelector('.tmark').textContent);
       T('没有在跑的工具后 spinner 定时器停掉', __intervalMs().indexOf(80) < 0, __intervalMs());
 
