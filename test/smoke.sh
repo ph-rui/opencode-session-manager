@@ -1118,19 +1118,34 @@ else
   echo "FAIL: ui-layout.html 里没有 list-peek 的断言"; fail=$((fail + 1))
 fi
 
-# ---- Q 组:上下文用量(TUI 提示栏的 155.6K (78%)) ----
-# 用户报「网页版不显示 155.6K (78%)」。TUI 提示栏右边那个数不是存好的,是每次从消息现算
-# (见 app.js 的 contextUsage 顶上那段源码原文),面板把它画在会话头部标题行 —— 那个位置
-# 窄屏也一直看得见(底板收起时也在)。两条硬约束:
+# ---- Q 组:上下文用量 + 输入框下面的提示栏(TUI 的 prompt.footer) ----
+# 用户报「网页版不显示 155.6K (78%)」,又要把它的位置挪到「跟 TUI 一样在对话框下面」——
+# TUI 的 prompt.footer 就在输入框下面那一行,同一行还印着工程路径与 «ctrl+p commands»
+# (源码:prompt.footer.status 里是 prompt.footer.location,右边是 usage 与 command palette 提示)。
+# 面板照做:#promptFooter 挂在 #chatpane 末尾(#composer 【外面】)—— 手机默认把底板收起成
+# 一条细边,这一行照样露着,「看一眼用量」正是主力用途。两条硬约束不变:
 #   ① 只认最后一次【已完成】压缩之后的助手消息(压缩把上下文清空了,之前的数不算);
 #   ② 全量 / 窄屏两档文案都印在 DOM 里,由 CSS 按 html.narrow 挑,不用 JS 判宽度。
-CLINE_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'class="chline"' | head -1 | cut -d: -f1)
+COMPOSER_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="composer"' | head -1 | cut -d: -f1)
+FOOT_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="promptFooter"' | head -1 | cut -d: -f1)
 CTX_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="ctxInfo"' | head -1 | cut -d: -f1)
-META_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="chatMeta"' | head -1 | cut -d: -f1)
-if [ -n "$CTX_AT" ] && [ "$CLINE_AT" -lt "$CTX_AT" ] && [ "$CTX_AT" -lt "$META_AT" ]; then
-  echo "PASS: 上下文用量挂在会话头部标题行(#ctxInfo,窄屏也看得见)"; pass=$((pass + 1))
+if [ -n "$COMPOSER_AT" ] && [ -n "$FOOT_AT" ] && [ -n "$CTX_AT" ] &&
+   [ "$COMPOSER_AT" -lt "$FOOT_AT" ] && [ "$FOOT_AT" -lt "$CTX_AT" ]; then
+  echo "PASS: 上下文用量落在输入框下面的提示栏里(#promptFooter 在 #composer 之后,照 TUI prompt.footer)"; pass=$((pass + 1))
 else
-  echo "FAIL: #ctxInfo 不在标题行里(chline=$CLINE_AT ctx=$CTX_AT meta=$META_AT)"; fail=$((fail + 1))
+  echo "FAIL: 提示栏位置不对(composer=$COMPOSER_AT foot=$FOOT_AT ctx=$CTX_AT)"; fail=$((fail + 1))
+fi
+if has "$HOME_HTML" 'id="chatDir"' && has "$HOME_HTML" 'id="cmdHint"' &&
+   has "$HOME_HTML" 'class="hFull">ctrl+p commands' && has "$HOME_HTML" 'class="hNarrow">/ 命令'; then
+  echo "PASS: 同一行还有工程路径(#chatDir)与 «ctrl+p commands» 提示(#cmdHint,桌面/手机两档)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏缺 #chatDir / #cmdHint 或两档提示文案"; fail=$((fail + 1))
+fi
+if has "$CSS" 'html.narrow #cmdHint .hFull { display: none; }' &&
+   has "$CSS" 'html.narrow #cmdHint .hNarrow { display: inline; }'; then
+  echo "PASS: 手机那档提示由 CSS 换成 «/ 命令»(手机没有 Ctrl 键)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺提示栏窄屏切档规则"; fail=$((fail + 1))
 fi
 if has "$HOME_HTML" 'class="ctxFull"' && has "$HOME_HTML" 'class="ctxCompact"'; then
   echo "PASS: 全量 / 窄屏两档文案都在 DOM 里(窄屏那档就是 TUI 的 compact)"; pass=$((pass + 1))
@@ -1174,6 +1189,13 @@ if has "$(cat "$(dirname "$0")/ui-stream.html")" "#ctxInfo"; then
   echo "PASS: ui-stream.html 里有上下文用量的断言"; pass=$((pass + 1))
 else
   echo "FAIL: ui-stream.html 里没有上下文用量的断言"; fail=$((fail + 1))
+fi
+# 提示栏由 paintContextUsage 那一个同步点一起画(路径 + 整条显隐),点 «ctrl+p commands» 也开命令面板。
+if has "$APPJS" 'function paintPromptFooter(' && has "$APPJS" 'paintPromptFooter(!!sid, dir)' &&
+   has "$APPJS" 'hint.addEventListener' && has "$APPJS" 'openCommands({ force: true })'; then
+  echo "PASS: 提示栏随 paintContextUsage 一起画,点提示就是开命令面板"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏的接线不对(缺 paintPromptFooter / #cmdHint 点击)"; fail=$((fail + 1))
 fi
 # 离屏消息跳过渲染(content-visibility:auto):只对长会话开,而且必须挂 .cvmany 这个开关
 if has "$CSS" '#messages.cvmany > .msg' && has "$CSS" 'content-visibility: auto' &&

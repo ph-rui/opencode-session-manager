@@ -218,9 +218,42 @@ table#list { width: 100%; border-collapse: collapse; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { font-size: 0.96em; color: var(--muted); white-space: nowrap; }
 .state.running { color: var(--accent); }
+/* 提示栏(照 TUI 的 prompt.footer):在输入框下面那一行。左边工程路径(太长就截断),
+   右边上下文用量与命令面板提示。刻意放 #composer 外面 —— 手机默认把底板收起成一条细边,
+   这一行照样露着。 */
+#promptFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 4px 14px 7px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 0.9em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+#promptFooter[hidden] { display: none; }
+#chatDir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#cmdHint {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 1em;
+  color: inherit;
+  cursor: pointer;
+}
+#cmdHint:hover { color: var(--fg); }
+/* 提示也分两档:桌面是 TUI 原样的「ctrl+p commands」,手机没 Ctrl 键就写「/ 命令」 */
+#cmdHint .hNarrow { display: none; }
+html.narrow #cmdHint .hFull { display: none; }
+html.narrow #cmdHint .hNarrow { display: inline; }
+
 /* 上下文用量(TUI 提示栏的 155.6K (78%))。两档子节点都在 DOM 里,窄屏换成 TUI 的
    compact 档 `78% ctx` —— 不用 JS 判宽度,横竖屏来回转也不会漏画。 */
-#ctxInfo { font-size: 0.9em; color: var(--muted); white-space: nowrap; }
+#ctxInfo { font-size: inherit; color: var(--muted); white-space: nowrap; flex: none; }
 #ctxInfo[hidden] { display: none; }
 #ctxInfo .ctxCompact { display: none; }
 html.narrow #ctxInfo .ctxFull { display: none; }
@@ -1198,6 +1231,7 @@ html.narrow #chatOps .chip { min-height: 40px; }
 html.narrow #ctoolbar { gap: 8px; padding: 7px 10px 0; }
 html.narrow #ctoolbar .ctl select { max-width: none; }
 html.narrow .cinput { padding: 8px 10px 10px; }
+html.narrow #promptFooter { padding: 4px 10px 6px; }
 html.narrow #mentions,
 html.narrow #cmds { left: 10px; right: 10px; }
 

@@ -77,9 +77,6 @@
           <button type="button" id="backList" class="chip" aria-label="返回会话列表">‹ 会话</button>
           <span id="chatTitle">未选择会话</span>
           <span id="chatState" class="state"></span>
-          <!-- 上下文用量(照 TUI 提示栏的 155.6K (78%)):两档文案都印着,由 CSS 按
-               html.narrow 挑一个 —— 窄屏那档就是 TUI 的 compact(/78% ctx/)。 -->
-          <span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span>
         </div>
         <div id="chatMeta" class="meta"></div>
         <div id="chatOps" hidden>
@@ -135,6 +132,18 @@
         <!-- 折叠手柄:底板上沿靠右,两种状态都在原位。
              收起时它就是那条细边的一部分(绝不 display:none),所以任何时候都点得回来。 -->
         <button type="button" id="btnComposer" class="chip" aria-expanded="true" aria-label="收起输入区" title="收起输入区(只留一条细边)">▾ 收起</button>
+      </div>
+      <!-- 提示栏(照 TUI 的 prompt.footer,在输入框【下面】那一行):左边工程路径,右边
+           上下文用量(155.6K (78%))与打开命令面板的提示(ctrl+p commands)。
+           刻意放在 #composer 外面 —— 手机默认把底板收起成一条细边,这一行照样露着,
+           「看一眼用量」正是主力用途。用量两档文案都印在 DOM 里,由 CSS 按 html.narrow 挑
+           (窄屏那档就是 TUI 的 compact:78% ctx);提示也分两档(手机没有 Ctrl 键,换成 /)。 -->
+      <div id="promptFooter" hidden>
+        <span id="chatDir" title="工程目录"></span>
+        <button type="button" id="cmdHint" title="打开命令面板(对应 TUI command.palette.show)">
+          <span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span>
+        </button>
+        <span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span>
       </div>
     </section>
   </main>

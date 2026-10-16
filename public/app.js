@@ -1458,8 +1458,9 @@ async function selectSession(id) {
   renderSessions();
   const s = store.sessions.get(id);
   $('#chatTitle').textContent = s ? s.title || '(无标题)' : id;
+  // 工程目录挪到了输入框下面的提示栏(#promptFooter)里 —— 跟 TUI 的 prompt.footer.location
+  // 一个位置,这里只留更新时间与项目号。
   $('#chatMeta').textContent = [
-    (s && s.location && s.location.directory) || '',
     s && s.time && s.time.updated ? '更新 ' + rel(s.time.updated) : '',
     s && s.projectID ? s.projectID.slice(0, 8) : '',
   ]
@@ -2444,14 +2445,30 @@ function contextUsage(msgs, models, boundID) {
   return { tokens: total, percent: limit ? Math.round((total / limit) * 100) : undefined };
 }
 
-/* 头部那个数字:全量文案 + 窄屏文案一起写进去,CSS 按 html.narrow 显示哪一个。
- * 拿不到用量(还没跑过一轮 / 模型不在表里给不出百分比)就整块收起来。 */
+/* 提示栏(#promptFooter,照 TUI 的 prompt.footer 放在输入框下面)左边那格:工程路径。
+ * 路径太长由 CSS 截断,title 里给全路径;整条只在选中会话时露出来(没会话时它整个收着)。
+ * 用量那格(#ctxInfo)由下面的 paintContextUsage() 管。 */
+function paintPromptFooter(show, dir) {
+  const foot = $('#promptFooter');
+  if (!foot) return; // 测试页可能没这条
+  foot.hidden = !show;
+  const d = $('#chatDir');
+  if (!d) return;
+  const text = dir || '(未指定工程目录)';
+  if (d.textContent !== text) d.textContent = text;
+  if (d.title !== dir) d.title = dir;
+}
+
+/* 提示栏里那个数字:全量文案 + 窄屏文案一起写进去,CSS 按 html.narrow 显示哪一个。
+ * 拿不到用量(还没跑过一轮 / 模型不在表里给不出百分比)就收起来 —— 但提示栏本身
+ * (路径 + ctrl+p commands)照旧。 */
 function paintContextUsage() {
-  const el = $('#ctxInfo');
-  if (!el) return; // 测试页可能没这个元素
   const sid = store.selected;
   const s = sid ? store.sessions.get(sid) : null;
   const dir = (s && s.location && s.location.directory) || '';
+  paintPromptFooter(!!sid, dir);
+  const el = $('#ctxInfo');
+  if (!el) return; // 测试页可能没这个元素
   const u = sid
     ? contextUsage(currentMessages(), store.models.get(dir), (s && s.revert && s.revert.messageID) || '')
     : null;
@@ -4193,6 +4210,15 @@ async function cycleAgent() {
 // Esc 的优先级:命令面板 → @ 补全 → 中断(照 TUI:session.interrupt 要按两下,
 // 第一下只是「上膛」,见 requestInterrupt)
 function setupTuiKeys() {
+  // 提示栏里的「ctrl+p commands」点了也开命令面板(手机上没 Ctrl 键,这行提示就是入口)
+  const hint = $('#cmdHint');
+  if (hint && hint.dataset.wired !== '1') {
+    hint.dataset.wired = '1';
+    hint.addEventListener('click', () => {
+      if (anyDialogOpen()) return;
+      openCommands({ force: true });
+    });
+  }
   document.addEventListener('keydown', (e) => {
     if (e.isComposing || e.defaultPrevented) return;
     if (e.key === 'Escape') {

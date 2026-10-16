@@ -16,7 +16,7 @@
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">
       <div id="chatHeader">
-        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span></div>
+        <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
         <div id="chatMeta"></div>
         <div id="chatOps" hidden>
           <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
@@ -36,6 +36,7 @@
         <div class="cinput"><textarea id="input"></textarea><button id="send"></button></div>
         <span id="progress" hidden><span class="pbar" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="phint"><b>esc</b> interrupt</span></span>
       </div>
+      <div id="promptFooter" hidden><span id="chatDir"></span><button type="button" id="cmdHint"><span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span></button><span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span></div>
     </section>
   </main>
   <div id="toast" hidden></div>
@@ -734,6 +735,15 @@
       store.selected = 'ses_a';
       renderMessages();
       T('还没跑过任何一轮时整块收起来(不印一个空壳)', q('#ctxInfo').hidden === true);
+      T('提示栏(路径 + 命令提示)跟着选中会话露出来', q('#promptFooter').hidden === false);
+      T('提示栏左边就是工程路径(照 TUI 的 prompt.footer.location)',
+        q('#chatDir').textContent === '/proj/a' && q('#chatDir').title === '/proj/a',
+        q('#chatDir').textContent + ' / ' + q('#chatDir').title);
+      T('工程目录不再重复印在头部 meta 里', q('#chatMeta').textContent.indexOf('/proj/a') < 0,
+        q('#chatMeta').textContent);
+      T('命令提示两档都在 DOM 里(桌面 ctrl+p / 手机 / 命令)',
+        q('#cmdHint .hFull').textContent === 'ctrl+p commands' &&
+        q('#cmdHint .hNarrow').textContent === '/ 命令');
 
       var CTX_M1 = {
         id: 'm1', type: 'assistant', time: { created: 100, completed: 101 },
@@ -821,6 +831,7 @@
       store.selected = '';
       updateChatStatus();
       T('取消选中会话后整块收起来', q('#ctxInfo').hidden === true);
+      T('取消选中后整条提示栏也收起来', q('#promptFooter').hidden === true);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
