@@ -380,7 +380,9 @@
       T('agent 渲染成 @name', refA.indexOf('@build') >= 0 && qaOf(refA, 'ref-agent') === 1, refA);
       T('agent 标记带 title', refA.indexOf('title="智能体"') >= 0, refA);
       var refS = userRefsHtml({ skills: [{ id: 'brainstorming', name: 'brainstorming' }] });
-      T('skill 渲染成 #name', refS.indexOf('#brainstorming') >= 0 && qaOf(refS, 'ref-skill') === 1, refS);
+      T('skill 渲染成徽标 + 名字两格(照 TUI 的 UserMessage)',
+        refS.indexOf('<span class="rBadge">skill</span>') >= 0 &&
+        refS.indexOf('<span class="rName">brainstorming</span>') >= 0 && qaOf(refS, 'ref-skill') === 1, refS);
       T('skill 标记带 title', refS.indexOf('title="技能"') >= 0, refS);
       var refBoth = userRefsHtml({ agents: [{ name: 'build' }], skills: [{ name: 'brainstorming' }] });
       T('agent 与 skill 同时存在时各一个', qaOf(refBoth, 'ref-agent') === 1 && qaOf(refBoth, 'ref-skill') === 1, refBoth);

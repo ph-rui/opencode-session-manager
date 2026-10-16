@@ -326,7 +326,16 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   content-visibility: auto;
   contain-intrinsic-size: auto 220px;
 }
-.msg.user { border-left-color: #007acc; }
+/* 用户消息照 TUI 的 UserMessage 画:整块抬起来(raised 底色)+ 左边一条色边。
+   TUI 那条边的颜色是「会话智能体色」(待投递、还没被消费的消息另用中性边色);面板这边
+   服务端 /api/agent 不下发颜色(TUI 是在本地 context 里按 agent id 算出来的),所以保留
+   自己那条蓝。底色块照 `theme.background.raised.base` 取面板的 --panel。 */
+.msg.user {
+  border-left-color: #007acc;
+  background: var(--panel);
+  border-radius: 3px;
+  padding: 6px 10px 6px 12px;
+}
 .msg.assistant { border-left-color: #2e8b57; }
 .msg.minor { border-left-color: transparent; color: var(--muted); font-size: 0.88em; margin-bottom: 8px; }
 /* 上下文压缩那一块(照 TUI 的 Compaction 块):压缩中行首标记也转起来 */
@@ -365,11 +374,31 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .ref { flex: none; padding: 0 6px; border-radius: 3px; border: 1px solid var(--border); font-size: 0.88em; }
 .ref-agent { color: var(--accent); border-color: #bcd9ef; background: #f2f8fd; }
 .ref-skill { color: #7a5c14; border-color: #e6d9a8; background: #fdf9ec; }
+/* 徽标 + 名字两格(照 TUI 的 UserMessage:徽标那格加粗反白、名字那格稍暗)。 */
+.rBadge {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 2px 0 0 2px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.82em;
+}
+.rName {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 0 2px 2px 0;
+  background: #e9e9e9;
+  color: var(--muted);
+  font-size: 0.82em;
+}
+/* skill 那颗:外层不再自带边框/底色(照 TUI,颜色由里面两格给) */
+.ref-skill { border-color: transparent; background: transparent; padding: 0; }
 
 /* 用户消息里带的附件(H 组 6):非图片一行一条,图片直接给缩略图 */
 .atts { display: flex; flex-direction: column; gap: 4px; margin-top: 5px; }
 .att { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 0.88em; color: var(--muted); }
-.att-name { color: var(--fg); }
+.att-name { color: var(--fg); display: inline-flex; align-items: baseline; }
 .att-src { font-size: 0.92em; word-break: break-all; }
 .att-img { display: block; max-width: 320px; max-height: 160px; margin-top: 2px; border: 1px solid var(--border); border-radius: 5px; }
 

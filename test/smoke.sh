@@ -1487,6 +1487,23 @@ else
   echo "FAIL: 还是把 order 与游标一起发"; fail=$((fail + 1))
 fi
 
+# ---- R6 组:用户消息照 TUI(抬起底色块 + skill / file 徽标,§8.29)----
+if has "$APPJS" '<span class="rBadge">skill</span>' && has "$APPJS" "mime === 'application/x-directory' ? 'dir' : 'file'"; then
+  echo "PASS: skill 与 file / dir 徽标照 TUI 的 UserMessage"; pass=$((pass + 1))
+else
+  echo "FAIL: 用户消息的 skill/file 徽标不对"; fail=$((fail + 1))
+fi
+if has "$CSS" '.msg.user {' && has "$CSS" 'background: var(--panel);' && has "$CSS" '.rBadge {' && has "$CSS" '.rName {'; then
+  echo "PASS: 用户消息那块底色抬起来、徽标两格有样式(照 TUI 的 raised)"; pass=$((pass + 1))
+else
+  echo "FAIL: 用户消息的底色块或徽标样式没写上"; fail=$((fail + 1))
+fi
+if has "$CSS" '.ref-skill { border-color: transparent; background: transparent; padding: 0; }'; then
+  echo "PASS: skill 那颗外层不带边框(颜色由里面两格给,照 TUI)"; pass=$((pass + 1))
+else
+  echo "FAIL: skill 那颗还是自带黄底框"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

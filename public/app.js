@@ -2234,9 +2234,15 @@ function userRefsHtml(m) {
     const name = a && (a.name || a.id);
     if (name) out.push('<span class="ref ref-agent" title="智能体">@' + esc(name) + '</span>');
   }
+  // skill 照 TUI 的 UserMessage 画成「徽标 + 名字」两格(徽标 ` skill `、
+  // 名字 ` name `);原来只有一个 `#name`,和 TUI 那颗徽标不是一回事。
   for (const s of m.skills || []) {
     const name = s && (s.name || s.id);
-    if (name) out.push('<span class="ref ref-skill" title="技能">#' + esc(name) + '</span>');
+    if (name)
+      out.push(
+        '<span class="ref ref-skill" title="技能"><span class="rBadge">skill</span>' +
+          '<span class="rName">' + esc(name) + '</span></span>'
+      );
   }
   return out.length ? '<div class="refs">' + out.join('') + '</div>' : '';
 }
@@ -2254,6 +2260,7 @@ function b64Size(data) {
 // 用户消息里的附件(H 组 6)。消息里的形状是 { data(base64), mime, source, name },
 // data/mime 是服务端读文件时补的;source.type==='uri' 时把来源路径也显示出来,
 // 便于确认到底带了哪个文件。图片直接给缩略图(data: URL)。
+// 名字那格照 TUI 的 UserMessage 拆成「徽标 + 名字」:目录 ` dir `、其余 ` file `。
 function userFilesHtml(m) {
   const files = Array.isArray(m.files) ? m.files : [];
   const out = [];
@@ -2265,9 +2272,11 @@ function userFilesHtml(m) {
     const size = b64Size(f.data);
     const meta = [mime, size ? humanSize(size) : ''].filter(Boolean).join(' · ');
     const isImg = /^image\//.test(mime) && f.data;
+    const label = mime === 'application/x-directory' ? 'dir' : 'file';
     out.push(
       '<div class="att">' +
-        '<span class="att-name">📎 ' + esc(name) + '</span>' +
+        '<span class="att-name"><span class="rBadge">' + label + '</span>' +
+        '<span class="rName">' + esc(name) + '</span></span>' +
         (meta ? '<span class="att-meta">' + esc(meta) + '</span>' : '') +
         (src ? '<span class="att-src">' + esc(src) + '</span>' : '') +
         '</div>' +

@@ -196,18 +196,23 @@
       var two = window.SERVER['ses_a'][0].files;
       var h = userFilesHtml({ files: two });
       T('userFilesHtml:两条都渲染', (h.match(/class="att"/g) || []).length === 2, h);
-      T('userFilesHtml:显示文件名', h.indexOf('📎 a.txt') >= 0 && h.indexOf('📎 b.txt') >= 0, h);
+      T('userFilesHtml:显示「file 徽标 + 文件名」两格(照 TUI 的 UserMessage)',
+        h.indexOf('<span class="rBadge">file</span><span class="rName">a.txt</span>') >= 0 &&
+        h.indexOf('<span class="rBadge">file</span><span class="rName">b.txt</span>') >= 0, h);
+      T('userFilesHtml:目录 mime 用 dir 徽标',
+        userFilesHtml({ files: [{ data: '', mime: 'application/x-directory', name: 'src' }] })
+          .indexOf('<span class="rBadge">dir</span><span class="rName">src</span>') >= 0);
       T('userFilesHtml:显示 mime 与按 base64 算的大小(17 字节)', h.indexOf('text/plain · 17 B') >= 0, h);
       T('userFilesHtml:uri 来源显示路径', h.indexOf('file:///tmp/up/1-a.txt') >= 0, h);
       T('userFilesHtml:inline 来源不显示路径(没有路径可显示)', h.indexOf('file:///tmp/up/1-a.txt') === h.lastIndexOf('file:///tmp/up/1-a.txt'), h);
       T('userFilesHtml:非图片不给缩略图', h.indexOf('<img') < 0, h);
       var imgH = userFilesHtml({ files: [{ data: 'aGVsbG8=', mime: 'image/png', name: 'p.png', source: { type: 'inline' } }] });
       T('userFilesHtml:image/* 内联缩略图', imgH.indexOf('src="data:image/png;base64,aGVsbG8="') >= 0, imgH);
-      T('userFilesHtml:图片也带上文件名', imgH.indexOf('📎 p.png') >= 0 && imgH.indexOf('alt="p.png"') >= 0, imgH);
+      T('userFilesHtml:图片也带上文件名', imgH.indexOf('<span class="rName">p.png</span>') >= 0 && imgH.indexOf('alt="p.png"') >= 0, imgH);
       var noName = userFilesHtml({ files: [{ data: 'YQ==', mime: 'text/plain', source: { type: 'uri', uri: 'file:///tmp/x/y.md' } }] });
-      T('userFilesHtml:没有 name 时用路径末段兜底', noName.indexOf('📎 y.md') >= 0, noName);
+      T('userFilesHtml:没有 name 时用路径末段兜底', noName.indexOf('<span class="rName">y.md</span>') >= 0, noName);
       var noMime = userFilesHtml({ files: [{ data: '', source: { type: 'inline' } }] });
-      T('userFilesHtml:文件名与 mime 都缺也不炸', noMime.indexOf('📎 附件') >= 0, noMime);
+      T('userFilesHtml:文件名与 mime 都缺也不炸', noMime.indexOf('<span class="rName">附件</span>') >= 0, noMime);
       T('userFilesHtml:名字里的 HTML 被转义',
         userFilesHtml({ files: [{ data: 'YQ==', mime: 'text/plain', name: '<img src=x>' }] }).indexOf('&lt;img') >= 0);
       /* 落进消息:正文 / 提及 / 附件 三段都在 */
