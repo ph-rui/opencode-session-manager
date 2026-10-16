@@ -427,10 +427,10 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 209（§8.17/§8.18 之后）|
+| `smoke.sh` | 212（§8.19 之后）|
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 162 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 90 / 71 / 205 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 90 / 71 / 210 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 166 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
@@ -961,7 +961,7 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 
 | 点 | 决定 | 理由 |
 |---|---|---|
-| 位置 | **聊天头部标题行**右侧（新 `#ctxInfo`，在 `#chatState` 之后）| TUI 在提示栏（输入框下面那行），但面板那个位置是 `#progress`，只在运行中才露出来；头部标题行**窄屏一直看得见**（底板收起时也在），符合「看一眼」的主力用途 |
+| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，窄屏收起底板时也在，比头部更贴「看一眼」|
 | 算法 | **每次现算**，不另存 | 照 TUI 的 `Us`/`XN`/`d4` 原样搬（同一份口径也喂给渲染：`currentMessages()`）|
 | 两档文案 | 全量 / 窄屏两份都写进 DOM，CSS 按 `html.narrow` 切 | 横竖屏来回转不用重画，也不用 JS 判宽度（照 TUI 的 `compact` / `full`）|
 | 模型表 | 用**该 location 的模型表**（`store.models.get(dir)`），不用全局索引 | 某个模型可能在某个目录被 `enabled:false` 关掉；TUI 用的就是 `location.model.list`。查不到就退化成只印 token 数 |
@@ -1096,6 +1096,45 @@ behind queued prompts」——**steer = 下一个 step 边界就并进当前回�
 `ui-commands` 里那条「忙时带上 `delivery`」的期望从 `queue` 改成 `steer`、`smoke.sh` +2（常量在、
 `store.delivery` 不许写死字面量）。中断后把队列里的 `user` 项改成 `steer` 放行那段**照旧保留**
 （那管的是「用户真的显式排了队，然后被中断」的情形）。
+
+### 8.19 追加：上下文用量挪到输入框下面的提示栏，并补上工程路径 + `ctrl+p commands`
+
+**起因**：用户——「155.6K (78%) 放的位置跟 TUI 一样在对话框下面，对话框下面还会显示工程路径、
+ctrl+p commands」。
+
+**查到的 TUI 布局**（从 `opencode` 二进制里抠出来的 `Zc` / `prompt.footer` 渲染）：输入框下面那一行
+分三块 —— 左边 `prompt.footer.status` 里的 `prompt.footer.location`（工程路径，`truncate`），
+中间是 `usage`（`d4(tokens, percent)`，即 `155.6K (78%)`，另加大于 0 时的花费），右边是
+`${shortcut} commands`（`command.palette.show` 的键位 = `ctrl+p`，即 `ctrl+p commands`）。三者挤不下时
+`tl({width, usage, shortcuts})` 会按宽度**逐档砍**（先保 usage，再保 shortcuts）。
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 位置 | 新 `#promptFooter`，挂在 `#chatpane` 末尾、**`#composer` 外面**（不是里面）|
+| 为什么在外面 | 手机默认把底板收起成一条细边（`ocs.composerHiddenNarrow`），放里面会被一起收掉；放外面这一行**常驻**，收起底板时「看一眼用量」照旧 |
+| 内容 | 左 `#chatDir`（工程路径，太长由 CSS `text-overflow: ellipsis` 截断，`title` 给全路径）；中 `#ctxInfo`（原样搬过来）；右 `#cmdHint` |
+| 两档提示 | 桌面 `ctrl+p commands`（TUI 原文），手机 `/ 命令`（手机没 Ctrl 键，面板本来就是敲 `/` 开面板）—— 两档都印 DOM，CSS 按 `html.narrow` 切，跟用量一个套路 |
+| 点击 | `#cmdHint` 是 `button`，点了走 `openCommands({ force: true })`（与 `Ctrl+P` 同一条路）|
+| 头部 meta | 工程路径从 `#chatMeta` 拿掉（挪到提示栏），meta 只留更新时间与项目号，不再重复 |
+| 同步点 | 复用 `paintContextUsage()`：它先调 `paintPromptFooter(!!sid, dir)` 画路径与整条显隐，再画用量 —— 仍是那三个调用点，不新开同步点 |
+
+**验证**（真面板 + 真服务，探针 `/tmp/ocsm-probe/perf/footer-shot.js`，注入探针读几何与文案再截图）：
+
+- 393×894（`html.narrow`，底板**收起**）：`#composer` 底 = 864，`#promptFooter` 顶 = 864 / 底 = 894
+  —— 正好贴在输入区下面、屏幕最下沿；`chatDir = /work/example-repo`、
+  `ctxCompact = 76% ctx`（`ctxHidden=false`，收起状态也露着）、`.hNarrow` `display:inline`、
+  `.hFull` `display:none`（手机档生效）。截图 `footer-shot-393x894.png`。
+- 393×894（底板**展开**）：`#composer` 679–864、`#promptFooter` 864–894，仍是输入框下面那一行。
+- 1366×900（桌面，底板默认展开）：`#promptFooter` 869–900 在 `#composer` 869 之下；
+  `ctxFull = 151.8K (76%)`、`.hFull` `display:inline`（`ctrl+p commands`）。截图 `footer-shot-1366x900.png`。
+
+**回归**：`smoke.sh` 209 → **212**（Q 组：位置断言从「在 `.chline` 里」换成「`#promptFooter` 在
+`#composer` 之后、`#ctxInfo` 在 `#promptFooter` 里」，另加 `#chatDir`/`#cmdHint` 两档文案、
+`#cmdHint` 的 CSS 切档、`paintPromptFooter` 接线 + `#cmdHint` 点击开面板）；`ui-stream`
+205 → **210**（提示栏跟着会话显隐、路径文案与 `title`、目录不再重复进 `#chatMeta`、提示两档、
+取消选中整条收起）；其余套件与 `e2e-*` 全 0 失败。
 
 ---
 
