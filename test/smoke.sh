@@ -1393,10 +1393,21 @@ if has "$APPJS" 'const REASONING_TITLE_RE = /^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/
 else
   echo "FAIL: 思考块没照 TUI 抓加粗标题"; fail=$((fail + 1))
 fi
-if has "$APPJS" 'function reasoningHead(part, m)' && has "$APPJS" "(title ? ': ' + esc(title) : '')"; then
-  echo "PASS: 思考块摘要印「思考: 标题 · 时长」"; pass=$((pass + 1))
+if has "$APPJS" 'function reasoningGroupHtml(run, m, body)' && has "$APPJS" "(running ? 'Thinking' : 'Thought')" &&
+   has "$APPJS" "run.length + ' steps" && has "$APPJS" 'function reasoningRunTitle(run)'; then
+  echo "PASS: 思考行照 TUI 的 reasoning 分组行(Thinking / Thought + 标题 + N steps + 时长)"; pass=$((pass + 1))
 else
-  echo "FAIL: 思考块摘要的文案不对"; fail=$((fail + 1))
+  echo "FAIL: 思考行的文案/格子跟 TUI 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" "while (i + 1 < content.length && content[i + 1].type === 'reasoning') run.push(content[++i]);"; then
+  echo "PASS: 相邻的思考段并成一块(照 TUI 的 tree:相邻同 kind 进同一个组)"; pass=$((pass + 1))
+else
+  echo "FAIL: 相邻的思考段没有并起来"; fail=$((fail + 1))
+fi
+if has "$CSS" '.reasoning[open] > summary .rWord.rDone ~ .rTitle { display: none; }'; then
+  echo "PASS: 摊开时把标题收起来(照 TUI:展开那款不印标题)"; pass=$((pass + 1))
+else
+  echo "FAIL: 思考块展开时标题没藏起来"; fail=$((fail + 1))
 fi
 if has "$APPJS" "if (ms < 60000) return (ms / 1000).toFixed(1) + 's'"; then
   echo "PASS: 时长格式照 TUI 的 Locale.duration"; pass=$((pass + 1))

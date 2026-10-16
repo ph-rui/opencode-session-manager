@@ -598,24 +598,71 @@
         fmtDur(3700000) === '1h 1m' && fmtDur(90000000) === '1d 1h',
         [fmtDur(456), fmtDur(1234), fmtDur(65000), fmtDur(3700000), fmtDur(90000000)]);
       T('fmtDur:0 与负数不给时长', fmtDur(0) === '' && fmtDur(-5) === '');
-      T('思考头:标题 + 时长都进摘要',
-        mgh.indexOf('<summary>思考: 看看代码 · 1.2s</summary>') >= 0, mgh.slice(0, 240));
-      T('思考头:没有加粗标题时就只有「思考」+ 时长',
-        renderMessage({ id: 'm4', type: 'assistant',
-          content: [{ type: 'reasoning', text: 'plain', time: { created: 1000, completed: 2200 } }] }).innerHTML
-          .indexOf('<summary>思考 · 1.2s</summary>') >= 0);
-      T('思考头:连时间都没有时就只有「思考」',
+      T('思考行:收工后是 Thought + 折着带标题 + 时长(照 TUI 的 reasoning 分组行)',
+        mgh.indexOf('<summary><span class="rWord rDone">Thought</span>' +
+          '<span class="rTitle">: 看看代码</span><span class="rDur"> · 1.2s</span></summary>') >= 0,
+        mgh.slice(0, 300));
+      T('思考行:没有加粗标题时就不带 .rTitle,只留 Thought + 时长',
+        (function () {
+          var h = renderMessage({ id: 'm4', type: 'assistant',
+            content: [{ type: 'reasoning', text: 'plain', time: { created: 1000, completed: 2200 } }] }).innerHTML;
+          return h.indexOf('rTitle') < 0 && h.indexOf('rWord rDone">Thought</span><span class="rDur"> · 1.2s') >= 0;
+        })());
+      T('思考行:连时间都没有时就只有 Thought',
         renderMessage({ id: 'm4b', type: 'assistant',
           content: [{ type: 'reasoning', text: 'plain' }] }).innerHTML
-          .indexOf('<summary>思考</summary>') >= 0);
-      T('思考头:流式期间不给时长(时长还没定)',
-        renderMessage({ id: 'm5', type: 'assistant', live: true,
-          content: [{ type: 'reasoning', text: '**T**\n\nbody', time: { created: 1000, completed: 2200 } }] }).innerHTML
-          .indexOf('<summary>思考: T</summary>') >= 0);
-      T('思考头:标题里的 HTML 被转义',
+          .indexOf('<summary><span class="rWord rDone">Thought</span></summary>') >= 0);
+      T('思考行:跑着时是 Thinking + 标题、不给时长、块自动摊开',
+        (function () {
+          var el = renderMessage({ id: 'm5', type: 'assistant', live: true,
+            content: [{ type: 'reasoning', text: '**T**\n\nbody', time: { created: 1000, completed: 2200 } }] });
+          return el.innerHTML.indexOf('<summary><span class="rWord">Thinking</span><span class="rTitle">: T</span></summary>') >= 0 &&
+            el.querySelector('details.reasoning').hasAttribute('open');
+        })());
+      T('思考行:标题里的 HTML 被转义',
         renderMessage({ id: 'm6', type: 'assistant',
           content: [{ type: 'reasoning', text: '**<img src=x>**\n\nb', time: { created: 1, completed: 2 } }] }).innerHTML
           .indexOf('&lt;img') >= 0);
+      /* 相邻的思考段并成一块(照 TUI 的 tree:相邻同 kind 的 part 进同一个组,才有 · N steps) */
+      var rAdj = renderMessage({ id: 'r7', type: 'assistant', time: { created: 1, completed: 2 },
+        content: [
+          { type: 'reasoning', text: '**a**\n\nx', time: { created: 0, completed: 100 } },
+          { type: 'reasoning', text: '**b**\n\ny', time: { created: 0, completed: 200 } },
+        ] });
+      T('相邻两段思考并成一个 details', rAdj.querySelectorAll('details.reasoning').length === 1,
+        rAdj.querySelectorAll('details.reasoning').length);
+      T('并起来那块带 · 2 steps(照 TUI 的 thoughts().length)', !!rAdj.querySelector('.reasoning .rSteps') &&
+        rAdj.querySelector('.reasoning .rSteps').textContent === ' · 2 steps',
+        rAdj.querySelector('.reasoning .rSteps') && rAdj.querySelector('.reasoning .rSteps').textContent);
+      T('并起来那块时长是各段之和(100+200=300ms,照 TUI 的 reduce)',
+        rAdj.innerHTML.indexOf(' · 300ms</span>') >= 0, rAdj.innerHTML.slice(0, 300));
+      T('并起来那块正文还是两段(每段一个 .content)',
+        rAdj.querySelectorAll('.reasoning .content').length === 2);
+      T('标题取最后一段的(TUI 的 latest)',
+        rAdj.querySelector('.reasoning .rTitle').textContent === ': b',
+        rAdj.querySelector('.reasoning .rTitle').textContent);
+      T('被文本隔开的思考各成一块,不并',
+        renderMessage({ id: 'r8', type: 'assistant', content: [
+          { type: 'reasoning', text: 'x' }, { type: 'text', text: 't' }, { type: 'reasoning', text: 'y' },
+        ] }).querySelectorAll('details.reasoning').length === 2);
+      T('最后一段没标题且已收工 → 标题清掉(照 TUI 的 latest 黏性规则)',
+        renderMessage({ id: 'r9', type: 'assistant', content: [
+          { type: 'reasoning', text: '**有标题**\n\nx', time: { created: 0, completed: 1 } },
+          { type: 'reasoning', text: 'no title', time: { created: 0, completed: 1 } },
+        ] }).innerHTML.indexOf('rTitle') < 0);
+      T('最后一段没标题但还在跑 → 沿用前一段的标题',
+        renderMessage({ id: 'r10', type: 'assistant', live: true, content: [
+          { type: 'reasoning', text: '**有标题**\n\nx' },
+          { type: 'reasoning', text: 'still thinking' },
+        ] }).innerHTML.indexOf('<span class="rTitle">: 有标题</span>') >= 0);
+      T('跑着那块不给 steps / 时长(照 TUI:两格都挂在 completed 上)',
+        (function () {
+          var h = renderMessage({ id: 'r11', type: 'assistant', live: true, content: [
+            { type: 'reasoning', text: 'a', time: { created: 0, completed: 100 } },
+            { type: 'reasoning', text: 'b', time: { created: 0, completed: 200 } },
+          ] }).innerHTML;
+          return h.indexOf('rSteps') < 0 && h.indexOf('rDur') < 0;
+        })());
 
       /* syncDetailsOpen:带 data-def 的 details 两头都搬(用户摊开过就留住) */
       var sOld = so('<details class="explore" data-def="0"><summary>x</summary></details>');

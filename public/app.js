@@ -2299,12 +2299,46 @@ function fmtDur(ms) {
 
 /* 思考块摘要的文案(照 TUI 的 ReasoningHeader):收工后是「思考: 标题 · 12.3s」,
  * 标题拿不到就只有「思考」;还在流式时只给标题,不给时长(时长还没有)。 */
-function reasoningHead(part, m) {
-  const title = reasoningTitle(part && part.text);
-  const t = (part && part.time) || {};
-  const done = t.created !== undefined && t.completed !== undefined;
-  const dur = m.live || !done ? 0 : t.completed - t.created;
-  return '思考' + (title ? ': ' + esc(title) : '') + (dur ? ' · ' + esc(fmtDur(dur)) : '');
+/* 思考块的组行(照 TUI 的 reasoning 分组行,group-view.tsx:179-188):
+ *   跑着:`Thinking` / `Thinking: <标题>`
+ *   收工:`Thought`(+ 折着时 `: <标题>`)(+ 多段时 ` · N steps`)(+ 时长)
+ * 标题取「最后一段的加粗首行」(TUI 的 latest():最后一段没标题且已收工就清掉,还在跑就沿用前一段的);
+ * 时长照 TUI:组内【各段各自 created→completed 之和】(那边是个 reduce,不是首尾相减)。
+ * TUI 在【展开时】不印标题 —— 面板用 CSS 反应(`details[open]` 里收工那款把 `.rTitle` 收起来),
+ * 跑着那款照 TUI 一直带着标题。 */
+function reasoningRunTitle(run) {
+  const last = run[run.length - 1];
+  const t = reasoningTitle(last && last.text);
+  if (t) return t;
+  if (!last || (last.time && last.time.completed !== undefined)) return '';
+  for (let i = run.length - 2; i >= 0; i--) {
+    const prev = reasoningTitle(run[i] && run[i].text);
+    if (prev) return prev;
+  }
+  return '';
+}
+
+function reasoningGroupHtml(run, m, body) {
+  const running = !!m.live;
+  const title = reasoningRunTitle(run);
+  let dur = 0;
+  if (!running) {
+    for (const p of run) {
+      const t = (p && p.time) || {};
+      if (t.created !== undefined && t.completed !== undefined) dur += Math.max(0, t.completed - t.created);
+    }
+  }
+  return (
+    '<details class="reasoning' + (running ? ' live' : '') + '"' + (running ? ' open' : '') + '>' +
+    '<summary><span class="rWord' + (running ? '' : ' rDone') + '">' +
+    (running ? 'Thinking' : 'Thought') + '</span>' +
+    (title ? '<span class="rTitle">: ' + esc(title) + '</span>' : '') +
+    (!running && run.length > 1 ? '<span class="rSteps"> · ' + run.length + ' steps</span>' : '') +
+    (dur ? '<span class="rDur"> · ' + esc(fmtDur(dur)) + '</span>' : '') +
+    '</summary>' +
+    body +
+    '</details>'
+  );
 }
 
 /* ------- 助手消息脚注(照 TUI 的 AssistantFooter,index.tsx:1881 -------
@@ -2461,11 +2495,26 @@ function renderMessage(m, opts) {
         nText++;
         html += '<div class="content"' + lk + '>' + shown + '</div>';
       } else if (p.type === 'reasoning') {
-        nReason++;
-        // 流式期间展开思考块,回合结束后仍回落成折叠态(与服务端版本一致)
-        html +=
-          '<details class="reasoning"' + (m.live ? ' open' : '') + '><summary>' + reasoningHead(p, m) + '</summary>' +
-          '<div class="content"' + lk + '>' + shown + '</div></details>';
+        // 相邻的思考段并成【一个】块(照 TUI:tree.ts 把相邻同 kind 的 part 并进同一个组),
+        // 组行见 reasoningGroupHtml。正文仍是每段一个 .content,data-lk 的序号照旧按段递增
+        // (增量重绘 paintLiveText 就是按「同类型里的第几个」定位的)。
+        const run = [p];
+        while (i + 1 < content.length && content[i + 1].type === 'reasoning') run.push(content[++i]);
+        let rbody = '';
+        for (let j = 0; j < run.length; j++) {
+          const rp = run[j];
+          const at = i - (run.length - 1 - j); // 这一段在 content 里的下标
+          const rLast = at === lastBlock;
+          const rmd = md(rp.text || '');
+          const rlk = m.live
+            ? ' data-lk="reasoning:' + nReason + '"' +
+              ' data-lk-last="' + (rLast ? '1' : '0') + '"' +
+              ' data-lk-key="' + (rp.text || '').length + ':0"'
+            : '';
+          nReason++;
+          rbody += '<div class="content"' + rlk + '>' + (m.live && rLast ? cursorInto(rmd) : rmd) + '</div>';
+        }
+        html += reasoningGroupHtml(run, m, rbody);
       } else if (p.type === 'tool') {
         // 相邻的探索类工具(read/glob/grep/webfetch/websearch)折成一组,照 TUI 的
         // exploration 分组 —— 见 EXPLORE_TOOLS 那段的说明。

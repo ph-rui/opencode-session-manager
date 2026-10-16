@@ -570,6 +570,12 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .reasoning { margin: 6px 0; }
 .reasoning > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 0.88em; }
 .reasoning > summary::-webkit-details-marker { display: none; }
+/* 行头那几格(照 TUI 的 reasoning 分组行:Thinking / Thought + 标题 + N steps + 时长)。
+   TUI 在【展开时】不印标题,面板用 CSS 反应:收工那款(Thought)折着才带标题,
+   摊开就把 .rTitle 收起来;跑着那款(Thinking)照 TUI 一直带着标题。 */
+.reasoning[open] > summary .rWord.rDone ~ .rTitle { display: none; }
+.reasoning > summary .rSteps { color: var(--muted); }
+.reasoning > summary .rDur { color: var(--muted); }
 /* 箭头随展开状态变化(流式期间会被自动展开) */
 .reasoning > summary::before { content: '▸ '; }
 .reasoning[open] > summary::before { content: '▾ '; }
