@@ -1384,6 +1384,82 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.26 追加：修「加载更旧消息」—— 带游标时不能再带 `order`
+
+**起因**：量助手脚注（§8.27）时顺手用真会话点了一下「加载更旧消息」，发现它**从来没成功过**。
+
+**实测**（只读长会话 `ses_demo`，2480 条）：
+
+| 请求 | 服务端 |
+|---|---|
+| `GET /message?order=desc&limit=100` | 200，最新 100 条，`cursor.next` / `cursor.previous` 各给一个 |
+| `GET /message?order=desc&limit=100&cursor=<next>` | **400** `{"_tag":"InvalidCursorError","message":"Cursor cannot be combined with order"}` |
+| `GET /message?limit=100&cursor=<next>` | 200，往旧的那 100 条（方向本来就编在游标里：`base64({id, order:"desc", direction:"next"})`）|
+
+面板原来两样一起发，于是每次点都被打回：`api()` 见非 2xx 直接 `throw`，`loadMessages` 的 `catch` 又是静默的
+—— 界面上就是「点了没反应」，游标没被消费，按钮也一直不肯消失。
+
+**做法**：`loadMessages()` 里把 query 拆开 —— 首屏 `order=desc&limit=100`，翻页**只**带 `cursor`。
+
+**验证**：新探针 `/tmp/ocsm-probe/perf/older-audit.js`（代理真面板 + 注入探针，点一下 `#older` 再看条数）：
+改前 `before 100 → after 100`（没动静）、改后 `before 100 → after 200`，抓到的请求
+`/api/session/<sid>/message?limit=100&cursor=eyJpZCI6…`（没有 `order`）。
+
+**回归**：`smoke.sh` 里新 R5 组 2 项（翻页只带游标 / 不再出现两样一起发的那种写法）；
+`ui-jump` 58 → **63**（首屏带 `order=desc`、翻页带 `cursor` 且不带 `order`、没游标时不发请求）。
+
+---
+
+### 8.27 追加：助手消息脚注（TUI 的 `AssistantFooter`），模型名从头部挪到脚注
+
+**起因**：用户「一切往 TUI 的方向靠拢」，并按默认档回了四条 —— 本轮做第一条：**保留头部**，把模型名从头部
+挪到脚注。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/routes/session/index.tsx:1881` 的 `AssistantFooter`、
+`rows.ts:430/442` 的 `turnDuration` / `turnTokensPerSecond`，另从本机二进制核了默认值）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 每条助手消息**收工后**在底部印一行：`Build · DeepSeek V4 Flash · 4.7s · 42.1 tok/s` | `AssistantFooter` 渲染体 |
+| 尾巴可接 `· interrupted`（`error.message === "Step interrupted"`） | 同上；二进制里 `{type:"aborted",message:"Step interrupted"}` |
+| 出错（且不是中断/重试）时上面另起一行 `Error: <原因>` | `… \|\| !interrupted() && !retry` 那个 `<Show>` |
+| 重试时上面另起一行 `⚠ Retrying in Ns · attempt K · <原因>`，每秒重算 | `AssistantRetry`，`setInterval(…, 1000)` |
+| 智能体名跑 `Locale.titlecase`，用 agent 色（出错时灰）；其余一律 muted | `Locale.titlecase` = `replace(/\b\w/g, c => c.toUpperCase())` |
+| 时长 = 本步 `time.completed` − **本轮输入消息** `time.created` | `turnDuration` |
+| 速度 = Σ(`output`+`reasoning`) / Σ(`streamed`−`created`)，只算本轮的步 | `turnTokensPerSecond`（先加总再除，按各步活跃时长加权）|
+| 窄屏 < 28 列不印模型、28~36 列不印时长 | 同上的两个 `Show` |
+| 默认档：`session.tps` **开**（印 tok/s）、`debug.turn_tokens` **关** | 二进制里的 `default:!0` / `??!1` |
+
+**实测真实数据的形态**（只读长会话 + 探针会话，2531 条助手消息）：`time.streamed` **2495** 条（速度算得出来）、
+带 `error` **26** 条（其中 `Step interrupted` 在本轮扫到的窗口里 0 条，配额类错误在）、带 `retry` **1** 条；
+`agent` 是 `build` 2505 / `Sisyphus - ultraworker` 26 —— 长会话尾部实拍：`Build · DeepSeek V4 Flash · 16m 35s · 154.6 tok/s`。
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 位置 | 收工时印在消息**底部**（`.meta` 那行 tokens 之下），照 TUI 的顺序：正文 → 尾部数字 → 脚注 |
+| 头部 | 保留 `⏺ 助手` 那行（用户定的「原有 DOM 一个不删」），但**模型名挪走** —— 头部只留标记 / 身份 / 「输出中」 |
+| 模型名 | 先查模型表（`store.modelIndex`，键 `providerID/modelID`）拿 `name`，查不到退回 `providerID/id`；解析结果**进签名**，并在模型表拉回来后补一次 `renderMessages()`（TUI 那边是响应式，天然会重画；面板不补就会一直停在退回形态，实拍踩到过）|
+| 时长 / 速度 | 照 TUI 两条函数实现（`turnDuration` / `turnTps`），并把**整张消息表 + 自己在表里的位置**交给 `renderMessage`；没有输入消息时退回本步 `created`，撞上 `idle` 就断轮 |
+| 缺 `streamed` | 整个速度格不印（照 TUI：一块缺就整体作废，不给偏高/偏低的假数）|
+| 流式中 | 不印脚注那行（TUI 那行是 `step.ended` 之后才追加的），出错/重试那两行照旧印 |
+| 倒计时 | `.afRetry` 带 `data-at`，`syncRetryTick()` 跟着 `updateChatStatus()` 走（和 spinner / 状态条同一个规矩：已经在走就不重开，没目标就停），每秒改一次 `.afWhen` |
+| 窄屏列宽规则 | **不实现** —— 面板支持的宽度下恒不触发（393px ≈ 49ch，判据是 36ch ≈ 290px），写 `@media` 还会破坏「窄屏判定源唯一」那条底线（smoke 有断言盯着），注释里写明了 |
+
+**验证**：新探针 `/tmp/ocsm-probe/perf/footer-audit.js`（代理真面板 + 注入探针，dump 最后几条助手消息的头部与脚注
+各格，并滚到底截图）。393×894 实拍：`Build · DeepSeek V4 Flash · 9.3s · 97.8 tok/s`，头部 `⏺助手` 且
+`headModel: false`；长会话 1366×900：一条 `Error: Rate limit exceeded. Please try again later.` + 那行的智能体名
+是灰的（`mutedN: 1`）；`.msg.assistant.live .afoot` 计数 **0**（流式中不印）。截图
+`/tmp/ocsm-probe/perf/footer-audit-393x894.png`。
+
+**回归**：`smoke.sh` 里新 R4 组 6 项；`ui-tools` 168 → **190**（22 项：智能体大写、整轮时长、退回本步 created、
+缺 `streamed` 不印速度、各步加总、没有 `completed` 时只留前两格、`live` 不印、中断三种断言、出错两行、
+重试三行、模型表兜底、模型名只在脚注、`idle` 断轮、连字符大写）；`ui-stream` 240 → **247**（头部不再印模型 +
+收工后脚注四格 + 模型名只在脚注）。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
