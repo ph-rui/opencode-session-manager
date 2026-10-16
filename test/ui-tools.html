@@ -638,6 +638,87 @@
       syncDetailsOpen(dOld, dNew);
       T('syncDetailsOpen:用户没动过就维持这次的默认(折着)', dNew.querySelector('details').open === false);
 
+      /* ---------------- 助手消息脚注(照 TUI 的 AssistantFooter,§8.26) ---------------- */
+      function afMsg(extra) {
+        return Object.assign({ id: 'af', type: 'assistant', agent: 'build',
+          model: { id: 'm1', providerID: 'p1' },
+          time: { created: 2000, streamed: 3000, completed: 5000 },
+          tokens: { input: 10, output: 20, reasoning: 5, cache: { read: 0, write: 0 } },
+          content: [{ type: 'text', text: 'hi' }] }, extra);
+      }
+      function afOf(m, msgs, index) {
+        return renderMessage(m, { msgs: msgs, index: index === undefined ? (msgs || []).indexOf(m) : index });
+      }
+      function afTxt(m, msgs, index) {
+        var f = afOf(m, msgs, index).querySelector('.afoot');
+        return f ? f.textContent : '';
+      }
+      var afU = { id: 'u1', type: 'user', text: 'go', time: { created: 1000 } };
+      var afA = afMsg({});
+      T('脚注印出智能体名(首字母大写)', afTxt(afA, [afU, afA]).indexOf('Build') === 0, afTxt(afA, [afU, afA]));
+      T('脚注时长按【整轮】算:本步 completed − 本轮输入 created(5000−1000)',
+        afTxt(afA, [afU, afA]).indexOf('4.0s') >= 0, afTxt(afA, [afU, afA]));
+      T('脚注的时长退回本步 created(表里没有输入消息时)',
+        afTxt(afA, [afA]).indexOf('3.0s') >= 0, afTxt(afA, [afA]));
+      T('脚注格之间用 .afSep 连(格数 = 分隔数 + 1)',
+        afOf(afA, [afU, afA]).querySelectorAll('.afSep').length ===
+        afOf(afA, [afU, afA]).querySelectorAll('.afoot > span:not(.afSep)').length - 1);
+      T('脚注没有 tok/s 时不印那格(缺 time.streamed 就整体不印)',
+        afTxt(afMsg({ time: { created: 2000, completed: 5000 } }), [afU]).indexOf('tok/s') < 0,
+        afTxt(afMsg({ time: { created: 2000, completed: 5000 } }), [afU]));
+      /* tok/s 按「本轮各步共用」算:先把每步的 output+reasoning 加起来,再除以各步活跃时长之和 */
+      var afA1 = afMsg({ id: 'a1', time: { created: 0, streamed: 1000, completed: 1100 }, tokens: { input: 1, output: 100, reasoning: 0, cache: { read: 0, write: 0 } } });
+      var afA2 = afMsg({ id: 'a2', time: { created: 1000, streamed: 3000, completed: 3100 }, tokens: { input: 1, output: 200, reasoning: 0, cache: { read: 0, write: 0 } } });
+      T('tok/s 照 TUI:整轮各步加总再除(300 token / 3s = 100.0)',
+        afTxt(afA2, [afU, afA1, afA2]).indexOf('100.0 tok/s') >= 0, afTxt(afA2, [afU, afA1, afA2]));
+      T('第一步的脚注只算它自己那一步(100 / 1s)',
+        afTxt(afA1, [afU, afA1, afA2]).indexOf('100.0 tok/s') >= 0, afTxt(afA1, [afU, afA1, afA2]));
+      /* 还没收工(没有 completed)时只印「智能体 · 模型」—— 照 TUI:时长/速度拿不到就不印那两格 */
+      T('没有 completed 时脚注只留智能体与模型,不印时长与 tok/s',
+        afTxt(afMsg({ time: { created: 2000, streamed: 3000 } }), [afU]).indexOf('tok/s') < 0 &&
+        !afOf(afMsg({ time: { created: 2000, streamed: 3000 } }), [afU]).querySelector('.afDur'),
+        afTxt(afMsg({ time: { created: 2000, streamed: 3000 } }), [afU]));
+      T('live 的消息不印脚注(照 TUI:缓冲里这行还没到)',
+        !afOf(afMsg({ live: true }), [afU]).querySelector('.afoot'));
+      /* 中断:照 TUI 认 error.message「Step interrupted」,尾巴接 · interrupted、智能体名灰掉 */
+      var afInt = afMsg({ error: { type: 'aborted', message: 'Step interrupted' } });
+      T('中断时尾巴接 · interrupted', afTxt(afInt, [afU]).indexOf('· interrupted') >= 0, afTxt(afInt, [afU]));
+      T('中断不印 Error 行(照 TUI:中断不算错误提醒)',
+        !afOf(afInt, [afU]).querySelector('.afErr'));
+      T('中断时智能体名灰掉(.afAgent.muted)',
+        !!afOf(afInt, [afU]).querySelector('.afAgent.muted'));
+      /* 出错:上面另起一行 Error: … */
+      var afErr = afMsg({ error: { type: 'provider.quota', message: 'Rate limit exceeded.' } });
+      T('出错时上面印一行 Error: 原因',
+        afOf(afErr, [afU]).querySelector('.afErr').textContent === 'Error: Rate limit exceeded.',
+        afOf(afErr, [afU]).querySelector('.afErr').textContent);
+      T('出错时智能体名也灰掉', !!afOf(afErr, [afU]).querySelector('.afAgent.muted'));
+      /* 重试:⚠ Retrying in Ns · attempt K · 原因(带 data-at 供每秒重算) */
+      var afRetry = afMsg({ retry: { at: Date.now() + 7000, attempt: 2, error: { message: 'boom' } } });
+      var afROut = afOf(afRetry, [afU]);
+      T('重试时印倒计时那行',
+        afROut.querySelector('.afRetry').textContent.indexOf('⚠ Retrying in') === 0,
+        afROut.querySelector('.afRetry').textContent);
+      T('重试行带 attempt 与原因', afROut.querySelector('.afRetry').textContent.indexOf('attempt 2 · boom') > 0,
+        afROut.querySelector('.afRetry').textContent);
+      T('重试行带 data-at(每秒重算剩余秒数用)', !!afROut.querySelector('.afRetry').dataset.at);
+      T('重试时不印 Error 行(照 TUI:改用重试行)',
+        !afROut.querySelector('.afErr'));
+      /* 模型名:先查模型表,查不到退回 providerID/id */
+      T('模型表里没有该模型时退回 providerID/id',
+        afOf(afMsg({ model: { id: 'ghost', providerID: 'nowhere' } }), [afU]).querySelector('.afModel').textContent === 'nowhere/ghost');
+      T('模型名进的是脚注,头部那格不再有',
+        afOf(afA, [afU, afA]).querySelector('.turn-head .model') === null &&
+        !!afOf(afA, [afU, afA]).querySelector('.afoot .afModel'));
+      /* 回合边界:撞上 idle 就不再把更早那条输入算进本轮 */
+      var afIdle = { id: 'i1', type: 'idle' };
+      var afAfter = afMsg({ id: 'a9', time: { created: 8000, streamed: 8500, completed: 9000 } });
+      T('撞上 idle 就断轮(时长退回本步 created:1.0s)',
+        afTxt(afAfter, [afU, afA, afIdle, afAfter]).indexOf('1.0s') >= 0, afTxt(afAfter, [afU, afA, afIdle, afAfter]));
+      T('智能体名里的连字符后也大写(照 TUI 的 titlecase)',
+        afTxt(afMsg({ agent: 'sisyphus - ultraworker' }), [afU]).indexOf('Sisyphus - Ultraworker') === 0,
+        afTxt(afMsg({ agent: 'sisyphus - ultraworker' }), [afU]));
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

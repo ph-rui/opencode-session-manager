@@ -346,6 +346,20 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .msg.user .content { white-space: pre-wrap; }
 .msg .meta { text-align: right; color: #b9b9b9; font-size: 0.8em; margin-top: 4px; }
 
+/* 助手消息脚注(照 TUI 的 AssistantFooter,见 §8.27):`智能体 · 模型 · 时长 · tok/s`,
+   中断时尾巴接 `· interrupted`;上面可能另起 `Error: …`(红)或 `⚠ Retrying in Ns …`(琥珀)。
+   智能体名用助手那条绿(照 TUI 的 agent 色),出错时灰掉;其余一律灰。 */
+.afoot { margin-top: 4px; color: var(--muted); font-size: 0.82em; }
+.afAgent { color: #2e8b57; }
+.afAgent.muted { color: var(--muted); }
+.afErr { margin-top: 4px; color: var(--bad); font-size: 0.82em; }
+.afRetry { margin-top: 4px; color: #b8860b; font-size: 0.82em; }
+/* TUI 在窄终端里还有两条列宽规则(< 28 列不印模型、28~36 列不印时长)。这里【刻意不实现】:
+   ① 面板支持的宽度下它们恒不触发 —— 手机竖屏 393px ≈ 49ch、横屏更宽,而判据是 36ch ≈ 290px;
+   ② 照 TUI 那样写成 @media,就违反了「窄屏判定源只有 html.narrow / html.short 一处」这条底线
+      (smoke 里有一条断言专门盯着 styles.css 不许出现第二份断点)。
+   真到了那么窄的宽度,脚注按行内流自然折行,不会溢出。 */
+
 /* 用户消息上的提及标记:agent(@)/ skill(#)(H 组 5) */
 .refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 .ref { flex: none; padding: 0 6px; border-radius: 3px; border: 1px solid var(--border); font-size: 0.88em; }

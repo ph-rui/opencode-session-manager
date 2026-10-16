@@ -395,6 +395,9 @@ async function renderControls(s) {
   /* 模型表刚拉回来,上下文用量的百分比这时才算得出来(updateChatStatus 早于这里跑过一遍) */
   paintContextUsage();
   updateComposerControls();
+  /* 脚注里的模型名也要拿这张表来查(§8.27)—— 消息往往早于模型表渲染完,这里补一次重绘。
+     签名里带了解析出来的模型名,所以只有真变了的那几条会换 DOM。 */
+  renderMessages();
 }
 
 async function switchAgent(id) {
@@ -2304,6 +2307,114 @@ function reasoningHead(part, m) {
   return '思考' + (title ? ': ' + esc(title) : '') + (dur ? ' · ' + esc(fmtDur(dur)) : '');
 }
 
+/* ------- 助手消息脚注(照 TUI 的 AssistantFooter,index.tsx:1881 -------
+ *
+ * TUI 在每条助手消息**收工后**于底部印一行:
+ *   Build · DeepSeek V4 Flash · 4.7s · 42.1 tok/s
+ * 尾巴可接 `· interrupted`;上面另起两行 —— 出错(且不是中断/重试)时 `Error: <原因>`、
+ * 重试中 `⚠ Retrying in Ns · attempt K · <原因>`。窄屏照 TUI 的列宽收:<28 列不印模型,
+ * 28~36 列不印时长(终端 1 列 ≈ 1ch,规则写在 styles.css)。
+ *
+ * 时长与速度都照 TUI 的 turnDuration / turnTokensPerSecond(rows.ts:430/442):
+ *   时长 = 本步 time.completed − **本轮输入消息** time.created(整轮,不是本步自己)
+ *   速度 = Σ(output+reasoning) / Σ(streamed−created),只算本轮已经走到现在的助手步;
+ *          任何一步缺 time.streamed 就整体不印(TUI 就是这么做的)
+ */
+
+/* Locale.titlecase(locale.ts:3):每个词首字母大写 —— build → Build */
+function titlecase(s) {
+  return String(s == null ? '' : s).replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* 模型显示名:照 TUI 先去模型表里查 name,查不到退回 providerID/id */
+function modelDisplayName(ref) {
+  if (!ref || (!ref.id && !ref.providerID)) return '';
+  const info = store.modelIndex.get(ref.providerID + '/' + ref.id);
+  return (info && info.name) || (ref.providerID ? ref.providerID + '/' + ref.id : ref.id);
+}
+
+/* 本轮输入消息的下标(照 TUI 的 inputIndex,rows.ts:469):从 end 往回走,撞上 idle
+ * 就把「上一个 idle 之后的第一条输入」交出去;老会话(整条没有 idle)一撞上输入就返回。 */
+function turnInputIndex(msgs, end, legacy) {
+  let input = -1;
+  for (let i = end - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.type === 'idle') return input;
+    if (m.type !== 'user' && m.type !== 'synthetic') continue;
+    if (legacy) return i;
+    input = i;
+  }
+  return input;
+}
+
+function turnStart(msgs, end) {
+  return turnInputIndex(msgs, end, !msgs.some((x) => x.type === 'idle'));
+}
+
+function turnDuration(m, msgs, index) {
+  if (!m.time || m.time.completed === undefined) return 0;
+  const i = index === undefined ? msgs.findIndex((x) => x.id === m.id) : index;
+  const input = msgs[turnStart(msgs, i === -1 ? msgs.length : i)];
+  return Math.max(0, m.time.completed - ((input && input.time && input.time.created) || m.time.created));
+}
+
+function turnTps(m, msgs, index) {
+  const i = index === undefined ? msgs.findIndex((x) => x.id === m.id) : index;
+  const end = i === -1 ? msgs.length : i + 1;
+  const steps = msgs.slice(turnStart(msgs, end) + 1, end).filter((x) => x.type === 'assistant');
+  if (!steps.length) return 0;
+  let dur = 0;
+  let out = 0;
+  for (const s of steps) {
+    const t = s.time || {};
+    if (t.streamed === undefined) return 0; // 缺一块就不算,免得给出偏高的数
+    dur += Math.max(0, t.streamed - t.created);
+    const tk = s.tokens || {};
+    out += (tk.output || 0) + (tk.reasoning || 0);
+  }
+  if (out <= 0 || dur <= 0) return 0;
+  return out / (dur / 1000); // 先加总再除:每步按各自的「供应商活跃时长」加权
+}
+
+/* TUI 把中断单独认成 interrupted(二进制原文:error?.message==="Step interrupted"),
+ * 面板的 aborted 是同一种东西(服务端给的就是 {type:'aborted',message:'Step interrupted'})。 */
+function isInterrupted(m) {
+  return !!(m.error && (m.error.message === 'Step interrupted' || m.error.type === 'aborted'));
+}
+
+function assistantFooterHtml(m, opts) {
+  const msgs = (opts && opts.msgs) || [m];
+  const index = opts && opts.index !== undefined ? opts.index : msgs.findIndex((x) => x.id === m.id);
+  const interrupted = isInterrupted(m);
+  let out = '';
+  if (m.error && !interrupted && !m.retry) {
+    out += '<div class="afErr">Error: ' + esc(m.error.message || m.error.type || '') + '</div>';
+  }
+  if (m.retry) {
+    const at = m.retry.at || 0;
+    const left = at ? Math.max(0, Math.ceil((at - Date.now()) / 1000)) : 0;
+    out +=
+      '<div class="afRetry"' + (at ? ' data-at="' + esc(String(at)) + '"' : '') + '>⚠ <span class="afWhen">' +
+      (left > 0 ? 'Retrying in ' + left + 's' : 'Retry due') + '</span> · attempt ' +
+      esc(String(m.retry.attempt == null ? '' : m.retry.attempt)) +
+      (m.retry.error && m.retry.error.message ? ' · ' + esc(m.retry.error.message) : '') +
+      '</div>';
+  }
+  if (m.live) return out; // 还没收工:照 TUI 这行是 step.ended 之后才有的
+  const parts = [];
+  const agent = titlecase(m.agent || '');
+  if (agent) parts.push('<span class="afAgent' + (m.error ? ' muted' : '') + '">' + esc(agent) + '</span>');
+  const model = modelDisplayName(m.model);
+  if (model) parts.push('<span class="afModel">' + esc(model) + '</span>');
+  const dur = fmtDur(turnDuration(m, msgs, index));
+  if (dur) parts.push('<span class="afDur">' + esc(dur) + '</span>');
+  const tps = turnTps(m, msgs, index);
+  if (tps > 0) parts.push('<span class="afTps">' + esc(tps.toFixed(1)) + ' tok/s</span>');
+  if (interrupted) parts.push('<span class="afInt">interrupted</span>');
+  if (!parts.length) return out;
+  return out + '<div class="afoot">' + parts.join('<span class="afSep"> · </span>') + '</div>';
+}
+
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -2328,12 +2439,11 @@ function renderMessage(m, opts) {
     }
     let nText = 0;
     let nReason = 0;
+    // 模型名不再印在头部 —— 照 TUI 挪到脚注(AssistantFooter 那行):「谁干的」在末尾交代,
+    // 头部只留标记与身份(照 TUI 其实没有这行,是面板自己的阅读用头部,见 §8.27)。
     let html =
       '<div class="turn-head"><span class="marker">⏺</span>' +
       '<span class="who">助手</span>' +
-      (opts.showModel && m.model && m.model.id
-        ? '<span class="model">' + esc(m.model.id) + '</span>'
-        : '') +
       (m.live ? '<span class="live-tag">输出中</span>' : '') +
       '</div>';
     for (let i = 0; i < content.length; i++) {
@@ -2381,6 +2491,7 @@ function renderMessage(m, opts) {
         (m.live ? ' · 流式中' : '') +
         '</div>';
     }
+    html += assistantFooterHtml(m, opts);
     el.innerHTML = html;
     return el;
   }
@@ -2492,8 +2603,8 @@ function renderMessages() {
 
   // 增量渲染:仅重建变化的消息,其余复用 DOM(保留已展开的 details)
   let prev = null;
-  let prevModel = null;
-  for (const m of msgs) {
+  for (let mi = 0; mi < msgs.length; mi++) {
+    const m = msgs[mi];
     const L = liveView(m.id);
     let view = L ? liveMessage(L) : m;
     // 压缩块的正文在压缩期间是流式的(store.compactText 一段段涨):把当前正文并进
@@ -2501,18 +2612,20 @@ function renderMessages() {
     if (!L && view && view.type === 'compaction') {
       view = Object.assign({}, view, { summary: compactionBody(view, store.selected) });
     }
-    const showModel =
-      view.type === 'assistant' && !!(view.model && view.model.id) && view.model.id !== prevModel;
-    if (view.type === 'assistant' && view.model && view.model.id) prevModel = view.model.id;
-    // 流式消息用结构指纹做签名(不含文本长度),文本增量走 paintLiveText 局部重绘
+    // 流式消息用结构指纹做签名(不含文本长度),文本增量走 paintLiveText 局部重绘。
     const liveFp = L ? liveSig(L) : '';
-    const sig = (L ? 'live|' + liveFp : JSON.stringify(view)) + '|' + (showModel ? '1' : '0');
+    // 脚注里的模型名是从模型表里查出来的(不在消息本体里),得一起进签名 ——
+    // 否则模型表晚到一步,脚注就一直停在 providerID/id 的退回形态(TUI 那边是响应式,天然会重画)。
+    const fpExtra = !L && view && view.type === 'assistant' ? '|' + modelDisplayName(view.model) : '';
+    const sig = L ? 'live|' + liveFp : JSON.stringify(view) + fpExtra;
+    // 脚注要按「整轮」算时长与速度,所以把整张消息表与自己在表里的位置一起交下去
+    const rOpts = { msgs: msgs, index: mi };
     let rec = msgEls.get(m.id);
     if (!rec) {
-      rec = { sig: sig, fp: liveFp, el: renderMessage(view, { showModel }) };
+      rec = { sig: sig, fp: liveFp, el: renderMessage(view, rOpts) };
       msgEls.set(m.id, rec);
     } else if (rec.sig !== sig) {
-      const el = renderMessage(view, { showModel });
+      const el = renderMessage(view, rOpts);
       syncDetailsOpen(rec.el, el);
       rec.el.replaceWith(el);
       rec.el = el;
@@ -2678,9 +2791,50 @@ function syncSpin() {
   spinTimer = setInterval(drawSpinFrame, SPIN_MS);
 }
 
+/* 重试倒计时(脚注上那行 `⚠ Retrying in Ns · attempt K · <原因>`,照 TUI 的 AssistantRetry):
+ * TUI 每秒重算一次剩余秒数。这里同一个规矩 —— 只在 DOM 里还有 .afRetry[data-at] 时走,
+ * 【一律逐帧推】,不看 prefers-reduced-motion(终端里没有这个概念)。
+ * 分工:文字由 assistantFooterHtml 印出时的当下值,之后的每秒靠这里改 .afWhen。 */
+let retryTimer = null;
+
+function stopRetryTick() {
+  if (retryTimer !== null) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+}
+
+function drawRetryCountdown() {
+  const els = document.querySelectorAll('.afRetry[data-at]');
+  if (!els.length) {
+    stopRetryTick();
+    return;
+  }
+  const now = Date.now();
+  for (const el of els) {
+    const span = el.querySelector('.afWhen');
+    if (!span) continue;
+    const left = Math.max(0, Math.ceil((Number(el.dataset.at || 0) - now) / 1000));
+    const text = left > 0 ? 'Retrying in ' + left + 's' : 'Retry due';
+    if (span.textContent !== text) span.textContent = text;
+  }
+}
+
+/* 与 syncSpin 同一个规矩:已经在走的时候不重开,没有目标就停。 */
+function syncRetryTick() {
+  if (!document.querySelector('.afRetry[data-at]')) {
+    stopRetryTick();
+    return;
+  }
+  if (retryTimer !== null) return;
+  retryTimer = setInterval(drawRetryCountdown, 1000);
+}
+
 function updateChatStatus() {
   // 工具行的行首标记跟着这次渲染一起同步(它只认 DOM 里的 .tmark.spin,自己会收敛)
   syncSpin();
+  // 重试倒计时同理(只认 DOM 里的 .afRetry[data-at])
+  syncRetryTick();
   const el = $('#chatState');
   // 文字状态与状态条一起画:两者永远同步,不会各写各的。
   // 第三个参数三态:false=收起,'run'=在跑,'retry'=重试中。

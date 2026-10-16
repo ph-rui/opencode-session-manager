@@ -145,7 +145,9 @@
       T('助手气泡排在最后', qa('#messages .msg').pop() === aEl);
       T('助手气泡带 live 类', aEl.classList.contains('live'));
       T('标题行显示「输出中」', aEl.querySelector('.live-tag').textContent === '输出中');
-      T('显示模型名', aEl.textContent.indexOf('deepseek-v4-flash') >= 0);
+      // 模型名照 TUI 挪到脚注(AssistantFooter),收工前不印 —— 那时 TUI 还没有这行
+      T('收工前不印模型名(脚注是 step.ended 之后才有)', aEl.textContent.indexOf('deepseek-v4-flash') < 0);
+      T('头部不再印模型名', !aEl.querySelector('.turn-head .model'));
       T('运行状态显示运行中', q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
       T('该会话被判定为有流式内容', !!liveForSid('ses_a'));
 
@@ -348,7 +350,7 @@
 
       /* ---------------- 服务端半成品不得覆盖本地增量 ---------------- */
       window.SERVER['ses_a'] = window.SERVER['ses_a'].concat([{
-        id: AID, type: 'assistant', time: { created: 300 },
+        id: AID, type: 'assistant', agent: 'build', time: { created: 300 },
         model: { id: 'deepseek-v4-flash', providerID: 'company' },
         content: [{ type: 'reasoning', text: '' }, { type: 'text', text: '' }, { type: 'tool', id: 'call_1', name: 'shell', state: { status: 'running' } }],
       }]);
@@ -390,6 +392,14 @@
       T('折叠时箭头朝右(▸)',
         getComputedStyle(el(AID).querySelector('.reasoning > summary'), '::before').content.indexOf('▸') >= 0);
       T('三块内容(reasoning/text/tool)都在', qa('#messages [data-lk], #messages details.tool').length >= 0 && el(AID).textContent.indexOf('ONE') >= 0);
+      /* ---------------- 助手消息脚注(照 TUI 的 AssistantFooter) ---------------- */
+      var foot = el(AID).querySelector('.afoot');
+      T('收工后印出脚注', !!foot);
+      T('脚注的智能体名首字母大写(Buid → Build)', foot && foot.querySelector('.afAgent').textContent === 'Build', foot && foot.querySelector('.afAgent').textContent);
+      T('脚注印出模型名(先去模型表查 name:Flash)', foot && foot.querySelector('.afModel').textContent === 'Flash', foot && foot.querySelector('.afModel').textContent);
+      T('脚注印出本轮时长(330 − 300)', foot && foot.querySelector('.afDur').textContent.indexOf('ms') > 0, foot && foot.querySelector('.afDur').textContent);
+      T('脚注印出 tok/s', foot && !!foot.querySelector('.afTps'), foot && foot.textContent);
+      T('模型名只在脚注,头部那格没有', el(AID).querySelector('.turn-head .model') === null);
       T('回收后状态回到空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
       T('回到空闲后进度条收起来', q('#progress').hidden === true);
 

@@ -1427,6 +1427,43 @@ else
   echo "FAIL: 窄屏下 #older 的触摸高度没对齐"; fail=$((fail + 1))
 fi
 
+# ---- R4 组:助手消息脚注(照 TUI 的 AssistantFooter,§8.27)----
+if has "$APPJS" 'function assistantFooterHtml(m, opts)' && has "$APPJS" 'class="afoot"' &&
+   has "$APPJS" 'class="afAgent' && has "$APPJS" 'class="afModel"' &&
+   has "$APPJS" 'class="afDur"' && has "$APPJS" 'class="afTps"'; then
+  echo "PASS: 助手脚注照 TUI 印「智能体 · 模型 · 时长 · tok/s」"; pass=$((pass + 1))
+else
+  echo "FAIL: 助手脚注缺格"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function turnDuration(m, msgs, index)' && has "$APPJS" 'function turnTps(m, msgs, index)' &&
+   has "$APPJS" 'out / (dur / 1000)'; then
+  echo "PASS: 时长与 tok/s 照 TUI 的 turnDuration / turnTokensPerSecond(整轮加总)"; pass=$((pass + 1))
+else
+  echo "FAIL: 脚注的时长/速度算法跟 TUI 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'Error: ' && has "$APPJS" 'Retrying in ' && has "$APPJS" 'attempt ' &&
+   has "$APPJS" 'function isInterrupted(m)'; then
+  echo "PASS: 出错 / 重试 / 中断三种情形都有(中断不算出错)"; pass=$((pass + 1))
+else
+  echo "FAIL: 脚注缺出错/重试/中断"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'html += assistantFooterHtml(m, opts);' && ! has "$APPJS" 'opts.showModel'; then
+  echo "PASS: 模型名从头部挪到脚注(头部不再印)"; pass=$((pass + 1))
+else
+  echo "FAIL: 模型名还在头部 / 脚注没接上"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function syncRetryTick()' && has "$APPJS" 'function drawRetryCountdown()'; then
+  echo "PASS: 重试倒计时每秒重算(照 TUI 的 AssistantRetry)"; pass=$((pass + 1))
+else
+  echo "FAIL: 重试倒计时不会自己走"; fail=$((fail + 1))
+fi
+if has "$CSS" '.afoot { margin-top: 4px;' && has "$CSS" '.afErr {' && has "$CSS" '.afRetry {' &&
+   has "$CSS" '.afAgent.muted {'; then
+  echo "PASS: 脚注样式(智能体绿 + 出错灰 + Error/重试两行)"; pass=$((pass + 1))
+else
+  echo "FAIL: 脚注样式没写上"; fail=$((fail + 1))
+fi
+
 # ---- R5 组:「加载更旧消息」的游标(带游标时不能再带 order,§8.26 顺手修的)----
 if has "$APPJS" "q.set('cursor', store.msgOlderCursor)" && has "$APPJS" "q.set('order', 'desc')"; then
   echo "PASS: 首屏带 order=desc、翻页只带游标"; pass=$((pass + 1))
