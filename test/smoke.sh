@@ -1427,6 +1427,18 @@ else
   echo "FAIL: 窄屏下 #older 的触摸高度没对齐"; fail=$((fail + 1))
 fi
 
+# ---- R5 组:「加载更旧消息」的游标(带游标时不能再带 order,§8.26 顺手修的)----
+if has "$APPJS" "q.set('cursor', store.msgOlderCursor)" && has "$APPJS" "q.set('order', 'desc')"; then
+  echo "PASS: 首屏带 order=desc、翻页只带游标"; pass=$((pass + 1))
+else
+  echo "FAIL: 分页的 query 没拆开"; fail=$((fail + 1))
+fi
+if ! has "$APPJS" "new URLSearchParams({ order: 'desc', limit: '100' })"; then
+  echo "PASS: 不再出现「order 与游标一起发」的那种写法(服务端会 400)"; pass=$((pass + 1))
+else
+  echo "FAIL: 还是把 order 与游标一起发"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

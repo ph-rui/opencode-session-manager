@@ -336,6 +336,24 @@
       await tick();
       T('补回按钮后照常工作', btn.hidden === false);
 
+      /* ============ 7. 分页请求的 query:带游标时不能再带 order(服务端会 400) ============ */
+      store.selected = 'ses_a';
+      store.msgOlderCursor = null;
+      await loadMessages({ older: false });
+      var firstUrl = window.calls[window.calls.length - 1].url;
+      T('首屏带 order=desc', firstUrl.indexOf('order=desc') >= 0, firstUrl);
+      T('首屏不带 cursor', firstUrl.indexOf('cursor=') < 0, firstUrl);
+      store.msgOlderCursor = 'cur-old';
+      await loadMessages({ older: true });
+      var olderUrl = window.calls[window.calls.length - 1].url;
+      T('「加载更旧消息」带上游标', olderUrl.indexOf('cursor=cur-old') >= 0, olderUrl);
+      T('「加载更旧消息」不再带 order(带了两样服务端就 400:InvalidCursorError)',
+        olderUrl.indexOf('order=') < 0, olderUrl);
+      store.msgOlderCursor = null;
+      var callsBefore = window.calls.length;
+      await loadMessages({ older: true });
+      T('没有游标时不发请求', window.calls.length === callsBefore);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

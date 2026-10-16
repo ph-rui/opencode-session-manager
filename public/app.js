@@ -1582,10 +1582,15 @@ async function loadMessages(opts) {
   opts = opts || {};
   const id = store.selected;
   if (!id) return;
-  const q = new URLSearchParams({ order: 'desc', limit: '100' });
+  // 带游标时【不能】再带 order:服务端会 400(实测 `Cursor cannot be combined with order`)
+  // —— 方向本来就编在游标里(游标是个 base64 的 {id, order, direction})。
+  // 原来两样一起发,「加载更旧消息」每次都被打回,点了像没反应(api() 抛出 → 静默 catch)。
+  const q = new URLSearchParams({ limit: '100' });
   if (opts.older) {
     if (!store.msgOlderCursor) return;
     q.set('cursor', store.msgOlderCursor);
+  } else {
+    q.set('order', 'desc');
   }
   try {
     const j = await api('/api/session/' + encodeURIComponent(id) + '/message?' + q.toString());
