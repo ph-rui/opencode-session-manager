@@ -501,6 +501,32 @@
       window.setTimeout = savedTO;
       window.clearTimeout = savedCTO;
 
+      /* ============ 9. 一页拉多少条:手机 30、桌面 100(§8.35) ============
+       * 首页体量差得很远(实测某个会话 100 条 12.9MB、最新 30 条 2.1MB,大头是工具 part
+       * 里带回的整份文件与截图)。手机的用法是「看一眼」,所以窄屏按 30 条一页;
+       * 翻旧也跟着这套走 —— 不然翻一页又拉回十几 MB。 */
+      var doc = document.documentElement;
+      var lastUrl = function () { return window.calls[window.calls.length - 1].url; };
+      doc.classList.remove('narrow');
+      store.selected = 'ses_a';
+      await loadMessages({ older: false });
+      T('桌面(不窄)一页 100 条', lastUrl().indexOf('limit=100') >= 0, lastUrl());
+      doc.classList.add('narrow');
+      await loadMessages({ older: false });
+      T('手机(html.narrow)一页 30 条', lastUrl().indexOf('limit=30') >= 0, lastUrl());
+      store.msgOlderCursor = 'cur-old';
+      await loadMessages({ older: true });
+      T('窄屏翻旧也是 30 条一页(不然翻一页又拉回十几 MB)',
+        lastUrl().indexOf('limit=30') >= 0 && lastUrl().indexOf('cursor=cur-old') >= 0, lastUrl());
+      store.msgOlderCursor = null;
+      doc.classList.remove('narrow');
+      await loadMessages({ older: false });
+      T('转回宽屏又按 100(口径跟着 html.narrow 走,转屏即时生效)',
+        lastUrl().indexOf('limit=100') >= 0, lastUrl());
+      T('两个数各只有一处(MSG_PAGE_WIDE / MSG_PAGE_NARROW)',
+        MSG_PAGE_WIDE === 100 && MSG_PAGE_NARROW === 30 && msgPageSize() === 100,
+        MSG_PAGE_WIDE + '/' + MSG_PAGE_NARROW);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

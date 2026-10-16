@@ -1651,6 +1651,21 @@ else
   echo "FAIL: ui-jump.html 里没有这组断言"; fail=$((fail + 1))
 fi
 
+# ---- R12 组:一页拉多少条(手机 30 / 桌面 100;§8.35)----
+if has "$APPJS" 'const MSG_PAGE_NARROW = 30' && has "$APPJS" 'const MSG_PAGE_WIDE = 100' &&
+   has "$APPJS" "document.documentElement.classList.contains('narrow') ? MSG_PAGE_NARROW : MSG_PAGE_WIDE" &&
+   has "$APPJS" 'new URLSearchParams({ limit: String(msgPageSize()) })'; then
+  echo "PASS: 窄屏一页 30 条、桌面 100 条,首屏与翻页共用同一个口径(msgPageSize)"; pass=$((pass + 1))
+else
+  echo "FAIL: 一页多少条没按窄屏分,或者分了两处口径"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-jump.html")" 'limit=30' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" 'MSG_PAGE_NARROW'; then
+  echo "PASS: ui-jump.html 里有页大小的断言(桌面 100 / 窄屏 30 / 窄屏翻旧 30 / 转回宽屏 100)"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-jump.html 里没有页大小的断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

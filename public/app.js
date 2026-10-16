@@ -1691,6 +1691,17 @@ const MSG_TRIES = 3; // 首发 + 2 次重试
 const MSG_RETRY_MS = [800, 2500];
 const MSG_LOADING_DELAY_MS = 250; // 这么快就回来了就不闪「正在加载消息…」这一下
 
+/* 一页拉多少条:手机的用法是「看一眼」,而首屏体量差得很远 —— 实测某个会话
+ * 100 条 = 12.9MB、最新 30 条 = 2.1MB(大头是 tool part 里带回的整份文件与截图,
+ * 见 §8.34)。所以窄屏按 30 条一页,桌面照旧 100。翻旧仍然走「加载更旧消息」的游标,
+ * 步长跟着这套走(不然翻一页又拉回 12MB)。 */
+const MSG_PAGE_WIDE = 100;
+const MSG_PAGE_NARROW = 30;
+
+function msgPageSize() {
+  return document.documentElement.classList.contains('narrow') ? MSG_PAGE_NARROW : MSG_PAGE_WIDE;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function loadMessages(opts) {
@@ -1700,7 +1711,7 @@ async function loadMessages(opts) {
   // 带游标时【不能】再带 order:服务端会 400(实测 `Cursor cannot be combined with order`)
   // —— 方向本来就编在游标里(游标是个 base64 的 {id, order, direction})。
   // 原来两样一起发,「加载更旧消息」每次都被打回,点了像没反应(api() 抛出 → 静默 catch)。
-  const q = new URLSearchParams({ limit: '100' });
+  const q = new URLSearchParams({ limit: String(msgPageSize()) });
   if (opts.older) {
     if (!store.msgOlderCursor) return;
     q.set('cursor', store.msgOlderCursor);
