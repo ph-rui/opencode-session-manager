@@ -1537,6 +1537,50 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.30 追加：Tokens 块照 TUI 的 TurnTokenUsage
+
+**起因**：用户「一切往 TUI 的方向靠拢」，四条默认里的第②条 —— 做 Tokens 块、默认收起，`.meta` 里那份 tokens 并进去。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/routes/session/index.tsx:1605` 的 `TurnTokenUsage` +
+`packages/tui/src/routes/session/rows.ts:343` 的 `reduceSessionRows`）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 块挂在 **轮**（turn）上，不是单条消息：`turn-usage` 行的 `messageIDs` 是这一轮所有带用量的助手步 | `rows.ts:358-372` 的 `flushTurn` |
+| 收轮时机：**撞上 `idle` 消息**（有 idle 标记的会话，所以 steer 的那几段提示词不关轮，用量一直攒到 idle）；老会话（整条没有 `idle`）遇到**终步**就收 | `rows.ts:379-381` / `403-407`，注释原文「steers keep the turn open」 |
+| 终步 = `finish` 不在 `tool-calls`/`unknown` 里，或者带 `error` | `rows.ts:403` |
+| 总览（默认收起）：`Tokens: N steps · latest: X new · Y cached · Z total`；尾巴 ` · ! K likely cache bust(s)` | `1668-1684` 行 |
+| `new` = total − `cache.read`；`total` = input+output+reasoning+`cache.read`+`cache.write` | `1618-1635` 行 |
+| 展开才是逐步表：表头 `Step / New / Cached / Total`（斜体、右对齐），`finish` 为 `tool-calls` 时写 `tool-call` | `1685-1720` 行 |
+| 表里掉量另起一行：`! Likely cache bust: N fewer cached tokens than the previous step` | `1723-1727` 行 |
+| `previousCache` 是**上一轮收尾那步**的 cache；遇到**已完成**的 compaction 就作废 | `371` / `384` 行 |
+| 换模型（providerID/id/variant 任一不同）不算掉量；openai 掉 1024~2048 是分桶振动、不算 | `cacheReuseDrop`，`rows.ts:413-425` |
+| 整块挂在 config 的 `debug.turn_tokens` 上（**默认关**）；`verbosity === "verbose"` 时才在表里再列工具调用 | `53` / `1613` 行 |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 开关 | TUI 默认关这一块；**面板按拍板的默认做出来、默认收起** —— 手机上看一眼数字的诉求是真的，收起的一行不占地方 |
+| 位置 | 该轮**收尾那一步**的脚注之后（`turn-usage` 行在 TUI 里就是排在 `assistant-footer` 之后）|
+| 轮次 | `turnInfo(msgs)` 照 `flushTurn` 把整表摊平成「收尾那步 id → 这一轮」；按 `msgs` 数组引用缓存一次（`renderMessages` 每趟只造一份）|
+| 展开态 | `<details class="tokblk" data-def="0">` —— 默认收着，用户点开过的照 `syncDetailsOpen` 留住 |
+| `verbose` 那层 | **不做**（默认档是 medium）：表里不列工具调用。这也是「不加档位开关」那条默认的自然结果 |
+| `.meta` | 收工后 token 数归块，`.meta` 只留费用；**还在跑的那一步**照旧把 token 数留在 `.meta`（那时候块还没到，看着它涨），`ui-stream` 那条老断言因此照旧成立 |
+| 颜色 | 掉量那两处用琥珀（照 `text.feedback.warning`），块其余部分一律 muted；`Tokens` 那个词加粗 |
+
+**验证**：`footer-audit.js` 探针加了 Tokens 一栏。探针会话（393×894）实拍两块：
+`Tokens: 46 steps · latest: 717 new · 47,744 cached · 48,461 total · ! 1 likely cache bust`（47 行表 —— 46 步 + 那条掉量提醒，
+正好印证「steer 不关轮」：一轮里攒了 46 步）与 `Tokens: 5 steps · latest: 284 new · 49,536 cached · 49,820 total`；
+点开截图里表头 `Step / New / Cached / Total` 与每步一行都对得上
+（`/tmp/ocsm-probe/perf/footer-audit-393x894.png`）。`.msg.assistant .meta` 在窗口里计数 **0**（收工后不再重复一份）。
+
+**回归**：`smoke.sh` 新 R7 组 4 项；`ui-tools` 199 → **224**（25 项：`tokenTotal`、`cacheReuseDrop` 四条分支、
+块只印收尾那步、总览文案、默认收起、表头与每行、掉量的两处、老会话终步收轮、跑着不印块、`.meta` 前后行为、
+和为 0 的步、整轮没 tokens、单步写 `1 step`、压缩作废上一轮 cache）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
