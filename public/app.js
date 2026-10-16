@@ -2458,6 +2458,142 @@ function assistantFooterHtml(m, opts) {
   return out + '<div class="afoot">' + parts.join('<span class="afSep"> · </span>') + '</div>';
 }
 
+/* ------- Tokens 块(照 TUI 的 TurnTokenUsage,index.tsx:1605 -------
+ *
+ * TUI 在【每一轮】的收尾处(该轮最后一步的脚注之后)印一行、默认收起:
+ *   + Tokens: 2 steps · latest: 1,234 new · 52,000 cached · 53,234 total
+ * 点开是一张逐步的表 Step / New / Cached / Total;数字掉了(cache 复用变少)另起一行
+ *   ! Likely cache bust: N fewer cached tokens than the previous step
+ * 总览那行尾巴接 ` · ! K likely cache bust(s)`。`new` = total − cache.read,
+ * `total` = input+output+reasoning+cache.read+cache.write(照 TUI 的 tokenTotal)。
+ *
+ * 轮次边界照 TUI 的 reduceSessionRows / flushTurn:有 idle 标记的会话【撞上 idle 才收轮】
+ * (所以同一轮里可以夹着多条提示词 —— steer 不关轮);老会话(整条没有 idle)遇到【终步】就收
+ * (终步 = finish 不是 tool-calls/unknown,或者带 error)。还没收轮的那些步不印块。
+ * previousCache(上一轮收尾那步的 cache)照 TUI 带着走,中间遇到【已完成】的 compaction 就作废;
+ * 缓存有没有失效照 TUI 的 cacheReuseDrop(换模型不算;openai 的 1024~2048 掉量是它的分桶振动,
+ * 不算)。
+ *
+ * 这一块在 TUI 里挂在 config 的 debug.turn_tokens 上(默认关);面板按拍板的默认【做出来、
+ * 默认收起】—— 数字一直在,想看一眼点开就是。
+ */
+function tokenTotal(t) {
+  if (!t) return 0;
+  const c = t.cache || {};
+  return (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (c.read || 0) + (c.write || 0);
+}
+
+/* 照 TUI 的 hasTokenUsage(rows.ts:484):没有 tokens、或者五路加起来是 0 的步不进表 */
+function hasTokenUsage(m) {
+  return !!(m && m.type === 'assistant' && m.tokens && tokenTotal(m.tokens) > 0);
+}
+
+/* 照 TUI 的 cacheReuseDrop(rows.ts:413) */
+function cacheReuseDrop(prev, cur) {
+  if (!prev) return undefined;
+  const a = prev.model || {};
+  const b = cur.model || {};
+  if (a.providerID !== b.providerID || a.id !== b.id || a.variant !== b.variant) return undefined;
+  const drop = (prev.read || 0) - (cur.read || 0);
+  // openai 的 cache read 会在一两个 1024 的桶之间晃,不代表真丢复用
+  if (b.providerID === 'openai' && drop >= 1024 && drop <= 2048) return undefined;
+  return drop > 0 ? drop : undefined;
+}
+
+function num(x) {
+  return Number(x || 0).toLocaleString('en-US');
+}
+
+/* 整张消息表按轮摊平:closed =「收尾那步的 id → 这一轮」,open = 还没收轮的那些步。
+ * 按数组引用缓存一次(renderMessages 每趟只造一份 msgs,整趟共用)。 */
+let tuArrCache = null;
+let tuValCache = null;
+function turnInfo(msgs) {
+  if (!msgs || !msgs.length) return { closed: new Map(), open: new Set() };
+  if (tuArrCache === msgs && tuValCache) return tuValCache;
+  const legacy = !msgs.some((x) => x.type === 'idle');
+  const closed = new Map();
+  const open = new Set();
+  let cur = [];
+  let prevCache;
+  const flush = () => {
+    if (!cur.length) return;
+    const withTok = cur.filter(hasTokenUsage);
+    if (withTok.length) {
+      const lastTok = withTok[withTok.length - 1];
+      closed.set(cur[cur.length - 1].id, { steps: withTok, prevCache: prevCache });
+      prevCache = { read: ((lastTok.tokens || {}).cache || {}).read || 0, model: lastTok.model };
+    }
+    cur = [];
+  };
+  for (const m of msgs) {
+    if (m.type === 'idle') {
+      flush();
+      continue;
+    }
+    if (m.type === 'compaction' && m.status === 'completed') prevCache = undefined;
+    if (m.type !== 'assistant') continue;
+    cur.push(m);
+    const terminal = !!((m.finish && m.finish !== 'tool-calls' && m.finish !== 'unknown') || m.error);
+    if (legacy && terminal) flush();
+  }
+  for (const m of cur) if (m.tokens) open.add(m.id);
+  const val = { closed: closed, open: open };
+  tuArrCache = msgs;
+  tuValCache = val;
+  return val;
+}
+
+/* 一轮的逐步表:new / cached / total / 掉量提醒(上一趟是 TUI 在组件里现算的) */
+function turnUsageRows(seg) {
+  let prev = seg.prevCache;
+  const rows = [];
+  for (const m of seg.steps) {
+    const t = m.tokens || {};
+    const cached = (t.cache || {}).read || 0;
+    const total = tokenTotal(t);
+    const cur = { read: cached, model: m.model };
+    const drop = cacheReuseDrop(prev, cur);
+    prev = cur;
+    rows.push({
+      finish: m.finish === 'tool-calls' ? 'tool-call' : m.finish || 'unknown',
+      newTokens: total - cached,
+      cached: cached,
+      total: total,
+      drop: drop,
+    });
+  }
+  return rows;
+}
+
+function tokenBlockHtml(seg) {
+  const rows = turnUsageRows(seg);
+  if (!rows.length) return '';
+  const latest = rows[rows.length - 1];
+  const busts = rows.filter((r) => r.drop !== undefined).length;
+  const n = rows.length;
+  let html =
+    '<details class="tokblk" data-def="0"><summary>' +
+    '<span class="tokWord">Tokens</span><span class="tokSum">: ' + n + ' ' + (n === 1 ? 'step' : 'steps') +
+    ' · latest: ' + num(latest.newTokens) + ' new · ' + num(latest.cached) + ' cached · ' +
+    num(latest.total) + ' total</span>' +
+    (busts > 0
+      ? '<span class="tokBust"> · ! ' + busts + ' likely cache ' + (busts === 1 ? 'bust' : 'busts') + '</span>'
+      : '') +
+    '</summary><table class="toktab"><thead><tr><th>Step</th><th>New</th><th>Cached</th><th>Total</th></tr></thead><tbody>';
+  for (const r of rows) {
+    html +=
+      '<tr><td>' + esc(r.finish) + '</td><td>' + num(r.newTokens) + '</td><td>' + num(r.cached) + '</td><td>' +
+      num(r.total) + '</td></tr>';
+    if (r.drop !== undefined) {
+      html +=
+        '<tr class="tokDrop"><td colspan="4">! Likely cache bust: ' + num(r.drop) +
+        ' fewer cached tokens than the previous step</td></tr>';
+    }
+  }
+  return html + '</tbody></table></details>';
+}
+
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -2542,14 +2678,17 @@ function renderMessage(m, opts) {
         html += toolHtml(p);
       }
     }
-    if (m.tokens) {
-      html +=
-        '<div class="meta">' + esc(fmtTokens(m.tokens)) + ' tokens' +
-        (m.cost ? ' · ' + esc(fmtCost(m.cost)) : '') +
-        (m.live ? ' · 流式中' : '') +
-        '</div>';
-    }
+    // 收工后这一轮的数字进了下面那个 Tokens 块,.meta 只留费用(不再重复一份);
+    // 还在跑的那一步照旧把 token 数留在 .meta 里 —— 那时候块还没到,看着它涨。
+    const tu = opts.msgs ? turnInfo(opts.msgs) : null;
+    const bits = [];
+    if (m.tokens && (m.live || !tu || tu.open.has(m.id))) bits.push(fmtTokens(m.tokens) + ' tokens');
+    if (m.cost) bits.push(fmtCost(m.cost));
+    if (m.live) bits.push('流式中');
+    if (bits.length) html += '<div class="meta">' + esc(bits.join(' · ')) + '</div>';
     html += assistantFooterHtml(m, opts);
+    // Tokens 块排在脚注之后(照 TUI:那是 turn-usage 行,收工那一步才印)
+    if (tu && tu.closed.has(m.id)) html += tokenBlockHtml(tu.closed.get(m.id));
     el.innerHTML = html;
     return el;
   }

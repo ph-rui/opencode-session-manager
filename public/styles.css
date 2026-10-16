@@ -373,7 +373,6 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 .ref { flex: none; padding: 0 6px; border-radius: 3px; border: 1px solid var(--border); font-size: 0.88em; }
 .ref-agent { color: var(--accent); border-color: #bcd9ef; background: #f2f8fd; }
-.ref-skill { color: #7a5c14; border-color: #e6d9a8; background: #fdf9ec; }
 /* 徽标 + 名字两格(照 TUI 的 UserMessage:徽标那格加粗反白、名字那格稍暗)。 */
 .rBadge {
   display: inline-block;
@@ -394,6 +393,22 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 }
 /* skill 那颗:外层不再自带边框/底色(照 TUI,颜色由里面两格给) */
 .ref-skill { border-color: transparent; background: transparent; padding: 0; }
+
+/* Tokens 块(照 TUI 的 TurnTokenUsage,见 §8.30):一行总览 + 一张逐步的表,默认收起。
+   行头照 TUI 是加粗的 Tokens,后面接「N steps · latest: … new · … cached · … total」,
+   数字掉了那行是琥珀色;表里数字用等宽数字对齐(终端里是右对齐的列)。 */
+.tokblk { margin-top: 4px; color: var(--muted); font-size: 0.82em; }
+.tokblk > summary { cursor: pointer; list-style: none; }
+.tokblk > summary::-webkit-details-marker { display: none; }
+.tokblk > summary::before { content: '▸ '; }
+.tokblk[open] > summary::before { content: '▾ '; }
+.tokWord { font-weight: 700; }
+.tokBust { color: #b8860b; }
+.toktab { margin: 4px 0 0 1em; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.toktab th, .toktab td { padding: 0 12px 0 0; font-weight: 400; text-align: right; }
+.toktab th:first-child, .toktab td:first-child { text-align: left; padding-left: 0; }
+.toktab thead th { color: #a9a9a9; font-style: italic; }
+.toktab tr.tokDrop td { color: #b8860b; text-align: left; }
 
 /* 用户消息里带的附件(H 组 6):非图片一行一条,图片直接给缩略图 */
 .atts { display: flex; flex-direction: column; gap: 4px; margin-top: 5px; }

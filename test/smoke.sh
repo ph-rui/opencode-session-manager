@@ -1504,6 +1504,30 @@ else
   echo "FAIL: skill 那颗还是自带黄底框"; fail=$((fail + 1))
 fi
 
+# ---- R7 组:Tokens 块(照 TUI 的 TurnTokenUsage,§8.30)----
+if has "$APPJS" 'function tokenBlockHtml(seg)' && has "$APPJS" "' · latest: '" &&
+   has "$APPJS" "' likely cache '" && has "$APPJS" 'function tokenTotal(t)'; then
+  echo "PASS: Tokens 块照 TUI 印「N steps · latest: new · cached · total」+ 缓存失效提醒"; pass=$((pass + 1))
+else
+  echo "FAIL: Tokens 块的文案/格子跟 TUI 对不上"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function turnInfo(msgs)' && has "$APPJS" "if (m.type === 'idle') {" &&
+   has "$APPJS" "if (legacy && terminal) flush();" && has "$APPJS" 'function cacheReuseDrop(prev, cur)'; then
+  echo "PASS: 轮次边界照 TUI 的 flushTurn(idle 收 / 老会话终步收)+ cacheReuseDrop"; pass=$((pass + 1))
+else
+  echo "FAIL: 轮次边界或缓存失效的判据没照 TUI"; fail=$((fail + 1))
+fi
+if has "$CSS" '.tokblk {' && has "$CSS" '.tokWord {' && has "$CSS" '.toktab ' && has "$CSS" '.tokBust {'; then
+  echo "PASS: Tokens 块的样式在(总览加粗、表、掉量那行琥珀)"; pass=$((pass + 1))
+else
+  echo "FAIL: Tokens 块的样式缺"; fail=$((fail + 1))
+fi
+if ! has "$APPJS" "'<div class=\"meta\">' + esc(fmtTokens(m.tokens)) + ' tokens'"; then
+  echo "PASS: .meta 不再无条件重复一份 token 数(收工后归 Tokens 块)"; pass=$((pass + 1))
+else
+  echo "FAIL: .meta 还是自己印一份 tokens"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

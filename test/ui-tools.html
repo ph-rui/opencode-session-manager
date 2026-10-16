@@ -768,6 +768,111 @@
         afTxt(afMsg({ agent: 'sisyphus - ultraworker' }), [afU]).indexOf('Sisyphus - Ultraworker') === 0,
         afTxt(afMsg({ agent: 'sisyphus - ultraworker' }), [afU]));
 
+      /* ---------------- Tokens 块(照 TUI 的 TurnTokenUsage,§8.30) ---------------- */
+      function tm(id, tokens, extra) {
+        return Object.assign({ id: id, type: 'assistant', agent: 'build',
+          model: { id: 'm1', providerID: 'p1' },
+          time: { created: 0, completed: 0 }, finish: 'tool-calls', tokens: tokens, content: [] }, extra || {});
+      }
+      function tBlk(msgs, index) {
+        return renderMessage(msgs[index], { msgs: msgs, index: index }).querySelector('.tokblk');
+      }
+      function tHead(msgs, index) {
+        var b = tBlk(msgs, index);
+        return b ? b.querySelector('summary').textContent : '';
+      }
+      T('tokenTotal 照 TUI 五路求和(input+output+reasoning+cache.read+cache.write)',
+        tokenTotal({ input: 1, output: 2, reasoning: 3, cache: { read: 4, write: 5 } }) === 15);
+      T('cacheReuseDrop:没有上一趟就不提醒', cacheReuseDrop(undefined, { read: 1 }) === undefined);
+      T('cacheReuseDrop:换了模型不算(providerID / id / variant 任一不同)',
+        cacheReuseDrop({ read: 500, model: { providerID: 'p1', id: 'm1' } }, { read: 100, model: { providerID: 'p2', id: 'm1' } }) === undefined &&
+        cacheReuseDrop({ read: 500, model: { providerID: 'p1', id: 'm1' } }, { read: 100, model: { providerID: 'p1', id: 'm2' } }) === undefined &&
+        cacheReuseDrop({ read: 500, model: { providerID: 'p1', id: 'm1', variant: 'a' } },
+          { read: 100, model: { providerID: 'p1', id: 'm1', variant: 'b' } }) === undefined);
+      T('cacheReuseDrop:掉了才提醒,掉的数就是上一趟减这一趟',
+        cacheReuseDrop({ read: 500, model: { providerID: 'p1', id: 'm1' } }, { read: 200, model: { providerID: 'p1', id: 'm1' } }) === 300 &&
+        cacheReuseDrop({ read: 200, model: { providerID: 'p1', id: 'm1' } }, { read: 500, model: { providerID: 'p1', id: 'm1' } }) === undefined);
+      T('cacheReuseDrop:openai 掉 1024~2048 是分桶振动,不算丢复用',
+        cacheReuseDrop({ read: 5000, model: { providerID: 'openai', id: 'gpt' } },
+          { read: 3500, model: { providerID: 'openai', id: 'gpt' } }) === undefined &&
+        cacheReuseDrop({ read: 5000, model: { providerID: 'openai', id: 'gpt' } },
+          { read: 2500, model: { providerID: 'openai', id: 'gpt' } }) === 2500);
+
+      /* 一轮两步(有 idle 标记:撞上 idle 才收轮) */
+      var tkU = { id: 'tku', type: 'user', text: 'go' };
+      var tkA = tm('tka', { input: 1000, output: 500, reasoning: 100, cache: { read: 2000, write: 300 } });
+      var tkB = tm('tkb', { input: 1000, output: 300, reasoning: 0, cache: { read: 2000, write: 0 } }, { finish: 'stop' });
+      var tkIdle = { id: 'tki', type: 'idle' };
+      var tkMsgs = [tkU, tkA, tkB, tkIdle];
+      T('Tokens 块只印在本轮的收尾那一步上(第一步没有)',
+        tBlk(tkMsgs, 1) === null && !!tBlk(tkMsgs, 2));
+      T('总览照 TUI:N steps · latest: new · cached · total(new = total − cache.read)',
+        tHead(tkMsgs, 2) === 'Tokens: 2 steps · latest: 1,300 new · 2,000 cached · 3,300 total', tHead(tkMsgs, 2));
+      T('Tokens 块默认收起(data-def="0")',
+        tBlk(tkMsgs, 2).getAttribute('data-def') === '0' && !tBlk(tkMsgs, 2).open);
+      T('逐步表的表头是 Step / New / Cached / Total',
+        [].map.call(tBlk(tkMsgs, 2).querySelectorAll('thead th'), function (th) { return th.textContent; }).join(',') ===
+        'Step,New,Cached,Total');
+      T('逐步表每步一行,finish 照 TUI 把 tool-calls 写成 tool-call',
+        [].map.call(tBlk(tkMsgs, 2).querySelectorAll('tbody tr td:first-child'), function (td) { return td.textContent; }).join(',') ===
+        'tool-call,stop');
+      T('表里的数就是 new / cached / total',
+        [].map.call(tBlk(tkMsgs, 2).querySelectorAll('tbody tr:nth-child(1) td'), function (td) { return td.textContent; }).join('|') ===
+        'tool-call|1,900|2,000|3,900');
+      T('这一轮没掉缓存就不提缓存失效', tBlk(tkMsgs, 2).querySelector('.tokBust') === null);
+
+      /* 缓存掉了:总览尾巴 + 表里那行 */
+      var cbA = tm('cba', { input: 0, output: 0, reasoning: 0, cache: { read: 5000, write: 0 } });
+      var cbB = tm('cbb', { input: 0, output: 0, reasoning: 0, cache: { read: 3000, write: 0 } }, { finish: 'stop' });
+      var cbMsgs = [tkU, cbA, cbB, tkIdle];
+      T('缓存掉了:总览尾巴接「! K likely cache bust(s)」',
+        tHead(cbMsgs, 2).indexOf('· ! 1 likely cache bust') > 0, tHead(cbMsgs, 2));
+      T('缓存掉了:表里另起一行写清掉了多少',
+        tBlk(cbMsgs, 2).querySelector('.tokDrop').textContent ===
+        '! Likely cache bust: 2,000 fewer cached tokens than the previous step',
+        tBlk(cbMsgs, 2).querySelector('.tokDrop') && tBlk(cbMsgs, 2).querySelector('.tokDrop').textContent);
+      T('掉两处就是 busts(复数)', (function () {
+        var c1 = tm('d1', { input: 0, output: 0, reasoning: 0, cache: { read: 9000, write: 0 } });
+        var c2 = tm('d2', { input: 0, output: 0, reasoning: 0, cache: { read: 5000, write: 0 } });
+        var c3 = tm('d3', { input: 0, output: 0, reasoning: 0, cache: { read: 1000, write: 0 } }, { finish: 'stop' });
+        return tHead([tkU, c1, c2, c3, tkIdle], 3).indexOf('· ! 2 likely cache busts') > 0;
+      })());
+
+      /* 老会话(整条没有 idle)遇到终步就收轮;还在跑的那一轮不印块 */
+      T('老会话没有 idle 标记:遇到终步就收轮(终步 = finish 不是 tool-calls/unknown)',
+        tBlk([tkU, tkA, tkB], 1) === null && !!tBlk([tkU, tkA, tkB], 2));
+      T('还在跑的那一轮(终步还没到)不印块', tBlk([tkU, tm('r1', { input: 1, output: 1 })], 1) === null);
+      T('还没收轮的那一步:token 数留在 .meta 里(块还没到)',
+        renderMessage(tm('r2', { input: 10, output: 32 }, { live: true }), { msgs: [tkU, tm('r2', { input: 10, output: 32 }, { live: true })], index: 1 })
+          .querySelector('.meta').textContent.indexOf('42 tokens') >= 0);
+      T('收轮后 .meta 不再重复一份 token 数(数进了块)',
+        renderMessage(tkB, { msgs: tkMsgs, index: 2 }).querySelector('.meta') === null);
+      T('收轮后 .meta 只留费用',
+        (function () {
+          var withCost = [tkU, tm('wc', { input: 10, output: 5 }, { finish: 'stop', cost: 12.34 })];
+          return renderMessage(withCost[1], { msgs: withCost, index: 1 }).querySelector('.meta').textContent === '$12.34';
+        })());
+      T('五路加起来是 0 的步不进表,也不为它单独开一块',
+        (function () {
+          var z = [tkU, tm('z1', { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }), tm('z2', { input: 5, output: 5 }, { finish: 'stop' }), tkIdle];
+          var b = tBlk(z, 2);
+          return b !== null && b.querySelectorAll('tbody tr').length === 1 &&
+            tHead(z, 2).indexOf(': 1 step ·') > 0;
+        })());
+      T('整轮都没有 tokens 就不印这一块', tBlk([tkU, tm('n1', { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, { finish: 'stop' })], 1) === null);
+      T('单步写 1 step(不是 steps)',
+        tHead([tkU, tm('s1', { input: 1, output: 1 }, { finish: 'stop' })], 1).indexOf(': 1 step ·') > 0,
+        tHead([tkU, tm('s1', { input: 1, output: 1 }, { finish: 'stop' })], 1));
+      /* 压缩完成后上一轮的 cache 作废(照 TUI:compaction completed 就清 previousTurnCache) */
+      var pcA = tm('pca', { input: 0, output: 0, reasoning: 0, cache: { read: 5000, write: 0 } }, { finish: 'stop' });
+      var pcB = tm('pcb', { input: 0, output: 0, reasoning: 0, cache: { read: 3000, write: 0 } }, { finish: 'stop' });
+      var pcU2 = { id: 'pcu2', type: 'user', text: 'again' };
+      T('跨轮也带上一轮的 cache:掉量照样提醒',
+        tHead([tkU, pcA, tkIdle, pcU2, pcB, tkIdle], 4).indexOf('likely cache bust') > 0);
+      T('中间夹了已完成(completed)的压缩,上一轮的 cache 作废、不再提醒',
+        tHead([tkU, pcA, tkIdle, { id: 'pcc', type: 'compaction', status: 'completed' }, pcU2, pcB, tkIdle], 5)
+          .indexOf('cache bust') < 0);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));
