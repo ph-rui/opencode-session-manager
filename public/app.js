@@ -14,6 +14,10 @@ const store = {
   msgOlderCursor: null,
   pending: false,
   running: false,
+  // 消息区「贴着底没有」的缓存。atBottom() 读 scrollHeight,文档一脏就强制整篇重排版
+  // (实测 100 条消息 / 7800 节点:干净时 0.95ms,脏了 23~29ms)。滚动事件、每次
+  // renderMessages 收尾都会刷新它,增量重绘只认这个缓存,不再自己去读。
+  nearBottom: false,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
   active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
   compacting: new Set(), // sessionID:正在压缩上下文(SSE 的 session.compaction.started/.ended 说了算)
@@ -207,6 +211,41 @@ function compactionBody(m, sid) {
 
 let compactPaintedAt = 0;
 
+/* 压缩正文的【局部】重绘 —— 不整表 renderMessages()。
+ *
+ * 用户报「压缩时不崩了但还卡,输出卡,怀疑进度条一动就卡」。先量了再改:
+ *   · 进度条一帧 drawProgressFrame() = 0.007ms,一格都算不上 —— 卡的不是它;
+ *   · 一次 renderMessages() 在压缩期 = 70~76ms,其中 ~50ms 是【强制同步排版】:
+ *     重建压缩块把 DOM 弄脏,紧接着的 atBottom()/scrollHeight 读就会把 7800 个节点
+ *     整篇重排(干净时 atBottom 只要 0.95ms,脏了 23~29ms);
+ *   · 节流到 ~8 次/秒 × 6~8 次 = 压缩那几秒里三四百毫秒挤成长任务,进度条那 40ms
+ *     一帧自然全被顶掉 —— 看着就像「进度条一动就卡」。
+ *
+ * 正文只有压缩块这一处在长,照 paintLiveText() 的做法只换那一个正文节点就行:
+ * 不重建消息、不重算全表签名。滚动跟随用缓存口径(store.nearBottom),不主动读布局。
+ * 结构还没建出来(空正文时块里没有 <details>)才返回 false,让调用方退回整表建一次。 */
+function paintCompactBody(sid) {
+  const box = $('#messages');
+  if (!box) return false;
+  let m = null;
+  for (const v of store.messages.values()) {
+    if (v && v.type === 'compaction' && v.status === 'running') { m = v; break; }
+  }
+  if (!m) return false;
+  const rec = msgEls.get(m.id);
+  if (!rec || !rec.el) return false;
+  const host = rec.el.querySelector('details.compact > .content');
+  if (!host) return false;
+  const body = compactionBody(m, sid);
+  if (host.dataset.cbodyLen === String(body.length)) return true; // 没长,别白刷
+  host.innerHTML = md(body);
+  host.dataset.cbodyLen = String(body.length);
+  // 只有本来就贴着底时才跟一下 —— 贴底时这一次读已经在上面那次 innerHTML 之后欠下了,
+  // 省不掉;不贴底就一次布局都不读。
+  if (store.nearBottom) box.scrollTop = box.scrollHeight;
+  return true;
+}
+
 /* 正文变一次就重画一次的话,压缩那几秒里等于自己打自己(实测一份摘要 140+ 条 delta,
  * 5ms 一条)—— 节流到 ~8 次/秒;只在用户正看着这个会话时才画(别的会话先攒着,切过去就看得见)。
  * 前沿节流:不到 120ms 的后续片段等下一拍(或 .ended 那一下整段收尾)一起上屏。 */
@@ -215,7 +254,7 @@ function paintCompactStream(sid) {
   const now = Date.now();
   if (now - compactPaintedAt < 120) return;
   compactPaintedAt = now;
-  renderMessages();
+  if (!paintCompactBody(sid)) renderMessages(); // 结构还没建出来 → 整表建一次,之后都走局部
 }
 
 async function loadActive() {
@@ -1264,12 +1303,15 @@ function atBottom(box) {
   return box.scrollHeight - box.scrollTop - box.clientHeight < BOTTOM_SLACK;
 }
 
-function updateJumpLatest() {
+/* 顺带刷新 store.nearBottom(增量重绘的唯一口径)。
+ * atB 是调用方已经算好的「贴不贴底」;滚动事件会把 Event 对象塞进来,所以只认 boolean。 */
+function updateJumpLatest(atB) {
   const box = $('#messages');
+  if (box) store.nearBottom = typeof atB === 'boolean' ? atB : atBottom(box);
   if (!jumpBtn || !box) return; // 老测试页没有这个按钮 —— 什么都不做
   if (jumpBtn.parentElement !== box) box.appendChild(jumpBtn); // 被清空过 → 搬回末尾
   // 没选中会话、或者已经停在底部 → 收起来(它正是「不在底部」时才该出现的东西)
-  jumpBtn.hidden = !store.selected || atBottom(box);
+  jumpBtn.hidden = !store.selected || store.nearBottom;
 }
 
 function jumpToLatest() {
@@ -2142,15 +2184,23 @@ function renderMessages() {
     prev = rec.el;
   }
 
+  // 收尾时「贴不贴底」其实已经能定下来,直接喂给 updateJumpLatest() —— 省掉它自己再读一次
+  // 布局。那次读正好落在刚改完 DOM 之后,是整个 renderMessages() 里最贵的一步
+  // (脏树 atBottom 实测 23~29ms)。只有「还原了滚动锚点」这种位置不确定的情况才量一次。
+  let atB = null;
   if (pending && msgs.length) {
     store.restoreScroll = null; // 消费掉:只在这次渲染还原一次
     applyScrollAnchor(pending);
+    atB = atBottom(box);
   } else if (nearBottom) {
     box.scrollTop = box.scrollHeight;
+    atB = true;
+  } else if (!pending) {
+    atB = false; // 没锚点要还原、也没跟底 → 就是不在底部
   }
   $('#older').hidden = !store.msgOlderCursor;
   // 内容高度刚变过,底部判定跟着变 —— 往上翻着的时候新内容进来,这里就把按钮露出来
-  updateJumpLatest();
+  updateJumpLatest(atB);
 
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
@@ -4537,7 +4587,9 @@ function paintLiveDelta() {
   const sid = store.selected;
   if (!sid) return;
   const box = $('#messages');
-  const nearBottom = atBottom(box);
+  // 用缓存的贴底判定,别每个 token delta 都去读一次 scrollHeight(文档一脏就是整篇重排)。
+  // 滚动事件会把缓存刷掉,用户往上翻了照样立刻停止跟随。
+  const nearBottom = store.nearBottom;
   let changed = false;
   let needFull = false;
   for (const [id, L] of store.live) {
@@ -4555,7 +4607,7 @@ function paintLiveDelta() {
   }
   if (changed) {
     if (nearBottom) box.scrollTop = box.scrollHeight;
-    updateJumpLatest(); // 增量把内容顶长了,按钮的显隐要跟着重算
+    updateJumpLatest(nearBottom); // 增量把内容顶长了,按钮的显隐要跟着重算(位置已知道,不再量)
     updateChatStatus();
   }
 }

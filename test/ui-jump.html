@@ -209,6 +209,20 @@
       T('就在底部时新内容进来 → 自动跟随(仍在底部)', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
       T('自动跟随时按钮不冒出来', btn.hidden === true);
 
+      /* 增量重绘(paintLiveDelta / paintCompactBody)只认 store.nearBottom 缓存,不再每个
+       * token delta 读一次 scrollHeight —— 文档刚被改脏时那次读是整篇强制重排(实测
+       * 7800 节点 23~29ms,干净时 0.95ms)。缓存的唯一写点就是 updateJumpLatest()。 */
+      updateJumpLatest(false);
+      T('updateJumpLatest(false) → 缓存记「不在底部」,按钮露出来',
+        store.nearBottom === false && btn.hidden === false);
+      updateJumpLatest(true);
+      T('updateJumpLatest(true) → 缓存记「在底部」,按钮收起来',
+        store.nearBottom === true && btn.hidden === true);
+      box.scrollTop = 0;
+      updateJumpLatest(new Event('scroll'));
+      T('滚动监听把 Event 塞进来不会被当成「在底部」(只认 boolean,其余自己量)',
+        store.nearBottom === false && btn.hidden === false, store.nearBottom + '/' + btn.hidden);
+
       /* ============ 5. 点它 / End 键 ============ */
       box.scrollTop = Math.round(maxTop() / 2);
       await tick();

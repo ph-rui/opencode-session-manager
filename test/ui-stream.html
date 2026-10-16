@@ -666,6 +666,60 @@
       q('#messages').innerHTML = '';
       renderMessages();
 
+      /* ---------------- 压缩正文走【局部】重绘(压缩时不再整篇重排版) ----------------
+       * 用户报「压缩时不崩了但还是卡,输出卡」。实测:一次整表 renderMessages() 在压缩期
+       * 70~76ms —— 重建压缩块把文档弄脏,紧跟着的 atBottom()/scrollHeight 读就把 7800 个
+       * 节点整篇重排(干净时 atBottom 只要 0.95ms);节流到 8 次/秒也是三四百毫秒的长任务,
+       * 进度条那 40ms 一帧全被顶掉。正文只长在压缩块这一处,就只换那一个正文节点:
+       * 消息元素必须原地不动(建了又换 = 又整篇重排一次)。 */
+      store.live.clear();
+      store.active.clear();
+      store.compacting.clear();
+      store.compactText.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      store.messages.set('cp_local', {
+        id: 'cp_local', type: 'compaction', status: 'running', time: { created: 400 },
+      });
+      store.compactText.set('ses_a', '## 概要\n- 甲\n');
+      renderMessages();
+      var cpLocal = q('#messages .msg.compaction');
+      T('(前置)进行中的压缩块带着正文', !!cpLocal && !!cpLocal.querySelector('details.compact .content'));
+
+      store.compactText.set('ses_a', '## 概要\n- 甲\n- 乙\n');
+      var rmLocal = 0;
+      var origRML = window.renderMessages;
+      window.renderMessages = function () { rmLocal++; return origRML.apply(this, arguments); };
+      var okLocal = paintCompactBody('ses_a');
+      window.renderMessages = origRML;
+      T('局部重绘返回 true(有正文节点,不用退回整表)', okLocal === true);
+      T('局部重绘不触发整表 renderMessages()(压缩期不再整篇重排版)', rmLocal === 0, rmLocal);
+      T('压缩块元素原地不动(重建一次就又是一次整篇重排)', q('#messages .msg.compaction') === cpLocal);
+      T('新攒的那段正文真印上去了',
+        cpLocal.querySelector('details.compact .content').textContent.indexOf('乙') >= 0,
+        cpLocal.textContent.slice(0, 60));
+
+      /* 正文从无到有(压缩刚开跑、块里还没有 <details>)→ 局部重绘必须返回 false,
+       * 让调用方退回整表建一次;结构建出来之后才轮到局部接手。 */
+      store.messages.clear();
+      msgEls.clear();
+      store.compactText.clear();
+      q('#messages').innerHTML = '';
+      store.messages.set('cp_empty', {
+        id: 'cp_empty', type: 'compaction', status: 'running', time: { created: 500 },
+      });
+      renderMessages();
+      T('(前置)空正文时块里没有摘要块', !q('#messages .msg.compaction details.compact'));
+      T('正文从无到有时局部重绘返回 false(让整表把结构建出来)', paintCompactBody('ses_a') === false);
+      store.compactText.set('ses_a', '## 概要\n- 丙\n');
+      renderMessages();
+      T('(前置)整表把摘要结构建出来了', !!q('#messages .msg.compaction details.compact .content'));
+      store.compactText.set('ses_a', '## 概要\n- 丙\n- 丁\n');
+      T('结构在之后局部重绘接手(不再整表)', paintCompactBody('ses_a') === true);
+      T('接手时新正文也印上了', q('#messages .msg.compaction').textContent.indexOf('丁') >= 0);
+
       /* ---------------- 上下文用量(TUI 提示栏的 155.6K (78%)) ----------------
        * 用户报的「网页版不显示 155.6K (78%)」:TUI 提示栏右边那个数面板一直没画。
        * 算法照 TUI 现算(见 app.js contextUsage 顶上的源码原文),这里逐条锁:取最后

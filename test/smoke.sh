@@ -647,6 +647,14 @@ if has "$APPJS" 'function paintCompactStream(' && has "$APPJS" 'function compact
 else
   echo "FAIL: app.js 缺 paintCompactStream()/compactionBody()"; fail=$((fail + 1))
 fi
+# 压缩正文必须走【局部】重绘。每条 delta 走整表 renderMessages() 会把压缩块重建 → 文档变脏,
+# 紧跟着的 atBottom()/scrollHeight 读就把整篇 7800 个节点重排(实测 70~76ms/次);节流到
+# 8 次/秒也是三四百毫秒的长任务,进度条 40ms 一帧全被顶掉 —— 用户看到的「进度条一动就卡」。
+if has "$APPJS" 'function paintCompactBody(' && has "$APPJS" 'if (!paintCompactBody(sid)) renderMessages();'; then
+  echo "PASS: 压缩正文只重画那一个正文节点,结构没建出来才退回整表"; pass=$((pass + 1))
+else
+  echo "FAIL: 压缩正文还在每条 delta 走整表 renderMessages()(会强制整篇重排版)"; fail=$((fail + 1))
+fi
 # 显示与否仍然只由 updateChatStatus() 一处决定:它调 paintProgressBar(),
 # 而 paintProgressBar 在 app.js 里只应该出现两次(定义 1 次 + 被调 1 次)。
 CHATSTATUS_FN=$(printf '%s' "$APPJS" | awk '/^function updateChatStatus\(\)/{f=1} f{print} f&&/^}/{exit}')
@@ -978,21 +986,29 @@ else
 fi
 RENDER_FN_O=$(printf '%s' "$APPJS" | awk '/^function renderMessages\(\)/{f=1} f{print} f&&/^\}$/{exit}')
 DELTA_FN_O=$(printf '%s' "$APPJS" | awk '/^function paintLiveDelta\(/{f=1} f{print} f&&/^\}$/{exit}')
-if has "$RENDER_FN_O" 'atBottom(box)' && has "$DELTA_FN_O" 'atBottom(box)'; then
-  echo "PASS: 自动跟随与按钮共用 atBottom()(不再各写一个 80)"; pass=$((pass + 1))
+# 整表 renderMessages() 里读一次 atBottom()(该量还得量);增量重绘(paintLiveDelta/
+# paintCompactBody)只读 store.nearBottom —— 文档刚改完就去读 scrollHeight 会把 7800
+# 个节点整篇重排(实测脏树 23~29ms,干净 0.95ms),每个 token delta 都摊一次太贵。
+if has "$RENDER_FN_O" 'atBottom(box)' && has "$DELTA_FN_O" 'store.nearBottom'; then
+  echo "PASS: 自动跟随与按钮共用 atBottom()(增量重绘只读缓存,不再各写一个 80)"; pass=$((pass + 1))
 else
   echo "FAIL: 自动跟随或按钮没走 atBottom()"; fail=$((fail + 1))
 fi
-if has "$RENDER_FN_O" 'updateJumpLatest();' && has "$DELTA_FN_O" 'updateJumpLatest();'; then
+if has "$RENDER_FN_O" 'updateJumpLatest(' && has "$DELTA_FN_O" 'updateJumpLatest('; then
   echo "PASS: 内容变长之后按钮的显隐会跟着重算"; pass=$((pass + 1))
 else
   echo "FAIL: 渲染之后没重算按钮"; fail=$((fail + 1))
 fi
-UPD_FN_O=$(printf '%s' "$APPJS" | awk '/^function updateJumpLatest\(\)/{f=1} f{print} f&&/^\}$/{exit}')
+UPD_FN_O=$(printf '%s' "$APPJS" | awk '/^function updateJumpLatest\(/{f=1} f{print} f&&/^\}$/{exit}')
 if has "$UPD_FN_O" 'jumpBtn.parentElement !== box'; then
   echo "PASS: #messages 被清空(切会话/取消选中)后按钮自己搬回来"; pass=$((pass + 1))
 else
   echo "FAIL: 按钮被 innerHTML 抹掉后没人搬回来"; fail=$((fail + 1))
+fi
+if has "$UPD_FN_O" 'store.nearBottom ='; then
+  echo "PASS: nearBottom 缓存只有 updateJumpLatest() 一处写(滚动/每次渲染都汇到这里)"; pass=$((pass + 1))
+else
+  echo "FAIL: nearBottom 缓存不是集中在 updateJumpLatest() 里刷"; fail=$((fail + 1))
 fi
 KEY_FN_O=$(printf '%s' "$APPJS" | awk '/^function setupTuiKeys\(\)/{f=1} f{print} f&&/^\}$/{exit}')
 if has "$KEY_FN_O" "e.key === 'End'" && has "$KEY_FN_O" 'inField'; then
