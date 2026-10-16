@@ -427,11 +427,11 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 218（§8.20 之后）|
+| `smoke.sh` | 220（§8.21 之后）|
 | `netallow-run.js`（新）| 74 |
 | `ui-layout` / `ui-tools` / `ui-asks` | 162 / 110 / 57 |
-| `ui-controls` / `ui-capabilities` / `ui-stream` | 90 / 71 / 219 |
-| `ui-attach` / `ui-commands` / `ui-picks` | 132 / 166 / 87 |
+| `ui-controls` / `ui-capabilities` / `ui-stream` | 90 / 71 / 236 |
+| `ui-attach` / `ui-commands` / `ui-picks` | 132 / 171 / 87 |
 | `ui-mobile`（新）| 160 |
 | `ui-composer`（新，见 §8.4）| 91 |
 | `ui-jump`（新，见 §8.6）| 47 |
@@ -961,7 +961,7 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 
 | 点 | 决定 | 理由 |
 |---|---|---|
-| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改，§8.20 补齐顺序/费用/`:分支`/`~/`/`⇧tab agents`）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，窄屏收起底板时也在，比头部更贴「看一眼」|
+| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改，§8.20 补齐顺序/费用/`:分支`/`~/`，§8.21 再补智能体·模型/`tab agents`/子会话·shell）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，窄屏收起底板时也在，比头部更贴「看一眼」|
 | 算法 | **每次现算**，不另存 | 照 TUI 的 `Us`/`XN`/`d4` 原样搬（同一份口径也喂给渲染：`currentMessages()`）|
 | 两档文案 | 全量 / 窄屏两份都写进 DOM，CSS 按 `html.narrow` 切 | 横竖屏来回转不用重画，也不用 JS 判宽度（照 TUI 的 `compact` / `full`）|
 | 模型表 | 用**该 location 的模型表**（`store.models.get(dir)`），不用全局索引 | 某个模型可能在某个目录被 `enabled:false` 关掉；TUI 用的就是 `location.model.list`。查不到就退化成只印 token 数 |
@@ -1159,19 +1159,53 @@ ctrl+p commands」。
 | 费用 | `paintContextUsage()` 里 `fmtCost(s && s.cost)`，`>0` 时接在用量后面（` · $x.xx`）；没有 tokens 只有费用时也照样露一格 |
 | 分支 | 新 `cachedBranch(dir)`：问 `/api/vcs?location[directory]=`（已走面板代理），按目录缓存（空串 = 问过、不是 git 仓库），拿到后 `paintContextUsage()` 补画一次 |
 | `~/` | `/__health` 加一个 `home: os.homedir()`（浏览器看不到本机 home），新 `abbrevHome(dir)` 照 `cm()` 缩；`store.home` 到位后补画一次 |
-| `⇧tab agents` | 新 `#agentHint`（`button`，点了 `cycleAgent()`）。TUI 绑的是 `tab`，面板 `Tab` 被补全占了、绑的是 **Shift+Tab**（键位表 §8.6 原文），所以写 `⇧tab agents` 而不是照抄 `tab agents`；手机没键盘、工具栏上就有下拉，CSS 在 `html.narrow` 下整格收起 |
+| `⇧tab agents` | 新 `#agentHint`（`button`，点了 `cycleAgent()`）。TUI 绑的是 `tab`，面板 `Tab` 被补全占了、当时绑的是 **Shift+Tab**，所以先写 `⇧tab agents`（§8.21 已按 TUI 改回 `tab agents` 并把无 Shift 的 `Tab` 也接上，见下节）；手机没键盘、工具栏上就有下拉，CSS 在 `html.narrow` 下整格收起 |
 | 深链补拉 | `selectSession()` 末尾对「不在当前列表页里」的会话补问一次 `/api/session/<id>`（新增 `refreshSessionInfo()`，**不 await**，免得改掉选会话时序），补上工具栏与提示栏要用的 `location`；只认带 `id` 的对象（服务端对不存在的会话返回 `[]`，照单全收会把真会话冲成空壳——`ui-mobile` 那套桩当场把这个坑照出来过）|
 
 **验证**（同 §8.19 的探针，真面板 + 真服务）：
 
 - 1366×900：`chatDir = /work/example-repo:main`、`ctxFull = 151.8K (76%)`、
-  `agentHint = ⇧tab agents`（`display:block`）、`ctrl+p commands` —— 顺序与 TUI 一致。
+  `agentHint = ⇧tab agents`（`display:block`，§8.21 起改成 `tab agents`）、`ctrl+p commands` —— 顺序与 TUI 一致。
 - 393×894（`html.narrow`）：`agentHint` `display:none`；`chatDir` 同上级带分支；用量走 compact 档、命令提示走 `/ 命令`。
 - `/home/user`（home 下）的会话：`chatDir = ~`（`abbrevHome` 生效；该会话不在列表首页，顺带验证了深链补拉）。
 
 **回归**：`smoke.sh` 212 → **218**（顺序四格、费用、`:分支`、`~/`（含 `/__health` 的 `home`）、
 `⇧tab agents`、深链补拉与空数组守卫、`paintContextUsage` 调用点 3 → 6）；`ui-stream` 210 → **219**
 （费用两例、分支、`~/` 四例、`⇧tab agents`）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
+### 8.21 追加：提示栏最后三格（智能体·模型 / `tab agents` / 子会话·shell）与 `showDetails`
+
+**起因**：§8.20 末尾列了四个「刻意没动」的可调点，用户回一句——「按照TUI来」。于是把 TUI 的
+`Ss`（提示栏最左那格）与 `Zc` 里数子会话/shell 的那两个 `D(()=>…)`、还有 `showDetails` 一起补齐。
+
+**查到的 TUI 事实**（`Ss` / `tc` / `Zc` / keymap）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 最左那格是 `Ss`，印 `agent · model`（还可能带 `auto` / `provider` / `· variant`）| `Ss` 调 `tc({width,agent,auto,model,provider,variant})`；`tc` 依次找「字段最少但塞得下」的候选，都塞不下就截模型名（`NP(model, …)`） |
+| 用量那格**前面**还接「正在跑的子会话 / 挂着的 shell」| `Zc`：`a()` = `session.family(sessionID)` 里 `!== sessionID && status === "running"` 的个数 → `N subagent(s)`；`s()` = `shell.list(location)` 里 `metadata.sessionID === sessionID` 的个数 → `M shell(s)`；两者 ` · ` 连，再用 ` · ` 接 `c().join(' · ')`（usage · cost）|
+| 上膛等第二下 Esc 时窄终端把用量/快捷键收掉 | `showDetails = Pe.interrupt === 0 \|\| width >= 80`；`Ss`（agent·model）与 `location` **不**受它管 |
+| `agent.cycle` 的键就是 `tab` | keymap 默认 `"agent.cycle": c("tab", …)` |
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 智能体·模型 | 新 `#chatAgent`，排在 `#chatDir` 前面（`#promptFooter` 最左），照 TUI 的顺序。取值直接用工具栏两个 `<select>` 的当前项文案（`#agentSel` / `#modelSel`，变体接 `#variantSel`，`default` 不印）。工具栏在 `#composer` 里面 —— 手机收起底板时它跟着没了，这一格是收起状态下唯一还看得见「现在是哪个智能体/模型」的地方，所以只要选中会话就常驻（窄屏 `max-width: 32%`，别把工程路径挤没） |
+| `tab agents` | 提示文案照 TUI 改成 `tab agents`；**无 Shift 的 `Tab`** 也接上 `cycleAgent()`（在输入框的键位链里排在命令面板/@ 补全/输入历史**之后**，所以那几处开着时先归它们）。Shift+Tab 照旧保留，不破坏既有键位与测试 |
+| 子会话 / shell | 新 `store.subs`（子→父；来自列表接口里带 `parentID` 的那批 + SSE 的 `session.created/updated/deleted`）与 `store.shells`（`shell.created` 记、`shell.exited`/`shell.deleted` 划）。`subagentCount()` 只数 `isRunning()` 的（照 TUI 只数 running），`shellCount()` 数这个会话名下的；两者 ` · ` 连起来接在用量**前面**。单独放一份、不塞进 `store.sessions`，免得顶栏的工程筛选漏进别的工程的子会话 |
+| `(new worktree)` | **不做**：那行不是会话提示栏的常驻元素，是「新建 worktree」对话框里的临时状态（`Re.pendingNew()` / `Re.progress()` 那两段），面板没有这个流程 |
+| `showDetails` | `paintInterruptHint()` 顺手给 `#promptFooter` 挂/摘 `.armed`；CSS **只在 `html.narrow` 下**把 `#ctxInfo` / `#agentHint` / `#cmdHint` 收起（桌面照旧）。手机上没 Esc 键、`#agentHint` 本来就在 `html.narrow` 下收着，所以这条主要在「窄桌面窗口」生效 |
+
+**验证**（探针 `footer-shot.js` 扩了 `chatAgent` 与 `arm` 两项，用法 `node footer-shot.js <sid> <宽> <高> <collapsed> <arm>`；`arm=1` 会在页面里把选中会话标成 busy 再合成一次 Esc —— 第一下只上膛、不发请求，安全）：
+
+- 1366×900：`chatAgent = Build · DeepSeek V4 Flash`（`display:block`）；上膛后用量/agent/cmd 三格仍 `block`（对应 TUI 的 `width>=80`）。
+- 393×894（`html.narrow`，底板收起）：`chatAgent` 仍 `block` —— **收起状态下也看得见智能体·模型**；上膛后 `ctxShownArmed = none`、`cmdShownArmed = none`，而 `chatDirArmed = block`（TUI 只收 usage + 快捷键，不收 location / agent·model）。
+- 收官时那行读作 `Build · DeepSee…  /work/example-repo/n…  76% ctx  / 命令`（两处都按 TUI 截断）。
+
+**回归**：`smoke.sh` 218 → **220**（`#chatAgent` 与 `.armed` 各一条，费用那条并进子会话/费用一起查）；`ui-stream` 219 → **236**（agent·模型 4 例、子会话/shell/事件 13 例）；`ui-commands` 166 → **171**（输入框里无 Shift 的 `Tab` 3 例 + `.armed` 挂/摘 2 例）；其余套件与 `e2e-*` 全 0 失败。
 
 ---
 
