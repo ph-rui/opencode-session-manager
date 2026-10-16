@@ -266,7 +266,9 @@ async function proxy(req, res, attempt) {
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) {
     const lk = k.toLowerCase();
-    if (['host', 'connection', 'content-length', 'accept-encoding', 'authorization'].includes(lk)) {
+    // expect 必须吞掉:客户端(如 curl 对 >1KB 的 POST)会带 100-continue,转发给上游后
+    // 两边都等对方的 100 → 请求永远不返回(本代理已经把体读完、自带 content-length,不需要它)。
+    if (['host', 'connection', 'content-length', 'accept-encoding', 'authorization', 'expect'].includes(lk)) {
       continue;
     }
     headers[k] = v;
