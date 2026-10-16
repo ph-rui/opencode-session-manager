@@ -598,10 +598,24 @@ if has "$CSS" '.msg.compaction' && has "$CSS" '.msg.compaction .tmark.spin'; the
 else
   echo "FAIL: styles.css 缺 .msg.compaction 的样式"; fail=$((fail + 1))
 fi
-if has "$APPJS" '<details class="compact"><summary>摘要</summary>'; then
-  echo "PASS: 压缩摘要折在 details 里(一份摘要常有几 KB,手机上别刷屏)"; pass=$((pass + 1))
+if has "$APPJS" '<details class="compact" open><summary>摘要</summary>'; then
+  echo "PASS: 压缩摘要跟着正文印出来(摊开,外层留 details 当折叠抓手 —— TUI 就是把概要原样印在块里)"; pass=$((pass + 1))
 else
-  echo "FAIL: 压缩摘要没有折起来"; fail=$((fail + 1))
+  echo "FAIL: 压缩摘要没有印出来(还是只留一个 ▸ 摘要)"; fail=$((fail + 1))
+fi
+# 概要正文是流式的(session.compaction.delta):它【不能】被当成收工信号。原来
+# `session.compaction.` 一把抓,每条 delta 都当收工 + dirty 一次重画整个左栏 ——
+# 实测一份 8 KB 摘要 140+ 条 delta(5ms 一条)触发 142 次 renderSessions,压缩那几秒
+# 面板整个假死(用户报的「网页版崩溃无响应」)。这三条锁住「三种事件分开处理」。
+if has "$APPJS" "t === 'session.compaction.delta'" && has "$APPJS" 'store.compactText'; then
+  echo "PASS: 概要正文按流式增量单独处理(攒进缓冲,不当收工)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 没有单独处理 session.compaction.delta(会退回「每条都收工+重画」)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function paintCompactStream(' && has "$APPJS" 'function compactionBody('; then
+  echo "PASS: 正文有节流重画与「摘要优先、流式兜底」的取值"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺 paintCompactStream()/compactionBody()"; fail=$((fail + 1))
 fi
 # 显示与否仍然只由 updateChatStatus() 一处决定:它调 paintProgressBar(),
 # 而 paintProgressBar 在 app.js 里只应该出现两次(定义 1 次 + 被调 1 次)。

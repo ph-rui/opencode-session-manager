@@ -547,8 +547,10 @@
         !!cpEl.querySelector('.turn-head .marker') && cpEl.querySelector('.turn-head .marker').textContent === '⏺');
       T('压缩完成后不再有 spinner', !cpEl.querySelector('.tmark.spin'));
       T('压缩完成后给出 tokens', cpEl.textContent.indexOf('15 tokens') >= 0, cpEl.textContent.slice(0, 60));
-      T('摘要折在 details 里(默认不展开 —— 一份摘要常有几 KB)',
-        !!cpEl.querySelector('details.compact') && !cpEl.querySelector('details.compact').hasAttribute('open'));
+      T('摘要跟着正文印出来(默认摊开,照 TUI —— TUI 就是把概要原样印在块里)',
+        !!cpEl.querySelector('details.compact') && cpEl.querySelector('details.compact').hasAttribute('open'));
+      T('摘要仍然留着折叠抓手(手机上想收起来时有个地方点)',
+        !!cpEl.querySelector('details.compact > summary'));
       T('摘要正文按 Markdown 渲染', !!cpEl.querySelector('details.compact .content li'));
       T('压缩完成后不算在跑', !isRunning('ses_a'));
       T('压缩完成后状态条收起来', q('#progress').hidden === true);
@@ -565,6 +567,103 @@
       T('被取消的压缩不算在跑', !isRunning('ses_a'));
       store.messages.clear();
       store.compacting.clear();
+      renderMessages();
+
+      /* ---------------- 压缩正文是流式的:边压边印,而且【不许】重画左栏 -------
+       * 用户报的两件事都在这几条里:
+       *   ① 「压缩的时候网页版崩溃无响应」—— 真服务一份 8 KB 摘要来了 140+ 条
+       *      session.compaction.delta(实测 5ms 一条)。原来 `session.compaction.` 一把抓,
+       *      每条 delta 都当「收工」+ dirty 一次 → 每条都重画整个左栏(实测 142 次),
+       *      压缩那几秒面板整个假死。
+       *   ② 「打印的概要之类的网页版也不打印」—— TUI 是边压边把正文印在块里的,
+       *      面板把这些 delta 全丢了,只等最后那条消息。 */
+      store.live.clear();
+      store.active.clear();
+      store.compacting.clear();
+      store.compactText.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      renderMessages();
+
+      var rsCalls = 0;
+      var origRS = window.renderSessions;
+      window.renderSessions = function () { rsCalls++; return origRS.apply(this, arguments); };
+
+      window.__timeouts.length = 0;
+      feed('session.compaction.started', {
+        sessionID: 'ses_a', reason: 'manual', inputID: 'msg_live1',
+      });
+      window.renderSessions = origRS;
+      T('started 按 inputID 立刻放一块「进行中」进消息流(不等对账拉取)',
+        !!store.messages.get('msg_live1') && store.messages.get('msg_live1').status === 'running');
+      T('started 重画一次左栏(压缩标记要上列表)', rsCalls === 1, rsCalls);
+      renderMessages();
+      cpEl = q('#messages .msg.compaction');
+      T('(前置)压缩块已上屏且是进行中', !!cpEl && !!cpEl.querySelector('.tmark.spin'));
+      T('(前置)还没有正文时不印空的摘要块', !cpEl.querySelector('details.compact'));
+
+      rsCalls = 0;
+      var rmCalls = 0;
+      var origRM = window.renderMessages;
+      window.renderSessions = function () { rsCalls++; return origRS.apply(this, arguments); };
+      window.renderMessages = function () { rmCalls++; return origRM.apply(this, arguments); };
+      window.__timeouts.length = 0;
+      feed('session.compaction.delta', { sessionID: 'ses_a', text: '## 概要\n' });
+      feed('session.compaction.delta', { sessionID: 'ses_a', text: '- 第一条' });
+      feed('session.compaction.delta', { sessionID: 'ses_a', text: '\n- 第二条' });
+      window.renderSessions = origRS;
+      window.renderMessages = origRM;
+      T('delta 不重画左栏(原来三条 delta 就是三次 renderSessions —— 假死的根子)',
+        rsCalls === 0, rsCalls);
+      T('delta 不把压缩标记抹掉(原来 else 一把抓,每条 delta 都算收工)',
+        store.compacting.has('ses_a') && isRunning('ses_a'));
+      T('delta 的正文一段段攒在缓冲里',
+        store.compactText.get('ses_a') === '## 概要\n- 第一条\n- 第二条',
+        JSON.stringify(store.compactText.get('ses_a')));
+      T('三条 delta 只画一次正文(节流到 ~8 次/秒,不是一条一次)',
+        rmCalls === 1, rmCalls);
+      T('delta 不排那两种对账拉取(150/1500 都不多不少各一次,和别的非流事件一样)',
+        window.__pending(150) === 3 && window.__pending(1500) === 3, window.__timeouts);
+
+      renderMessages();
+      cpEl = q('#messages .msg.compaction');
+      T('压缩中就把概要印出来了(正文按 Markdown 渲染)',
+        !!cpEl.querySelector('details.compact[open] .content li'), cpEl.textContent.slice(0, 60));
+      T('压缩中的正文是摊开的(照 TUI 边压边印,不是藏在 ▸ 后面)',
+        cpEl.querySelector('details.compact').hasAttribute('open'));
+
+      cpEl.querySelector('details.compact').removeAttribute('open'); // 用户手动折起来
+      feed('session.compaction.delta', { sessionID: 'ses_a', text: '\n- 第三条' });
+      renderMessages();
+      cpEl = q('#messages .msg.compaction');
+      T('用户折起来之后,后面来的正文不会又把它自己摊开',
+        !cpEl.querySelector('details.compact').hasAttribute('open'));
+      T('折起来不影响正文继续攒(展开还能看到新的那段)',
+        cpEl.querySelector('details.compact').textContent.indexOf('第三条') >= 0);
+
+      window.__timeouts.length = 0;
+      feed('session.compaction.ended', {
+        sessionID: 'ses_a', reason: 'manual', text: '## 概要\n- 第一条\n- 第二条\n- 第三条',
+        tokens: { input: 5, output: 7 },
+      });
+      T('ended 收工:压缩标记清掉', !store.compacting.has('ses_a'));
+      T('ended 手里那块就地收工,不用等消息列表对账',
+        store.messages.get('msg_live1').status === 'completed');
+      T('ended 顺带把载荷里的完整摘要写进消息', !!store.messages.get('msg_live1').summary);
+      renderMessages();
+      cpEl = q('#messages .msg.compaction');
+      T('收工后行首回到静态 ⏺', cpEl.querySelector('.turn-head .marker').textContent === '⏺');
+      T('收工后给出 tokens', cpEl.textContent.indexOf('12 tokens') >= 0, cpEl.textContent.slice(0, 60));
+      T('收工后正文照旧印着', cpEl.querySelector('details.compact .content'));
+      T('用户折起来的那份,收工时也照旧折着(不跟用户抢)',
+        !cpEl.querySelector('details.compact').hasAttribute('open'));
+      store.messages.clear();
+      store.compacting.clear();
+      store.compactText.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
       renderMessages();
 
       document.getElementById('results').textContent = out.join('\n');

@@ -16,7 +16,8 @@ const store = {
   running: false,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
   active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
-  compacting: new Set(), // sessionID:正在压缩上下文(SSE 的 session.compaction.* 说了算)
+  compacting: new Set(), // sessionID:正在压缩上下文(SSE 的 session.compaction.started/.ended 说了算)
+  compactText: new Map(), // sessionID -> 概要正文的流式缓冲(session.compaction.delta 一段段吐出来的)
   inbox: new Map(), // sessionID -> [Session.Inbox.Info]
   agents: new Map(), // directory -> [Agent.Info]
   models: new Map(), // directory -> [Model.Info]
@@ -169,6 +170,44 @@ function compactionRunning(sid, msgs) {
   }
   if (latest && latest.status !== 'running') store.compacting.delete(sid);
   return store.compacting.has(sid) || !!(latest && latest.status === 'running');
+}
+
+/* ------------------------- 压缩块的正文(流式) -------------------------
+ * 压缩是另一次 LLM 调用,摘要正文一小段一小段地吐出来:一条
+ * `session.compaction.delta` 带一个 text 片段,实测一份 8 KB 的摘要来了 140+ 条、
+ * 5ms 一条。TUI 是边压边把正文印在块里的(见 §8.11),面板照抄:片段攒起来,
+ * 节流重画;`.ended` 那条载荷里带着完整摘要,直接盖上来,不用等消息列表对账。
+ */
+const COMPACT_TEXT_KEEP = 8; // 最多记几个会话的正文,免得页面长开着一直涨
+
+function pushCompactText(sid, text) {
+  if (!sid || !text) return;
+  store.compactText.set(sid, (store.compactText.get(sid) || '') + text);
+  while (store.compactText.size > COMPACT_TEXT_KEEP) {
+    const oldest = store.compactText.keys().next().value;
+    if (oldest === sid) break; // 刚塞进去的就是最老的,别再删了
+    store.compactText.delete(oldest);
+  }
+}
+
+/* 压缩块正文:服务端给了摘要就以它为准(权威);还在跑、摘要还没落库时用流式缓冲。 */
+function compactionBody(m, sid) {
+  if (!m) return '';
+  if (m.summary) return m.summary;
+  return store.compactText.get(sid || store.selected) || '';
+}
+
+let compactPaintedAt = 0;
+
+/* 正文变一次就重画一次的话,压缩那几秒里等于自己打自己(实测一份摘要 140+ 条 delta,
+ * 5ms 一条)—— 节流到 ~8 次/秒;只在用户正看着这个会话时才画(别的会话先攒着,切过去就看得见)。
+ * 前沿节流:不到 120ms 的后续片段等下一拍(或 .ended 那一下整段收尾)一起上屏。 */
+function paintCompactStream(sid) {
+  if (sid !== store.selected) return;
+  const now = Date.now();
+  if (now - compactPaintedAt < 120) return;
+  compactPaintedAt = now;
+  renderMessages();
 }
 
 async function loadActive() {
@@ -1877,11 +1916,14 @@ function renderMessage(m, opts) {
 
   if (m.type === 'compaction') {
     // 面板原来把这条画成「· compaction」—— 一句和正文无关的话。照 TUI 的 Compaction
-    // 块画:行首标记在压缩时转起来(dots 同款),完了给 tokens,摘要折在下面。
-    // 摘要默认折起:实测一份摘要 5~9 KB,手机上摊开能把整段会话顶没。
+    // 块画:行首标记在压缩时转起来(dots 同款),完了给 tokens,摘要跟着正文印出来。
+    // 摘要是【摊开】印的(照 TUI:它把概要原样印在块里,没有折起来这回事),外层
+    // 留一个 <details>:摊着也能点一下折起来 —— 实测一份摘要 5~9 KB,手机上想收起来时有个抓手。
     const running = m.status === 'running';
     const aborted = !!(m.error && m.error.type === 'aborted');
     const failed = m.status === 'failed' && !aborted;
+    // 压缩进行中时正文是流式缓冲里攒的那份(一条 delta 一段地长),收工后是服务端给的摘要
+    const body = compactionBody(m);
     el.className = 'msg compaction' + (running ? ' live' : '');
     el.innerHTML =
       '<div class="turn-head">' +
@@ -1895,9 +1937,9 @@ function renderMessage(m, opts) {
         ? '<span class="model">' + esc(fmtTokens(m.tokens)) + ' tokens</span>'
         : '') +
       '</div>' +
-      (m.summary
-        ? '<details class="compact"><summary>摘要</summary>' +
-          '<div class="content">' + md(m.summary) + '</div></details>'
+      (body
+        ? '<details class="compact" open><summary>摘要</summary>' +
+          '<div class="content">' + md(body) + '</div></details>'
         : '') +
       (failed && m.error && m.error.message
         ? '<div class="content">' + esc(m.error.message) + '</div>'
@@ -1913,6 +1955,20 @@ function renderMessage(m, opts) {
 }
 
 const msgEls = new Map(); // message id -> { sig, el }
+
+/* 签名一变就整块换元素,<details> 的展开状态会跟着丢。压缩块在压缩期间一直在长,
+ * 每长一点就换一次元素 —— 用户刚把它折起来,下一段正文一来又自己摊开了。
+ * 所以只搬【用户折起来过】这一种:新元素默认是摊开的(压缩块就是),旧的被折过就跟着折回去。
+ * 反方向不搬:流式思考块的「开」是渲染时按 m.live 决定的,回合结束就该自己回落 ——
+ * 那是渲染的规矩,不是用户的动作(ui-stream 有断言锁着)。 */
+function syncDetailsOpen(oldEl, newEl) {
+  const o = oldEl.querySelectorAll('details');
+  const n = newEl.querySelectorAll('details');
+  const len = Math.min(o.length, n.length);
+  for (let i = 0; i < len; i++) {
+    if (n[i].open && !o[i].open) n[i].removeAttribute('open');
+  }
+}
 
 function renderMessages() {
   const box = $('#messages');
@@ -1943,7 +1999,12 @@ function renderMessages() {
   let prevModel = null;
   for (const m of msgs) {
     const L = liveView(m.id);
-    const view = L ? liveMessage(L) : m;
+    let view = L ? liveMessage(L) : m;
+    // 压缩块的正文在压缩期间是流式的(store.compactText 一段段涨):把当前正文并进
+    // view 再算签名,签名才会跟着变 —— 不然新攒的正文上不了屏。
+    if (!L && view && view.type === 'compaction') {
+      view = Object.assign({}, view, { summary: compactionBody(view, store.selected) });
+    }
     const showModel =
       view.type === 'assistant' && !!(view.model && view.model.id) && view.model.id !== prevModel;
     if (view.type === 'assistant' && view.model && view.model.id) prevModel = view.model.id;
@@ -1956,6 +2017,7 @@ function renderMessages() {
       msgEls.set(m.id, rec);
     } else if (rec.sig !== sig) {
       const el = renderMessage(view, { showModel });
+      syncDetailsOpen(rec.el, el);
       rec.el.replaceWith(el);
       rec.el = el;
       rec.sig = sig;
@@ -4327,9 +4389,44 @@ function handleControlEvent(e) {
   } else if (t.indexOf('session.compaction.') === 0) {
     // 压缩不是普通回合:实测 /api/session/active 在压缩跑到一半时会空一拍,
     // 只认 status/execution 的话状态条会中途灭掉。这里直接按压缩事件记一笔。
-    if (sid) {
-      if (t === 'session.compaction.started') store.compacting.add(sid);
-      else store.compacting.delete(sid); // .ended / .failed 都算收工
+    // 三条事件必须分开对待,合并成一句就会出事:
+    //   .started      开工(顺手清掉上一次的流式正文)
+    //   .delta        概要正文的增量,【不是】收工信号。原来 else 一把抓:每来一条
+    //                 就把压缩标记抹掉 + dirty 一次 → 重画整个左栏。实测一份 8 KB
+    //                 的摘要 140+ 条 delta(5ms 一条)触发了 142 次 renderSessions,
+    //                 压缩那几秒面板整个假死(用户报的「网页版崩溃无响应」)。
+    //                 它只是文本:攒进缓冲、节流重画对话区(照 TUI 边压边印)。
+    //   .ended/.failed 收工;载荷里带着完整摘要,直接记下来先印上,不等消息列表对账。
+    if (sid && t === 'session.compaction.started') {
+      store.compacting.add(sid);
+      store.compactText.delete(sid);
+      // 立刻往消息流里放一块「进行中」:用事件给的 inputID 当 id,服务端那条真消息
+      // 一到就同 id 覆盖(不用干等那次对账拉取 —— 正文流得快时对账会一直被推后)。
+      if (d.inputID && sid === store.selected && !store.messages.has(d.inputID)) {
+        store.messages.set(d.inputID, {
+          id: d.inputID, type: 'compaction', status: 'running', time: { created: Date.now() },
+        });
+      }
+      dirty = true;
+    } else if (sid && t === 'session.compaction.delta') {
+      pushCompactText(sid, d.text || '');
+      paintCompactStream(sid);
+    } else if (sid) {
+      // .ended / .failed(以后再加别的 .xxx 也按收工处理,免得又漏)
+      store.compacting.delete(sid);
+      const final = typeof d.text === 'string' && d.text ? d.text : '';
+      if (final) store.compactText.set(sid, final);
+      // 手里那块还在「进行中」就地收工(真消息随后会原 id 覆盖掉,内容一致)
+      if (sid === store.selected) {
+        for (const m of store.messages.values()) {
+          if (m.type === 'compaction' && m.status === 'running') {
+            m.status = t === 'session.compaction.failed' ? 'failed' : 'completed';
+            if (final && !m.summary) m.summary = final;
+            if (d.error) m.error = d.error;
+            if (d.tokens) m.tokens = d.tokens;
+          }
+        }
+      }
       dirty = true;
     }
   } else if (t === 'session.renamed') {
