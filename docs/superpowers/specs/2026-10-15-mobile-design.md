@@ -963,7 +963,7 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 
 | 点 | 决定 | 理由 |
 |---|---|---|
-| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改，§8.20 补齐顺序/费用/`:分支`/`~/`，§8.21 再补智能体·模型/`tab agents`/子会话·shell）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，窄屏收起底板时也在，比头部更贴「看一眼」|
+| 位置 | ~~聊天头部标题行右侧~~ → **输入框下面的提示栏 `#promptFooter`**（§8.19 改，§8.20 补齐顺序/费用/`:分支`/`~/`，§8.21 再补智能体·模型/`tab agents`/子会话·shell）| 当初放头部是嫌 `#progress` 那行只在运行中才露；后来照 TUI 把提示栏做成**常驻行**（挂在 `#composer` 外面），路径 + 用量 + 命令提示一起，展开底板时比头部更贴「看一眼」。**（§8.40 改：收起成细边时这一行跟着收，只留进度条）** |
 | 算法 | **每次现算**，不另存 | 照 TUI 的 `Us`/`XN`/`d4` 原样搬（同一份口径也喂给渲染：`currentMessages()`）|
 | 两档文案 | 全量 / 窄屏两份都写进 DOM，CSS 按 `html.narrow` 切 | 横竖屏来回转不用重画，也不用 JS 判宽度（照 TUI 的 `compact` / `full`）|
 | 模型表 | 用**该 location 的模型表**（`store.models.get(dir)`），不用全局索引 | 某个模型可能在某个目录被 `enabled:false` 关掉；TUI 用的就是 `location.model.list`。查不到就退化成只印 token 数 |
@@ -1115,7 +1115,7 @@ ctrl+p commands」。
 | 点 | 决定 |
 |---|---|
 | 位置 | 新 `#promptFooter`，挂在 `#chatpane` 末尾、**`#composer` 外面**（不是里面）|
-| 为什么在外面 | 手机默认把底板收起成一条细边（`ocs.composerHiddenNarrow`），放里面会被一起收掉；放外面这一行**常驻**，收起底板时「看一眼用量」照旧 |
+| 为什么在外面 | 手机默认把底板收起成一条细边（`ocs.composerHiddenNarrow`），放里面会被一起收掉。**（§8.40 改：用户后来要「收起后只留进度条」，于是收起时用 `#composer.collapsed ~ #promptFooter` 把它一起收；「在外面」这个结构没动，只是不再当「常驻行」用）** |
 | 内容 | 左 `#chatDir`（工程路径，太长由 CSS `text-overflow: ellipsis` 截断，`title` 给全路径）；中 `#ctxInfo`（原样搬过来）；右 `#cmdHint` |
 | 两档提示 | 桌面 `ctrl+p commands`（TUI 原文），手机 `/ 命令`（手机没 Ctrl 键，面板本来就是敲 `/` 开面板）—— 两档都印 DOM，CSS 按 `html.narrow` 切，跟用量一个套路 |
 | 点击 | `#cmdHint` 是 `button`，点了走 `openCommands({ force: true })`（与 `Ctrl+P` 同一条路）|
@@ -1128,6 +1128,8 @@ ctrl+p commands」。
   —— 正好贴在输入区下面、屏幕最下沿；`chatDir = /work/example-repo`、
   `ctxCompact = 76% ctx`（`ctxHidden=false`，收起状态也露着）、`.hNarrow` `display:inline`、
   `.hFull` `display:none`（手机档生效）。截图 `footer-shot-393x894.png`。
+  **（§8.40 改：收起时这一行整条藏起来了 —— `#composer` 底 = 894、消息区 +30px；
+  这些数只在「展开」态成立）**
 - 393×894（底板**展开**）：`#composer` 679–864、`#promptFooter` 864–894，仍是输入框下面那一行。
 - 1366×900（桌面，底板默认展开）：`#promptFooter` 869–900 在 `#composer` 869 之下；
   `ctxFull = 151.8K (76%)`、`.hFull` `display:inline`（`ctrl+p commands`）。截图 `footer-shot-1366x900.png`。
@@ -1195,7 +1197,7 @@ ctrl+p commands」。
 
 | 点 | 决定 |
 |---|---|
-| 智能体·模型 | 新 `#chatAgent`，排在 `#chatDir` 前面（`#promptFooter` 最左），照 TUI 的顺序。取值直接用工具栏两个 `<select>` 的当前项文案（`#agentSel` / `#modelSel`，变体接 `#variantSel`，`default` 不印）。工具栏在 `#composer` 里面 —— 手机收起底板时它跟着没了，这一格是收起状态下唯一还看得见「现在是哪个智能体/模型」的地方，所以只要选中会话就常驻（窄屏 `max-width: 32%`，别把工程路径挤没） |
+| 智能体·模型 | 新 `#chatAgent`，排在 `#chatDir` 前面（`#promptFooter` 最左），照 TUI 的顺序。取值直接用工具栏两个 `<select>` 的当前项文案（`#agentSel` / `#modelSel`，变体接 `#variantSel`，`default` 不印）。工具栏在 `#composer` 里面 —— 手机收起底板时它跟着没了，展开态下这一格是还看得见「现在是哪个智能体/模型」的地方，所以只要选中会话就常驻（窄屏 `max-width: 32%`，别把工程路径挤没）。**（§8.40 改：收起底板时连这一格一起收，细边上只留进度条；「收起时也能看一眼智能体/模型」这条不再成立）** |
 | `tab agents` | 提示文案照 TUI 改成 `tab agents`；**无 Shift 的 `Tab`** 也接上 `cycleAgent()`（在输入框的键位链里排在命令面板/@ 补全/输入历史**之后**，所以那几处开着时先归它们）。Shift+Tab 照旧保留，不破坏既有键位与测试 |
 | 子会话 / shell | 新 `store.subs`（子→父；来自列表接口里带 `parentID` 的那批 + SSE 的 `session.created/updated/deleted`）与 `store.shells`（`shell.created` 记、`shell.exited`/`shell.deleted` 划）。`subagentCount()` 只数 `isRunning()` 的（照 TUI 只数 running），`shellCount()` 数这个会话名下的；两者 ` · ` 连起来接在用量**前面**。单独放一份、不塞进 `store.sessions`，免得顶栏的工程筛选漏进别的工程的子会话 |
 | `(new worktree)` | **不做**：那行不是会话提示栏的常驻元素，是「新建 worktree」对话框里的临时状态（`Re.pendingNew()` / `Re.progress()` 那两段），面板没有这个流程 |
@@ -1996,6 +1998,52 @@ F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interr
 `ui-controls` 96 → **102**（`renderControls(undefined)` 时工具栏在、选择器空、
 变体收着；未选中才收起）。其余套件与 6 个 `e2e-*` 全 0 失败。
 
+### 8.40 收起底板之后,提示栏那一行还挂在下面
+
+**起因**:用户——「手机端对话框下面的信息还是显示,需要关闭,除了进度条」。
+
+**改前**(真 Chromium 393×894,手机上底板是默认收起的):
+
+```
+#messages 575 @240-815
+#composer 49 @815-864      ← 细边:进度条 + ■ 中断
+#promptFooter 30 @864-894  ← 却还挂着:智能体·模型 / 工程目录 / 用量 / tab agents / / 命令
+```
+
+**根因**:`#promptFooter` 照 TUI 是「输入框下面独立的一行」,所以它挂在 `#composer`
+**外面**(§8.19 挪过来、§8.21 补格子时都写着「手机收起底板时这一行照样露着,看一眼用量
+正是主力用途」)。而 `styles.css` 里那份 `#composer.collapsed … { display: none }`
+名单 —— 三个选择器、投递方式、附件行、输入行、两个补全面板 —— **收不到它**:细边收起来了,
+它还在下面占 30px。
+
+**做法**:一条 CSS,兄弟选择器(它在 `#composer` 外面,后代选择器够不着):
+
+```css
+#composer.collapsed ~ #promptFooter { display: none; }
+```
+
+| 点 | 决定 |
+|---|---|
+| 藏谁 | 整条 `#promptFooter`:智能体·模型、工程目录、上下文用量、`tab agents`、`/ 命令` 都在它里面 |
+| 留谁 | `#progress`(进度条)与 `#interrupt`(`■ 中断`)—— 这两样本来就在 `#composer` 里,细边上只留它们 |
+| DOM | 一个节点没删,只是 CSS 藏;展开就回来(与 `.cinput`、三个选择器同一套做法) |
+| 桌面 | 一样收:细边就是细边,不按 `html.narrow` 分叉(窄屏判定源仍然只有一处) |
+
+**验证**(真 Chromium 393×894,`/tmp/ocsm-probe/pw/thinedge.js`):
+
+```
+收起:#messages 575 → 605(那 30px 还给消息区)、#composer 49 @845-894、#promptFooter=none
+      #progress 13px 在、#interrupt 44px 在
+展开:#promptFooter 30 @864-894 照旧回来,其余一字未变
+```
+
+**回归**:`smoke.sh` 290 → **291**(Q 组加一条:必须能 `has` 到
+`#composer.collapsed ~ #promptFooter { display: none; }`;那一段的旧注释「这一行照样露着」
+一并改掉);`ui-composer` 91 → **99**(新 K 组 8 项:手机展开时提示栏在且路径那格有字、
+收起时藏了、DOM 一个没少、细边上进度条与 `■ 中断` 照旧露着、再展开回来、桌面收起一样藏、
+桌面展开照旧)。其余套件全 0 失败。README 计数同步;§8.19 / §8.21 里那两句
+「收起时这一行也在」各加一句指到这里。
+
 ---
 
 ## 9. 取舍与理由
@@ -2033,9 +2081,15 @@ F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interr
 8. **流式事件里可能也背着同一批 `data:` 图**（§8.37 只摘了「消息列表」那一条）：
    面板在 `session.tool.success` 上写着 `p.state.content = d.content`，若某次工具真的
    返回图，那一个 SSE 事件就是 600KB 级（不是「打开会话慢」，而是「这一下卡一下」）。
+   未实测（要等真有一次读图的回合）。真出现再摘：得按 SSE 的 `data:` 行逐个改，
+   比消息列表风险高，所以没提前做
 9. **拉会话列表失败仍然只在控制台**（`loadSessions` 的 `catch` 只 `console.error`）：
    §8.39 已经把「列表没回来 → 聊天区两排跟着消失」这条连锁反应掐掉了，但左栏自己
    仍然会安静地停在旧数据/「共 0 个会话」上，与 §8.34「失败不许一声不响」不一致 ——
    要不要照 §8.34 那样给一条可见的话（例如角标 + 重试），等真遇上再定。
-   未实测（要等真有一次读图的回合）。真出现再摘：得按 SSE 的 `data:` 行逐个改，
-   比消息列表风险高，所以没提前做
+10. **手机上头部那排「导出 / 在TUI打开 / 归档 / 加载更旧消息」要不要收起来**：
+   §8.40 之后用户又说了一句「手机端还是显示：…那一栏」，两种读法都通 —— ①是确认「现在
+   显示出来了」（§8.39 修的就是它以前按 `store.sessions` 判显隐、列表没回来就永远藏着），
+   ②是要它别占那 40px。已当面问。若真要收：三个 chip 的动作在 `/` 命令面板里都有
+   （`export` / `tui` / `archive`，§8.17），但**「加载更旧消息」没有第二条入口**（翻旧页
+   只有它），所以不能整条删 —— 要么只收三个 chip、要么给翻旧另找一个入口再收。

@@ -918,6 +918,10 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 #composer.collapsed .cinput,
 #composer.collapsed #mentions,
 #composer.collapsed #cmds { display: none; }
+/* 还有提示栏 —— 它在 #composer 【外面】(照 TUI 的 prompt.footer 挂在输入框下面那一行),
+   上面那份名单收不到它。§8.40:用户上手后要的是「收起后只留进度条」。收起成细边时
+   就只剩两样:运行中的进度条(#progress)与 ■ 中断。展开了它照旧回来。 */
+#composer.collapsed ~ #promptFooter { display: none; }
 
 /* 没选中会话时 #ctoolbar 是 hidden 的,上沿那条让位就没了,手柄会压到「发送」上。
    让输入行自己让开(只有这一态会发生)。 */

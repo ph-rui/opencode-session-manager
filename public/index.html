@@ -141,13 +141,14 @@
         <button type="button" id="btnComposer" class="chip" aria-expanded="true" aria-label="收起输入区" title="收起输入区(只留一条细边)">▾ 收起</button>
       </div>
       <!-- 提示栏(照 TUI 的 prompt.footer,在输入框【下面】那一行)顺序同 TUI:
-           左边智能体·模型(`#chatAgent`,照 Ss)—— 工具栏收起时也看得见;
+           左边智能体·模型(`#chatAgent`,照 Ss);
            然后工程路径(`目录:分支`,home 下面的缩成 ~/…);
            然后上下文用量(155.6K (78%) · $0.42,费用 >0 才印)→ tab agents → ctrl+p commands。
-           刻意放在 #composer 外面 —— 手机默认把底板收起成一条细边,这一行照样露着,
-           「看一眼用量」正是主力用途。用量两档文案都印在 DOM 里,由 CSS 按 html.narrow 挑
-           (窄屏那档就是 TUI 的 compact:78% ctx);命令提示也分两档(手机没有 Ctrl 键,换成 /),
-           智能体提示是键盘提示,手机直接收掉(工具栏上就有下拉)。 -->
+           挂在 #composer 【外面】是因为它照 TUI 是输入框下面独立的一行;但底板收起成一条
+           细边时它得跟着收(§8.40:用户要「收起后只留进度条」,见 styles.css 的
+           #composer.collapsed ~ #promptFooter)。用量两档文案都印在 DOM 里,由 CSS 按
+           html.narrow 挑(窄屏那档就是 TUI 的 compact:78% ctx);命令提示也分两档(手机没有
+           Ctrl 键,换成 /),智能体提示是键盘提示,手机直接收掉(工具栏上就有下拉)。 -->
       <div id="promptFooter" hidden>
         <span id="chatAgent" hidden></span>
         <span id="chatDir" title="工程目录"></span>

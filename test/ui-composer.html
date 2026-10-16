@@ -70,6 +70,17 @@
         <input type="file" id="filePick" multiple hidden>
         <button type="button" id="btnComposer" class="chip" aria-expanded="true" aria-label="收起输入区" title="收起输入区(只留一条细边)">▾ 收起</button>
       </div>
+      <!-- 提示栏 #promptFooter,与 public/index.html 逐字一致。它在 #composer 【外面】,
+           所以收起底板时本来不会跟着走 —— §8.40 用 CSS 把它一起收掉,K 组钉这件事。 -->
+      <div id="promptFooter" hidden>
+        <span id="chatAgent" hidden></span>
+        <span id="chatDir" title="工程目录"></span>
+        <span id="ctxInfo" class="ctx" hidden><span class="ctxFull"></span><span class="ctxCompact"></span></span>
+        <button type="button" id="agentHint" title="切换到下一个智能体(对应 TUI agent.cycle;面板里按 tab,Shift+Tab 也行)">tab agents</button>
+        <button type="button" id="cmdHint" title="打开命令面板(对应 TUI command.palette.show)">
+          <span class="hFull">ctrl+p commands</span><span class="hNarrow">/ 命令</span>
+        </button>
+      </div>
     </section>
   </main>
   <div id="toast" hidden></div>
@@ -428,6 +439,29 @@
         !vis(q('#btnFilters')) && !vis(q('#backList')));
       setState(false, false);
       T('I8 桌面展开:一切照旧', vis(q('#input')) && vis(q('#agentSel')) && !collapsed());
+
+      /* ===================== K. 提示栏跟着底板一起收(§8.40) ===================== */
+      /* 用户上手后的话:「手机端对话框下面的信息还是显示,需要关闭,除了进度条」。
+         #promptFooter 挂在 #composer 【外面】(照 TUI 是输入框下面独立的一行),光靠
+         #composer 里那份 display:none 名单收不到它,所以由 CSS 的
+         #composer.collapsed ~ #promptFooter 收。 */
+      var footV = function () { return vis(q('#promptFooter')); };
+      setState(true, false);
+      T('K1 手机展开:提示栏在(它是 #composer 外面那一行)', footV());
+      T('K2 手机展开:工程路径那格也有字', q('#chatDir').textContent.length > 0, q('#chatDir').textContent);
+      setState(true, true);
+      T('K3 手机收起:提示栏跟着藏了', !footV());
+      T('K4 收起:它只是被 CSS 藏起来,DOM 一个没少(展开还能回来)',
+        !!q('#promptFooter') && !!q('#chatDir') && !!q('#ctxInfo') && !!q('#cmdHint'));
+      q('#progress').hidden = false; q('#interrupt').hidden = false;
+      T('K5 收起:细边上该留的两样(进度条 / ■ 中断)照旧露着', vis(q('#progress')) && vis(q('#interrupt')));
+      q('#progress').hidden = true; q('#interrupt').hidden = true;
+      setState(true, false);
+      T('K6 再展开:提示栏回来了', footV());
+      setState(false, true);
+      T('K7 桌面收起:一样藏(细边就是细边,不分桌面/手机)', !footV());
+      setState(false, false);
+      T('K8 桌面展开:照旧露着', footV());
 
       /* ===================== J. 手柄缺席时的自保 ===================== */
       /* 收起之后唯一的出口就是手柄。所以手柄不在 DOM 里时,整个功能必须闭嘴 ——

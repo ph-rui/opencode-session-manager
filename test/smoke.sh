@@ -1200,8 +1200,9 @@ fi
 # 用户报「网页版不显示 155.6K (78%)」,又要把它的位置挪到「跟 TUI 一样在对话框下面」——
 # TUI 的 prompt.footer 就在输入框下面那一行,同一行还印着工程路径与 «ctrl+p commands»
 # (源码:prompt.footer.status 里是 prompt.footer.location,右边是 usage 与 command palette 提示)。
-# 面板照做:#promptFooter 挂在 #chatpane 末尾(#composer 【外面】)—— 手机默认把底板收起成
-# 一条细边,这一行照样露着,「看一眼用量」正是主力用途。两条硬约束不变:
+# 面板照做:#promptFooter 挂在 #chatpane 末尾(#composer 【外面】)。§8.40 改掉了这里一条旧
+# 判断:以前是「手机收起底板成细边,这一行照样露着(看一眼用量)」,用户上手后明确要
+# 「收起后只留进度条」,于是收起时它跟着藏(#composer.collapsed ~ #promptFooter)。两条硬约束不变:
 #   ① 只认最后一次【已完成】压缩之后的助手消息(压缩把上下文清空了,之前的数不算);
 #   ② 全量 / 窄屏两档文案都印在 DOM 里,由 CSS 按 html.narrow 挑,不用 JS 判宽度。
 COMPOSER_AT=$(printf '%s' "$HTML_FLAT" | grep -bo 'id="composer"' | head -1 | cut -d: -f1)
@@ -1212,6 +1213,12 @@ if [ -n "$COMPOSER_AT" ] && [ -n "$FOOT_AT" ] && [ -n "$CTX_AT" ] &&
   echo "PASS: 上下文用量落在输入框下面的提示栏里(#promptFooter 在 #composer 之后,照 TUI prompt.footer)"; pass=$((pass + 1))
 else
   echo "FAIL: 提示栏位置不对(composer=$COMPOSER_AT foot=$FOOT_AT ctx=$CTX_AT)"; fail=$((fail + 1))
+fi
+# §8.40:收起成细边时提示栏跟着藏 —— 细边上只留运行中的进度条与 ■ 中断
+if has "$CSS" '#composer.collapsed ~ #promptFooter { display: none; }'; then
+  echo "PASS: 收起成细边时提示栏跟着藏(细边上只剩进度条 / ■ 中断,§8.40)"; pass=$((pass + 1))
+else
+  echo "FAIL: 提示栏没跟着底板一起收(手机收起后还挂着那 30px 信息行,§8.40)"; fail=$((fail + 1))
 fi
 if has "$HOME_HTML" 'id="chatDir"' && has "$HOME_HTML" 'id="cmdHint"' &&
    has "$HOME_HTML" 'class="hFull">ctrl+p commands' && has "$HOME_HTML" 'class="hNarrow">/ 命令'; then
@@ -1227,10 +1234,11 @@ if has "$HOME_HTML" 'id="agentHint"' && has "$HOME_HTML" '>tab agents<' &&
 else
   echo "FAIL: 提示栏缺 #agentHint(或没按 TUI 用 tab / 没接线 / 没在手机上收起)"; fail=$((fail + 1))
 fi
-# TUI 提示栏最左那格是 Ss 的「智能体 · 模型」——工具栏在 #composer 里,收起时看不见,这格常驻
+# TUI 提示栏最左那格是 Ss 的「智能体 · 模型」——面板里它跟 #chatDir / #ctxInfo 同一条,
+# 展开底板时印在最左(§8.21);收起成细边时整条一起收(§8.40)
 if has "$HOME_HTML" 'id="chatAgent"' && has "$APPJS" 'function paintFooterAgent(' &&
    has "$APPJS" 'paintFooterAgent();' && has "$CSS" '#chatAgent {'; then
-  echo "PASS: 提示栏最左有 «智能体 · 模型»(#chatAgent,照 TUI 的 Ss;工具栏收起时也看得见)"; pass=$((pass + 1))
+  echo "PASS: 提示栏最左有 «智能体 · 模型»(#chatAgent,照 TUI 的 Ss;展开态印在最左)"; pass=$((pass + 1))
 else
   echo "FAIL: 提示栏缺 #chatAgent(或没接线)"; fail=$((fail + 1))
 fi
