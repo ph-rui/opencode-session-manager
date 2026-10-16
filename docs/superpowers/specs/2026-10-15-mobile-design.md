@@ -1460,6 +1460,47 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 ---
 
+### 8.28 追加：思考块的行头照 TUI 的 reasoning 分组行（`Thinking` / `Thought` + `N steps`）
+
+**起因**：用户「一切往 TUI 的方向靠拢」，四条默认里的第③条 —— 思考行文案改英文并补 `N steps`。
+
+**先把 TUI 的事实抓准**（`packages/tui/src/routes/session/group-view.tsx:75-195`）：
+
+| TUI 行为 | 证据 |
+|---|---|
+| 相邻的思考段由 `tree.ts` 并进**同一个组**，组行只印一行 | `thoughts()` 取组内所有 reasoning part |
+| 跑着时：`Thinking` / `Thinking: <标题>`（带 spinner） | `pending` / children 文案 |
+| 收工时：`Thought` +（**没展开**且标题非空）`: <标题>` | `185` 行的三元 + `186` 行的 `<Show when={completed && !expanded() && latest()}>` |
+| 组内**多于一段**才接 ` · N steps` | `187` 行 `thoughts().length > 1` |
+| 时长 = 组内**各段各自** `created→completed` 之和 | `103-109` 行那个 `reduce`（不是首尾相减）|
+| 时长那一格挂在 `props.completed` 上（跑着不给） | `188` 行 `<Show when={completed && duration()}>` |
+| 标题 =「最后一段的加粗首行」，带黏性：最后一段没标题且已收工就清掉，还在跑就沿用前一段的 | `95-102` 行 `latest()` |
+
+**实测真实数据的形态**：只读长会话 + 探针会话里，**相邻的思考段恒为 0 组**（每个 reasoning part 前后都夹着 text / tool），
+所以 `N steps` 在真实数据里印不出来 —— 而**真会印**的是词汇：原来那块写的是 `▸ 思考 · 4.7s`（中文），
+照 TUI 应是 `▸ Thought · 4.7s`。面板这边连标题都没有（这两台模型吐的思考正文不带加粗首行），实拍 45 个思考块全是
+`Thought · 4.6s` 这类。
+
+**做法**：
+
+| 点 | 决定 |
+|---|---|
+| 词 | `思考` → `Thinking`（跑着）/ `Thought`（收工）；工具层文案本来就是英文（§8.24），这一层跟着统一 |
+| `N steps` | 照 TUI 实现，并且为此把**相邻的思考段并成一个 `<details>`**（tree.ts 的规矩）—— 真实数据里是 0 组，但结构得对 |
+| 标题 | 折着才印：面板用 CSS 反应（`.reasoning[open] > summary .rWord.rDone ~ .rTitle { display: none }`），跑着那款（`Thinking`）照 TUI 一直带着标题 |
+| 时长 | 组内各段之和（TUI 的 reduce）；跑着不给（挂在 `completed` 上，面板用 `m.live` 代理） |
+| 正文 | 仍然每段一个 `.content`，`data-lk` 的序号照旧「同类型里的第几个」递增 —— `paintLiveText` 就按这个定位，并组不动增量重绘 |
+| 与 TUI 的差异 | TUI 跑着时只印那一行（正文要自己展开），面板保持「流式期间自动展开」（§8.5 的阅读取向），只改文案与格子 |
+
+**验证**：`footer-audit.js` 探针加了思考块一栏。探针会话（393×894）45 个思考块、长会话（1366×900）实拍
+行头都是 `Thought · 4.6s` / `Thought · 1.2s` 这类（`word: "Thought"`、折着、无标题、单块），与 TUI 同款。
+合成一条两段相邻的思考（单测）→ 一个 `<details>`、行头 `Thought: b · 2 steps · 300ms`、正文两段。
+
+**回归**：`smoke.sh` R2 组 3 → **5** 项（行头三格 + 并组那行 + 摊开藏标题的 CSS）；`ui-tools` 190 → **199**
+（9 项：新行头四款 + 并组四条 + 黏性两条 + 跑着不给 steps）；其余套件与 `e2e-*` 全 0 失败。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
