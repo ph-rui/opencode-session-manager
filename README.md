@@ -448,7 +448,7 @@ node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(3
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:189 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:191 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、app.js 里的 `ocs.listHidden` 与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -499,11 +499,13 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
      `updateJumpLatest()` 会把被 `innerHTML` 清掉的按钮搬回末尾、
      `End` 键(且挡了输入框)、快捷键清单里有 `End`、`setupJumpLatest()` 接进 `init()` 且只一次。
      真正的行为验证在 `ui-jump-run.js`(它连 sticky 的实际位置都量)。
-   - P 组的 8 项(鼠标靠左边缘临时拉出列表):`main.list-peek` 那几条**写在 `main.list-hidden` 之后**
+   - P 组的 10 项(鼠标靠左边缘临时拉出列表):`main.list-peek` 那几条**写在 `main.list-hidden` 之后**
      (同优先级靠顺序赢)、临时展开仍是三列且用 `--list-w`、`mousemove` + `mouseleave` 接线、
      收回按「分栏槽右沿」判定而**不用 `relatedTarget`**(临时展开会把槽从光标底下挪走)、
-     窄屏挡一道 + 重复接线保护、点手柄把临时态摘掉、`setupListPeek()` 接进 `init()` 且只一次。
-     真正的行为验证在 `ui-layout-run.js` 的 3c 组。
+     窄屏挡一道 + 重复接线保护、点手柄把临时态摘掉、`setupListPeek()` 接进 `init()` 且只一次、
+     **动手之前先武装宽限期**(`PEEK_HOLD_MS` + 宽限期里第一次 `mouseleave` 吞掉)、
+     **`onAction()` 动手前叫 `listPeekHold()`**(不然删完一个会话列表当场被收掉)。
+     真正的行为验证在 `ui-layout-run.js` 的 3c / 3d 组。
      来源白名单那三条语义(默认值 / 空=不限制 / 配错=全拒)由 `netallow-run.js` 正面覆盖,这里不重复。
   - 脚本里比较文本用的是自带的 `has()`(`case` 字面量匹配),**刻意不用 `printf | grep -q`**:在 `set -o pipefail` 下 `grep -q` 命中即退出会让 `printf` 收到 SIGPIPE,整条管道随机判失败(实测 300 次里失败 1 次),冒烟会间歇性假红。
 - `e2e-asks.sh`:15 项。会创建一个临时会话并在结束时删除;验证 `list` 不含 `state`、未激活字段/未确认 `external` 被拒 `400`、正常应答 `204` 且答案一致、`string+options` 字段收**字符串**答案(`question` 工具的单选形状)、重复应答 `409`、带 `Expect: 100-continue` 的大请求不被代理卡死、取消 `204`。
@@ -517,8 +519,8 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   另有 20 项给**运行状态条**(TUI 的 `prompt.footer`,在输入框**下面**那一行):元素与 8 格骨架、挂在 `#composer` 里且在 `.cinput` 之后(位置不再是标题行)、`progressCells()` **前半圈 14 帧逐帧**与 TUI 实测序列一致(写错一格就红)、**整圈 54 帧**(14..16 空三拍 → 17..29 倒着重走 → 30..53 长空 ~1 秒 → 第 54 帧绕回第 0 帧)、负数帧也当循环内、按 40ms 挂表、推一帧后格子跟着变、系统开了「减少动画」也照样逐帧推(**不看** `prefers-reduced-motion` —— 终端里没这个概念,当初为它让路的结果是「电脑上状态条不动、手机上正常」)、复位后又能推,以及空闲/重试/未选中三种收展;另有 47 项给**压缩上下文那一块**:`session.compaction.started/.ended` 落进 `store.compacting` 且收工即清、压缩中也算「这个会话在跑」(列表徽标与排队判定共用同一个 `isRunning()`)、消息列表里最新一条压缩消息 `status==='running'` 作为刷新后的兜底(过期标记会自愈)、压缩块渲染成独立的 `.msg.compaction`(块头「上下文压缩」、进行中标「进行中」且行首是会转的盲文 spinner、挂 80ms 表)、完成后回到静态 `⏺` 并给出 `N tokens`、摘要按 Markdown 渲染并**摊开印着**(外层 `details` 留作折叠抓手;用户折起来之后后面来的正文不会又把它顶开 —— `syncDetailsOpen()` 只搬「用户折过」这一种),`error.type==='aborted'` 标「已取消」、行首 `✗`,以及完成/取消之后状态条收回去;其中 21 项专锁**概要正文的流式打印与那次假死**:`.started` 按 `inputID` 立刻放一块「进行中」进消息流、**`.delta` 不重画左栏**(三条 delta 就是三次 `renderSessions()` 的老路,逐条数着)、`.delta` 不抹掉压缩标记、正文一段段攒进 `store.compactText`、三条 delta 只画一次对话区(节流)、压缩中就把正文按 Markdown 摊开印出来、用户折起来后不被顶开、`.ended` 就地收工并把载荷里的完整摘要写进消息。
   这套测试页把 `setInterval` 换成**记录下来但不真跑**(`__tick()` 手动驱动),所以帧序是确定的,不靠等。
 - `ui-tools-run.js`:110 项浏览器内断言,覆盖 `parsePatch`(双向行号 / 空上下文行 / 文件头与分隔行 / 末尾换行)、`diffHtml`(状态徽标与统计、多文件分块、无 patch 的删除文件)、`codeHtml`(行号)、`diagHtml`(精确与宽松路径命中、0 基转 1 基)、`inputSummary`(取值优先级与压平)、`toolHtml` 对 `edit`/`write`/`patch`/`question`/`skill`/通用工具的分派与「默认展开」,以及 `userRefsHtml`(agent `@` / skill `#` 标记、缺 `name` 用 `id` 兜底、都缺则跳过、名字转义、在 `renderMessage` 里的顺序与「没有提及时不产生空行」)。其中 8 项锁**运行中的工具行不画状态标记**(对话头部那套已经说过了,手机竖屏上那个「运行中」还会折成「● 运」「行中」两行):`toolHtml` 出来的 HTML 里既没有「运行中」也没有 `tstate`/`●`(整个 `<span>` 都不输出,不留空壳)、`running`/`streaming` 的 `icon` 与 `label` 都是空串、`cls` 仍是 `run`(别处按状态分类要用)、而完成与出错的 `✓`/`✗ 出错` 照旧在工具行上画。另有 8 项锁**运行中行首那个标记会转**(照 TUI 的 `dots` 组、80ms 一帧):帧表与间隔、运行中行首是 `.tmark.spin` 且不再画 `⏺`、完成/出错回到 `⏺`、`toolRunning()` 的判定。
-- `ui-layout-run.js`:141 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
-  **鼠标靠左边缘临时拉出列表**(3c 组 27 项:贴到左边缘就 `list-peek` 且列表可见、记忆 `list-hidden`/`localStorage` 一个字都没动、分栏槽跟着列表挪到右边、对话区仍有宽度、用的是用户拖出来的 420px 列宽、列表上有一道阴影、在列表里挪动不算离开、挪进对话区收回、移开主区收回、临时展开期间点手柄转成显式展开并保持、显式展开时乱动也不冒临时态、窄屏不玩这一套),
+- `ui-layout-run.js`:151 项浏览器内断言,覆盖列表折叠(箭头 `‹`/`›` 与 `aria-label` 翻转、`ocs.listHidden` 写入/清空、重复接线不重复挂监听、**收起后分栏条仍可见且手柄点得到**、**收起态点手柄能重新展开**、**点手柄不会误触发拖宽度而点条上空白仍能拖**、收起后让出的正好是 16px 窄槽、收起再展开后自定义列宽 `--list-w` 不被吃掉)、
+  **鼠标靠左边缘临时拉出列表**(3c 组 27 项:贴到左边缘就 `list-peek` 且列表可见、记忆 `list-hidden`/`localStorage` 一个字都没动、分栏槽跟着列表挪到右边、对话区仍有宽度、用的是用户拖出来的 420px 列宽、列表上有一道阴影、在列表里挪动不算离开、挪进对话区收回、移开主区收回、临时展开期间点手柄转成显式展开并保持、显式展开时乱动也不冒临时态、窄屏不玩这一套;**3d 组 10 项**专锁「动手之后别被弹窗收掉」:临时展开着真走一遍 `onAction('del')`、删完列表还留着、宽限期里那一次 `mouseleave` 吞掉、宽限期只管一次、宽限期不挡真实移动(挪进对话区照样立刻收)、列表本来就开着时不武装),
   hash 持久化(`hashToID` 的边界、选中会话写 hash、删除后清 hash、`restoreFromHash` 恢复消息与标题、不抢已有选择、指向不存在的会话不炸、hash 为空/非法时不选)、
   **前进 / 后退**(点会话入栈、重复点同一个不多压一格、收到 `popstate` 切到 URL 里的会话且不重复入栈、后退到无 hash 时取消选中并清空对话区、空操作不入栈)、
   **会话内滚动位置**(跳到底部 / 存锚点 / 刷新后回到原处且确实不在底部 / 只还原一次 / 点会话进来仍跳底部 / 锚点消息不存在时退回像素值 / 无存档照旧 / 上限 20 与淘汰顺序 / 存的是 `sessionStorage`)、

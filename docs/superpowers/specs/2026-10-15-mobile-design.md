@@ -427,9 +427,9 @@ html.narrow #list td { display: block; border: none; }
 
 | 套件 | 通过条数 |
 |---|---|
-| `smoke.sh` | 189 |
+| `smoke.sh` | 191 |
 | `netallow-run.js`（新）| 74 |
-| `ui-layout` / `ui-tools` / `ui-asks` | 141 / 110 / 57 |
+| `ui-layout` / `ui-tools` / `ui-asks` | 151 / 110 / 57 |
 | `ui-controls` / `ui-capabilities` / `ui-stream` | 83 / 71 / 183 |
 | `ui-attach` / `ui-commands` / `ui-picks` | 132 / 155 / 87 |
 | `ui-mobile`（新）| 160 |
@@ -749,6 +749,49 @@ t=6587  空闲      live=False open=True  正文=336  ⏺上下文压缩692 toke
 **回归**：`ui-stream` 162 → 183（+21 条：`.started` 占位、三条 delta 只画一次且不重画左栏、不抹压缩标记、
 正文攒缓冲、压缩中摊开印出、用户折起不被顶开、`.ended` 就地收工写摘要）、`smoke.sh` 187 → 189
 （+2 条源码锁：`.delta` 单独处理 + `paintCompactStream()/compactionBody()`；压缩摘要那条断言从「折起」改成「摊开」）；
+`ui-*` 其余与 `e2e-*` 全部 0 失败。
+
+---
+
+### 8.12 追加：临时拉出列表之后「删一个会话」不该把列表收回去
+
+**起因**：用户——「鼠标向左边缘移动自动展开侧边栏，删除其中一个会话之后，侧边栏就收回去了，这种情况下应该等个几秒」。
+
+**病根**（`setupListPeek()` 的老实现）：
+
+`onAction()` 的改名 / 移动 / 删除走的是原生 `prompt()` / `confirm()`。原生弹窗一开，
+浏览器就把指针当成「离开了文档」→ `main` 收到 `mouseleave` → 老的 `main.addEventListener('mouseleave', hide)`
+当场把 `list-peek` 摘掉。真正的麻烦在后面：`list-peek` 一摘，分栏槽就从「列表宽 + 16」缩回
+`x = 0..16`，而指针还停在原来那一行的位置（早就 > 16 了）—— 之后随便动一下就被
+`onMove()` 判成「挪进对话区」，列表再也拉不回来。想接着删下一个只能重新把鼠标贴回左边缘。
+
+**改法**（`public/app.js`）：动手之前先武装一段宽限期。
+
+| 点 | 决定 |
+|---|---|
+| 武装 | `onAction()` 第一句 `if (listPeekHold) listPeekHold();` —— 比 `confirm()` 早，弹窗抢指针那一下已经算在里面了 |
+| 条件 | 只在「桌面 + 列表处于收起态 + 此刻正临时展开着」时武装；窄屏、列表本来就开着都不武装 |
+| 效果 | `PEEK_HOLD_MS = 3000` 之内来的**第一次** `mouseleave` 直接吞掉（`peekLeaveGuard` 一次性的，吞完即清） |
+| 不挡真实意图 | `mousemove` 完全不受影响：挪进对话区照样立刻收；`hide()`（含点手柄显式展开）顺手把宽限期取消 |
+| 只管一次 | 宽限期只吞一次 —— 之后再离开（真移出主区/窗口）照旧收回 |
+
+**验证**（真面板 + 真服务，`/tmp/ocsm-probe/perf/live-peek.js`：反代带鉴权、把 `window.confirm` 桩成 `true`
+免掉无头里的真弹窗，然后贴左边缘 → 点那一行的「删除」→ 派发 `mouseleave`）：
+
+```
+PASS 列表里找到目标会话那一行
+PASS (前置)列表收起
+PASS 鼠标贴左边缘 → 临时拉出来
+PASS 拉出来之后分栏槽挪到右边(>=400px)
+PASS 会话确实删掉了(那一行没了)
+PASS 删完之后列表还留着(没被弹窗抢指针那一下收掉)
+PASS 删完之后列表还是看得见的
+PASS 宽限期里那一次 mouseleave 被吞掉
+PASS 宽限期只管一次:再离开还是照常收
+```
+
+**回归**：`ui-layout` 141 → 151（+3d 组 10 项：真走一遍 `onAction('del')`、宽限期吞一次、
+只管一次、不挡真实移动、列表开着时不武装）、`smoke.sh` 189 → 191（+2 条源码锁）；
 `ui-*` 其余与 `e2e-*` 全部 0 失败。
 
 ---
