@@ -141,6 +141,13 @@
     setupMsgState();
     /* 等真定时器一小会儿:scroll 事件是异步派发的,要给它落地的时间 */
     var tick = function () { return new Promise(function (r) { window.__realSetTimeout(r, 40); }); };
+    /* 上面那句「等 40ms 给它落地」常态够用,但机器一忙(全量回归连着跑十几套时实测有过一次)
+     * 不够,于是「(前置)」先挂 —— 前置不是被测对象,改成「等到位再断言」:真正要断言的
+     * 句子一个字没松,等满 25 拍还没到就照样挂(真有 bug 一样抓得住)。 */
+    var waitUntil = async function (pred) {
+      for (var wi = 0; wi < 25 && !pred(); wi++) await tick();
+      return pred();
+    };
     var maxTop = function () { return box.scrollHeight - box.clientHeight; };
     var settle = async function (pred, tries) {
       for (var i = 0; i < (tries || 300); i++) {
@@ -227,7 +234,7 @@
       /* ============ 4. 新内容到达 ============ */
       await selectSession('ses_long');
       box.scrollTop = Math.round(maxTop() / 2);
-      await tick();
+      await waitUntil(function () { return btn.hidden === false; });
       T('(前置)此刻按钮露着', btn.hidden === false);
       var before = box.scrollTop;
       window.SERVER['ses_long'].push({ id: 'msg_lnew', type: 'user', time: { created: 9999 }, text: '新来的一条' });
@@ -288,7 +295,7 @@
 
       /* 往上翻着的时候,容器变矮也不许把人拽走 */
       box.scrollTop = Math.max(0, maxTop() - 400);
-      await tick();
+      await waitUntil(function () { return store.nearBottom === false; });
       var heldAt = box.scrollTop;
       T('(前置)此刻已让路', store.nearBottom === false);
       box.style.maxHeight = Math.max(60, box.clientHeight - 160) + 'px';
@@ -326,7 +333,7 @@
 
       setupTuiKeys();
       box.scrollTop = Math.round(maxTop() / 2);
-      await tick();
+      await waitUntil(function () { return btn.hidden === false; });
       T('(前置)此刻按钮露着,准备按 End', btn.hidden === false);
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
       T('End(焦点不在输入框)= 跳回最新(TUI 的 session.last)', maxTop() - box.scrollTop < 2,
@@ -534,20 +541,20 @@
       T('有 repinUntilStable 与预算常数(跟帧是有上限的)', typeof repinUntilStable === 'function' && REPIN_BUDGET_MS >= 400,
         typeof repinUntilStable + '/' + REPIN_BUDGET_MS);
       await selectSession('ses_long'); // 60 条 → cvmany 挂着
-      await tick(); await tick();
+      await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
       T('(前置)长会话挂着 cvmany', box.classList.contains('cvmany'));
       T('(前置)此刻在底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
       var grow = document.createElement('div');
       grow.style.height = '600px';
       box.appendChild(grow);
-      await tick(); await tick(); await tick();
+      await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
       T('贴完底之后内容又变高(≈估值落定)→ 自动贴回底部', maxTop() - box.scrollTop < 2,
         box.scrollTop + '/' + maxTop());
       T('而且按钮没冒出来(面板仍认为在底部)', btn.hidden === true);
 
       /* 用户往上滚之后必须停手 —— 跟帧不许把人拽回来 */
       box.scrollTop = Math.max(0, maxTop() - 500);
-      await tick();
+      await waitUntil(function () { return store.nearBottom === false; });
       T('(前置)往上滚了 → 已让路', store.nearBottom === false);
       var held = box.scrollTop;
       grow.style.height = '1200px';
