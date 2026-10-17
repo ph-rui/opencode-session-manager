@@ -78,7 +78,16 @@
     <input id="tuiCmd"><button type="button" id="tuiCopy">复制</button></div></dialog>
 
   <dialog id="dlgDiff" class="dlg dlgdiff"><div class="dlgform">
-    <div class="diffhead"><h3>变更 <span class="diffsub">最近一轮</span></h3><span class="diffstat" id="diffStat"></span></div>
+    <div class="diffhead"><h3>变更 <span class="diffsub" id="diffSub">最近一轮</span></h3><span class="diffstat" id="diffStat"></span></div>
+    <div class="diffbar">
+      <div class="seg diffsources" id="diffSources" role="tablist" aria-label="变更来源">
+        <button type="button" role="tab" data-diffmode="turn" class="active" aria-selected="true">最近一轮</button>
+        <button type="button" role="tab" data-diffmode="branch" aria-selected="false">全部</button>
+        <button type="button" role="tab" data-diffmode="working" aria-selected="false">未提交</button>
+        <button type="button" role="tab" data-diffmode="committed" aria-selected="false">已提交</button>
+      </div>
+      <button type="button" class="chip diffbase" id="diffBase" hidden></button>
+    </div>
     <div class="diffbody" id="diffBody"></div>
     <p class="dlgerr" id="diffErr" hidden></p>
     <div class="dlgacts"><button type="button" data-close>关闭</button><button type="button" id="diffReload">刷新</button></div>
@@ -148,6 +157,12 @@
     window.__wtDeleteForceOnce = false;
     window.__wtDeletes = [];
     window.__wtMoves = [];
+    window.vcsBaseFail = false;
+    window.vcsBaseData = { name: 'release', ref: 'refs/heads/release', source: 'default' };
+    window.vcsBranches = ['release', 'dev', 'feature/x'];
+    window.vcsDiffFail = false;
+    window.vcsDiffEmpty = false;
+    window.vcsDiffFiles = DIFF_FILES;
     URL.createObjectURL = function (b) { window.__blobs.push(b); return 'blob:stub'; };
     URL.revokeObjectURL = function () {};
     HTMLAnchorElement.prototype.click = function () { window.__downloads.push(this.download); };
@@ -226,6 +241,18 @@
                   time: { created: 1, updated: 5 }, location: { directory: '/proj/a' } },
           messages: [ { id: 'm1', type: 'user', time: { created: 2 }, text: 'hello' } ],
         } });
+      }
+      if (u.indexOf('/api/vcs/base?') === 0) {
+        if (window.vcsBaseFail) return fail(503, { message: 'Choose a review base' });
+        return json({ location: { directory: '/proj/a' }, data: window.vcsBaseData });
+      }
+      if (u.indexOf('/api/vcs/diff?') === 0) {
+        if (window.vcsDiffFail) return fail(500, { message: 'vcs diff boom' });
+        return json({ location: { directory: '/proj/a' }, data: window.vcsDiffEmpty ? [] : window.vcsDiffFiles });
+      }
+      if (u.indexOf('/api/vcs/branch?') === 0) return json({ location: { directory: '/proj/a' }, data: window.vcsBranches });
+      if (u.indexOf('/api/vcs?') === 0) {
+        return json({ location: { directory: '/proj/a' }, data: { provider: 'git', branch: { current: 'dev', default: 'release' } } });
       }
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       var oneSession = u.match(/^\/api\/session\/([^/?]+)$/);
@@ -548,6 +575,88 @@
       await loadDiff();
       T('变更:刷新成功后错误收起、内容回来',
         q('#diffErr').hidden === true && qa('#diffBody .dfile').length === 2);
+
+      T('变更:四档来源按钮齐全,默认高亮最近一轮',
+        qa('#diffSources button[data-diffmode]').length === 4 &&
+        q('#diffSources button[data-diffmode="turn"]').classList.contains('active') &&
+        q('#diffSub').textContent === '最近一轮',
+        qa('#diffSources button[data-diffmode]').map(function (b) { return b.dataset.diffmode; }));
+
+      reset();
+      await setDiffMode('working');
+      var wurl = new URL(reqs(/^\/api\/vcs\/diff\?/)[0].url, 'http://x');
+      var wq = wurl.searchParams;
+      T('变更:未提交档走 vcs.diff mode=working 且不带 base',
+        wq.get('mode') === 'working' && wq.get('base') === null &&
+        wq.get('location[directory]') === '/proj/a' &&
+        q('#diffSub').textContent === '未提交' &&
+        q('#diffSources button[data-diffmode="working"]').classList.contains('active'),
+        wq.toString());
+      T('变更:未提交档不显示基线按钮且正常渲染',
+        q('#diffBase').hidden === true && qa('#diffBody .dfile').length === 2);
+
+      window.vcsBaseFail = true;
+      diffBaseByDir.clear();
+      reset();
+      await setDiffMode('branch');
+      T('变更:没有 review base 时不猜分支,先要求选基线',
+        q('#diffBody').textContent.indexOf('先选对比分支') >= 0 &&
+        q('#diffBase').hidden === false &&
+        q('#diffBase').textContent.indexOf('选择对比分支') >= 0 &&
+        q('#diffStat').textContent === '' &&
+        reqs(/^\/api\/vcs\/diff\?/).length === 0 &&
+        reqs(/^\/api\/vcs\/base\?/).length === 1,
+        reqs(/^\/api\/vcs\/diff\?/).length);
+
+      reset();
+      await openDiffBasePick();
+      T('变更:选择基线复用 #dlgPick 并列出分支',
+        q('#dlgPick').open === true && q('#pickTitle').textContent === '对比分支' &&
+        q('#pickList').textContent.indexOf('dev') >= 0 &&
+        store.pickItems.length === 3, store.pickItems);
+      var devItem = store.pickItems.filter(function (it) { return it.key === 'dev'; })[0];
+      await pickChoose(devItem);
+      var bq = new URL(reqs(/^\/api\/vcs\/diff\?/)[0].url, 'http://x').searchParams;
+      T('变更:选完基线自动重载全部档',
+        q('#dlgPick').open === false && diffBaseFor('ses_a').label === 'dev' &&
+        bq.get('mode') === 'branch' && bq.get('base') === 'dev' &&
+        q('#diffBase').textContent === '对比 dev', bq.toString());
+
+      diffBaseByDir.clear();
+      window.vcsBaseFail = false;
+      reset();
+      await setDiffMode('committed');
+      var cq = new URL(reqs(/^\/api\/vcs\/diff\?/)[0].url, 'http://x').searchParams;
+      T('变更:已提交档优先用服务端 review base',
+        cq.get('mode') === 'committed' && cq.get('base') === 'refs/heads/release' &&
+        q('#diffBase').textContent === '对比 release' &&
+        q('#diffSub').textContent === '已提交' &&
+        reqs(/^\/api\/vcs\/base\?/).length === 1, cq.toString());
+
+      window.vcsDiffEmpty = true;
+      reset();
+      await setDiffMode('working');
+      T('变更:未提交档空结果用自己的提示',
+        q('#diffBody').textContent.indexOf('工作区没有未提交变更') >= 0 &&
+        q('#diffStat').textContent === '0 个文件', q('#diffBody').textContent);
+      window.vcsDiffEmpty = false;
+
+      window.vcsDiffFail = true;
+      reset();
+      await setDiffMode('working');
+      T('变更:vcs.diff 失败显示服务端原因并清空正文',
+        q('#diffErr').hidden === false &&
+        q('#diffErr').textContent === '加载变更失败:vcs diff boom' &&
+        q('#diffBody').textContent === '' && q('#diffStat').textContent === '',
+        q('#diffErr').textContent);
+      window.vcsDiffFail = false;
+
+      reset();
+      await setDiffMode('turn');
+      T('变更:切回最近一轮回到 session.diff',
+        reqs(/^\/api\/vcs\/diff\?/).length === 0 &&
+        reqs(/^\/api\/session\/ses_a\/diff\?context=3$/).length === 1 &&
+        q('#diffSub').textContent === '最近一轮' && q('#diffBase').hidden === true);
 
       q('#dlgDiff').close();
       store.selected = null;

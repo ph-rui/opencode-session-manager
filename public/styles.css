@@ -1366,6 +1366,27 @@ dialog.dlg.dlgdiff {
 .diffhead h3 { margin: 0; }
 .diffsub { color: var(--muted); font-weight: 400; font-size: 0.85em; }
 .diffstat { color: var(--muted); font-family: var(--mono); font-size: 0.86em; white-space: nowrap; }
+/* 四档来源与对比基线。窄屏只靠 html.narrow 这一把尺子,不另写 @media。 */
+.diffbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.diffsources {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow-x: auto;
+}
+.diffsources button { white-space: nowrap; }
+.diffbase {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diffbase.need { border-color: var(--accent); color: var(--accent); }
 .diffbody {
   min-height: 80px;
   max-height: min(62vh, 680px);
@@ -1634,8 +1655,12 @@ html.narrow dialog.dlg {
   max-height: calc(100vh - 24px);
 }
 html.narrow .dlgform { padding: 14px 14px 12px; }
-/* 变更总览在手机上把标题和按钮留住,中间那块自己滚(横屏 393 高也还有得看) */
-html.narrow .diffbody { max-height: max(120px, calc(100vh - 230px)); }
+/* 变更总览在手机上把标题、来源和按钮留住,中间那块自己滚(横屏 393 高也还有得看) */
+html.narrow .diffbar { gap: 6px; }
+html.narrow .diffsources { flex: 1 1 auto; }
+html.narrow .diffsources button { min-height: 40px; padding: 0 8px; }
+html.narrow .diffbase { min-height: 40px; max-width: 42%; }
+html.narrow .diffbody { max-height: max(120px, calc(100vh - 272px)); }
 html.narrow .fldrow { flex-direction: column; }
 html.narrow .chkfld { min-height: 44px; }
 html.narrow .pick-item { padding: 11px 14px; }

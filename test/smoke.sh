@@ -2261,6 +2261,22 @@ else
   echo "FAIL: test/ui-tools.html 缺 §8.62 的重画断言"; fail=$((fail + 1))
 fi
 
+# ---- R21 组:/diff 四档来源 + 对比分支(§8.63;照 TUI 的 diff viewer)----
+SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
+if has "$APPJS" 'const DIFF_SOURCES = {' &&
+   has "$APPJS" "mode === 'branch' || mode === 'committed'" &&
+   has "$APPJS" "q.set('base', base.ref)" &&
+   has "$APPJS" 'async function openDiffBasePick()' &&
+   has "$APPJS" "btn.textContent = base ? '对比 ' + diffBaseText(base) : '选择对比分支…'" &&
+   has "$HOME_HTML" 'data-diffmode="committed"' && has "$HOME_HTML" 'id="diffBase"' &&
+   has "$CSS" '.diffsources {' && has "$CSS" 'html.narrow .diffsources button { min-height: 40px;' &&
+   has "$(cat "$SMOKE_CAP")" '变更:四档来源按钮齐全' &&
+   has "$(cat "$SMOKE_CAP")" '变更:选完基线自动重载全部档'; then
+  echo "PASS: /diff 有最近一轮/全部/未提交/已提交四档、对比分支选择与窄屏横滑"; pass=$((pass + 1))
+else
+  echo "FAIL: /diff 缺四档来源、对比分支选择或窄屏样式"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

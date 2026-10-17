@@ -1473,14 +1473,166 @@ async function copyTui() {
   flash(ok ? '命令已复制' : '已选中命令,请按 Ctrl+C 复制', ok ? 'ok' : 'warn');
 }
 
-/* ----------------------- 变更总览(照 TUI 的 /diff,最近一轮) ----------------------- */
+/* ----------------------- 变更总览(照 TUI 的 /diff) ----------------------- */
 
-// 服务端 /api/session/:id/diff 默认就是「最新一条用户消息那一轮」的净变更:
-// 它按 turn 的 idle 快照算,同一个文件在一轮里改了多次也只算最终结果。TUI 的
-// diff viewer 把这叫 Last turn;branch / working / committed 三档还没接。
+// 四档来源:
+//   turn      最近一轮(/api/session/:id/diff,按 turn 的 idle 快照算净变更,默认)
+//   branch    全部(/api/vcs/diff mode=branch,必须选对比基线)
+//   working   未提交(/api/vcs/diff mode=working)
+//   committed 已提交(/api/vcs/diff mode=committed,必须选对比基线)
 //
-// 并发用 diffSeq 兜住:点「刷新」或切会话时旧请求晚到,不能盖掉新结果。
+// 对比基线按工程目录记在内存里:与 TUI 一样,刷新页面 / 换目录后要重选,不写 cli.json。
+// 并发仍用 diffSeq 兜住:切来源、点「刷新」或切会话时旧请求晚到,不能盖掉新结果。
+const DIFF_SOURCES = {
+  turn: '最近一轮',
+  branch: '全部',
+  working: '未提交',
+  committed: '已提交',
+};
+let diffMode = 'turn';
+const diffBaseByDir = new Map(); // directory -> { ref, label }
 let diffSeq = 0;
+
+function diffModeValid(mode) {
+  return Object.prototype.hasOwnProperty.call(DIFF_SOURCES, mode);
+}
+
+function diffNeedsBase(mode) {
+  return mode === 'branch' || mode === 'committed';
+}
+
+function shortRef(ref) {
+  return String(ref || '').replace(/^refs\/(heads|remotes)\//, '');
+}
+
+function diffBaseFor(sid) {
+  const dir = sessionDir(sid);
+  return (dir && diffBaseByDir.get(dir)) || null;
+}
+
+function diffBaseText(base) {
+  return base ? shortRef(base.label || base.ref) : '';
+}
+
+// 标题旁的来源名、来源按钮高亮、基线按钮;只动自己的 DOM,不重画正文。
+function paintDiffHead(sid) {
+  const sub = $('#diffSub');
+  if (sub) sub.textContent = DIFF_SOURCES[diffMode] || DIFF_SOURCES.turn;
+  const src = $('#diffSources');
+  if (src) {
+    for (const b of src.querySelectorAll('button[data-diffmode]')) {
+      const on = b.dataset.diffmode === diffMode;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+  }
+  const btn = $('#diffBase');
+  if (!btn) return;
+  const needs = diffNeedsBase(diffMode);
+  btn.hidden = !needs;
+  if (!needs) return;
+  const base = diffBaseFor(sid);
+  btn.textContent = base ? '对比 ' + diffBaseText(base) : '选择对比分支…';
+  btn.title = base ? '当前对比基线:' + diffBaseText(base) : '选择对比分支';
+  btn.classList.toggle('need', !base);
+}
+
+function renderDiffNeedBase(sid) {
+  const body = $('#diffBody');
+  const stat = $('#diffStat');
+  if (body) {
+    body.innerHTML =
+      '<p class="dlghint">这一档要先选对比分支。点上面「选择对比分支…」,选完会自动加载。</p>';
+  }
+  if (stat) stat.textContent = '';
+  paintDiffHead(sid);
+}
+
+// 先问服务端记着的 review base;没有(503 Choose a review base)就返回 null,
+// 让用户自己选 —— 与 TUI 的 base 对话框一致,不擅自拿 branch.default 去算大 diff。
+async function ensureDiffBase(sid) {
+  const cached = diffBaseFor(sid);
+  if (cached) return cached;
+  const dir = sessionDir(sid);
+  if (!dir) return null;
+  let j;
+  try {
+    j = await api('/api/vcs/base?' + new URLSearchParams({ 'location[directory]': dir }).toString());
+  } catch (e) {
+    if (e.status === 503) return null;
+    throw e;
+  }
+  const d = j && j.data;
+  if (!d || !d.ref) return null;
+  const base = { ref: d.ref, label: d.name || shortRef(d.ref) };
+  diffBaseByDir.set(dir, base);
+  return base;
+}
+
+async function openDiffBasePick() {
+  const sid = store.selected;
+  if (!sid) return;
+  const dir = sessionDir(sid);
+  if (!dir) {
+    flash('这个会话没有工程目录', 'warn');
+    return;
+  }
+  let j;
+  try {
+    j = await api('/api/vcs/branch?' + new URLSearchParams({
+      'location[directory]': dir,
+      limit: '200',
+    }).toString());
+  } catch (e) {
+    flash('列分支失败:' + e.message, 'bad');
+    return;
+  }
+  const names = (j && Array.isArray(j.data) ? j.data : []).filter(Boolean);
+  if (!names.length) {
+    flash('这个工程没有可选分支', 'warn');
+    return;
+  }
+  const cur = diffBaseFor(sid);
+  openPick({
+    title: '对比分支',
+    filter: true,
+    filterHint: '过滤分支…',
+    current: cur ? shortRef(cur.ref) : undefined,
+    items: names.map((name) => ({ key: name, label: shortRef(name) })),
+    onPick: (it) => {
+      diffBaseByDir.set(dir, { ref: it.key, label: it.label });
+      paintDiffHead(sid);
+      return loadDiff();
+    },
+  });
+}
+
+function diffEmptyHint(sid) {
+  if (diffMode === 'working') return '工作区没有未提交变更。';
+  if (diffMode === 'branch') return '与对比分支没有差异。';
+  if (diffMode === 'committed') return '相对对比分支没有已提交差异。';
+  return sid && isRunning(sid)
+    ? '最近一轮还在跑;这轮改了文件的话,结束后点「刷新」。'
+    : '最近一轮没有文件变更。';
+}
+
+function diffUrl(sid, mode, base) {
+  if (mode === 'turn') return '/api/session/' + enc(sid) + '/diff?context=3';
+  const q = new URLSearchParams({
+    'location[directory]': sessionDir(sid),
+    mode: mode,
+    context: '3',
+  });
+  if (base) q.set('base', base.ref);
+  return '/api/vcs/diff?' + q.toString();
+}
+
+function setDiffMode(mode) {
+  if (!diffModeValid(mode)) return;
+  diffMode = mode;
+  paintDiffHead(store.selected);
+  return loadDiff();
+}
 
 function openDiff() {
   const sid = store.selected;
@@ -1496,6 +1648,7 @@ function openDiff() {
   if (body) body.innerHTML = '<p class="dlghint">正在加载变更…</p>';
   const dlg = $('#dlgDiff');
   if (!dlg) return; // 老测试页没有这个框
+  paintDiffHead(sid);
   if (!dlg.open) openDlg(dlg);
   return loadDiff();
 }
@@ -1505,13 +1658,9 @@ function renderDiffFiles(files, sid) {
   const stat = $('#diffStat');
   if (!body) return;
   if (!files.length) {
-    body.innerHTML =
-      '<p class="dlghint">' +
-      (sid && isRunning(sid)
-        ? '最近一轮还在跑;这轮改了文件的话,结束后点「刷新」。'
-        : '最近一轮没有文件变更。') +
-      '</p>';
+    body.innerHTML = '<p class="dlghint">' + esc(diffEmptyHint(sid)) + '</p>';
     if (stat) stat.textContent = '0 个文件';
+    paintDiffHead(sid);
     return;
   }
   let adds = 0;
@@ -1523,6 +1672,7 @@ function renderDiffFiles(files, sid) {
   // 不传 pid:框里不出「并排 / 统一」按钮,视图跟消息卡片共享同一个全局偏好。
   body.innerHTML = diffHtml(files);
   if (stat) stat.textContent = files.length + ' 个文件 · +' + adds + ' -' + dels;
+  paintDiffHead(sid);
 }
 
 async function loadDiff() {
@@ -1530,14 +1680,27 @@ async function loadDiff() {
   const dlg = $('#dlgDiff');
   if (!sid || !dlg) return;
   const seq = ++diffSeq;
+  const mode = diffMode;
   const err = $('#diffErr');
   const body = $('#diffBody');
   const btn = $('#diffReload');
   if (err) err.hidden = true;
   if (body && !body.innerHTML) body.innerHTML = '<p class="dlghint">正在加载变更…</p>';
+  paintDiffHead(sid);
   setBusy(btn, true, '刷新中…');
   try {
-    const j = await api('/api/session/' + enc(sid) + '/diff?context=3');
+    let base = null;
+    if (diffNeedsBase(mode)) {
+      base = await ensureDiffBase(sid);
+      if (seq !== diffSeq || store.selected !== sid) return;
+      if (!base) {
+        renderDiffNeedBase(sid);
+        return;
+      }
+      paintDiffHead(sid);
+    }
+    if (mode !== 'turn' && !sessionDir(sid)) throw new Error('这个会话没有工程目录');
+    const j = await api(diffUrl(sid, mode, base));
     if (seq !== diffSeq || store.selected !== sid) return;
     if (!j || !Array.isArray(j.data)) throw new Error('服务端没有返回变更列表');
     renderDiffFiles(j.data, sid);
@@ -1547,6 +1710,7 @@ async function loadDiff() {
     if (body) body.innerHTML = '';
     const stat = $('#diffStat');
     if (stat) stat.textContent = '';
+    paintDiffHead(sid);
   } finally {
     if (seq === diffSeq) setBusy(btn, false);
   }
@@ -8035,6 +8199,15 @@ function init() {
   $('#exportOk').addEventListener('click', submitExport);
   $('#tuiCopy').addEventListener('click', copyTui);
   $('#diffReload').addEventListener('click', loadDiff);
+  const diffSources = $('#diffSources');
+  if (diffSources) {
+    diffSources.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-diffmode]');
+      if (b) setDiffMode(b.dataset.diffmode);
+    });
+  }
+  const diffBase = $('#diffBase');
+  if (diffBase) diffBase.addEventListener('click', openDiffBasePick);
   // 关框就让在途请求作废,别在后台把结果写回已关掉的框
   $('#dlgDiff').addEventListener('close', () => {
     diffSeq++;

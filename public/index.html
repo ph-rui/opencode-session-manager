@@ -255,8 +255,17 @@
   <dialog id="dlgDiff" class="dlg dlgdiff">
     <div class="dlgform">
       <div class="diffhead">
-        <h3>变更 <span class="diffsub">最近一轮</span></h3>
+        <h3>变更 <span class="diffsub" id="diffSub">最近一轮</span></h3>
         <span class="diffstat" id="diffStat"></span>
+      </div>
+      <div class="diffbar">
+        <div class="seg diffsources" id="diffSources" role="tablist" aria-label="变更来源">
+          <button type="button" role="tab" data-diffmode="turn" class="active" aria-selected="true">最近一轮</button>
+          <button type="button" role="tab" data-diffmode="branch" aria-selected="false">全部</button>
+          <button type="button" role="tab" data-diffmode="working" aria-selected="false">未提交</button>
+          <button type="button" role="tab" data-diffmode="committed" aria-selected="false">已提交</button>
+        </div>
+        <button type="button" class="chip diffbase" id="diffBase" hidden></button>
       </div>
       <div class="diffbody" id="diffBody"></div>
       <p class="dlgerr" id="diffErr" hidden></p>

@@ -3161,6 +3161,76 @@ ERRORS []
 
 ---
 
+### 8.63 /diff 接四档来源与对比分支
+
+**起因**:上一批 1–4 之后的下一条;§8.57 的变更总览只接 `session.diff` 的 Last turn。
+TUI 的 diff viewer 还有 `branch` / `working` / `committed` 三档,服务端 OpenAPI 里对应
+`GET /api/vcs/diff`(mode 三选一)和 `GET /api/vcs/base`(review base)。
+
+**结论**:对话框加四个来源按钮 —— **最近一轮 / 全部 / 未提交 / 已提交**。`turn` 仍打
+`/api/session/:id/diff?context=3`;`working` 打 `mode=working`;`branch` / `committed`
+必须先有一个对比基线 `base`。基线按工程目录只记在内存里(与 TUI 的「记住到退出」同类),
+刷新页面 / 换目录后重选,不写 `cli.json`。
+
+**基线**:
+
+| 情况 | 行为 |
+|---|---|
+| `/api/vcs/base` 有值 | 直接用它(`name` 做按钮文案,`ref` 进 query) |
+| 返回 `503 Choose a review base` | 不猜 `branch.default`;正文提示先选基线,按钮变「选择对比分支…」 |
+| 用户点基线按钮 | 复用 `#dlgPick`,列 `/api/vcs/branch?limit=200`,可过滤;选中后记住并自动重载 |
+| 失败 / 没有分支 | 只 toast 服务端原因 / 「这个工程没有可选分支」,不改当前正文 |
+
+**改动**:
+
+| 位置 | 行为 |
+|---|---|
+| 头部 | `#diffSub` 显示来源名;下面 `.diffbar` 放 `#diffSources` 四档与 `#diffBase`(仅 `branch` / `committed` 露) |
+| `setDiffMode(mode)` | 合法值才切;先 `paintDiffHead()` 再 `loadDiff()`;点按钮与测试都走同一条路 |
+| `ensureDiffBase()` | 先查目录缓存,再 `GET /api/vcs/base`;只把 `503` 当「还没选」,其它错误照常报 |
+| `loadDiff()` | `branch` / `committed` 先拿基线;没有就 `renderDiffNeedBase()`(不发 `vcs.diff`);有则把 `mode` / `base` / `location[directory]` / `context=3` 拼进 URL |
+| 空结果 | 来源各说各的:未提交「工作区没有未提交变更」、全部「与对比分支没有差异」、已提交「相对对比分支没有已提交差异」;最近一轮保留「还在跑 / 没有变更」 |
+| 并发 | 仍用 `diffSeq`;切来源、刷新、关框都会让旧响应作废 |
+| 样式 | `.diffsources` 横向滚动;窄屏按钮 40px 高、`.diffbody` 上限从 `100vh - 230px` 调到 `-272px`,给来源行让位;只写 `html.narrow`,没有第二份 `@media` |
+
+**服务端**:没有改。现有 `/api/*` 反向代理已经透传 `/api/vcs/*`,鉴权仍由代理注入。
+
+**实测**(真页面 1366×900,临时 git 工程 `/tmp/ocsm-probe/diff-863-demo`、临时会话,
+不碰真实业务会话;结束删会话):
+
+```
+A sources   最近一轮* / 全部 / 未提交 / 已提交
+B working   未提交 · 1 个文件 · +1 -0,基线按钮不露
+C no base   全部 · 按钮「选择对比分支…」· 正文不发 vcs.diff
+D pick      对比分支:feature / master / probe-base
+E branch    选 probe-base 后 3 个文件 · +3 -0;再次请求带 mode=branch&base=probe-base
+F committed 已提交 · 2 个文件 · +2 -0(未提交的 b.txt 不在这档)
+ERRORS []
+```
+
+窄屏量尺(真页面 393×894 / 894×393):竖屏来源行 339×42,四个按钮各 40px 高;
+正文 622px 高;`document.scrollWidth == innerWidth`。桌面来源行 228×24。横屏沿用宽屏尺寸,
+来源行 24px,正文 244px。
+
+**取舍**:
+
+- **不猜 `branch.default`**。当前 Linux 工程 `/api/vcs/base` 就是 503;拿默认分支硬算
+  可能是一个跨几百个提交的巨大 diff,用户也未必想比那个分支。
+- **基线缓存在内存、按目录**。不写 `cli.json`:TUI 的 `diffs.source` / base 不是面板该
+  共享的偏好(§8.60 只共享 `diffs.view`),刷新后重选比写错文件安全。
+- **不新增服务端路由**。`/api/vcs/*` 已经在代理白名单里;能少一层就少一层。
+- **503 会在浏览器 DevTools 里留一条网络 error**。这是服务端「还没选基线」的正常响应,
+  面板已按提示处理;不是脚本异常。
+- 文件树 / 逐文件 reviewed 标记仍不在这一条(下一条 §8.64)。
+
+**回归**:`smoke.sh` 351 → **352**(1 项:四档 / 基线 / 窄屏静态锁),
+`ui-capabilities` 150 → **160**(10 项:四档按钮、`working` 不带 base、无 base 不请求
+`vcs.diff`、基线选择复用 `#dlgPick`、选完自动重载、`committed` 优先用服务端 base、
+空结果文案、失败、切回最近一轮);其余套件计数不变;全量回归 **0 失败**,
+日志 `/tmp/ocsm-probe/perf/regress-863.log`。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
@@ -3174,7 +3244,7 @@ ERRORS []
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
 | worktree 管理补到列出 / 删除 / 移入 | 复用 `#dlgPick` 和现有 `+ 新建`，不新造对话框；把 TUI `Worktrees` 最常用的后半段补齐 | 只列工程根目录，不拆子目录；删除前不展示文件变更预览，用原生 `confirm`；入口只在 `/worktrees` 命令（§8.61）|
-| 变更总览只接 Last turn | 服务端 `/diff` 按 turn 快照算净变更，同一轮改多次只算最终结果，shell 改的也算；「刚跑完这轮改了什么」是最常看的 | `branch` / `working` / `committed` 三档、文件树、逐文件 reviewed 仍在 TUI 的 diff viewer（§8.57）|
+| 变更总览接四档 | `turn` 按 turn 快照算净变更；`branch` / `working` / `committed` 走 `vcs.diff`，与 TUI 的 diff viewer 同名同义 | 对比基线不猜 `branch.default`，没 base 时先让用户选；文件树 / 逐文件 reviewed 仍待做（§8.63）|
 | 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
 | 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
 | diff 统一视图无条件折行 | 照 TUI 的 `wrapMode="char"`；393px 上不用左右拖着读 | 超长单 token 会断在任意字符；Markdown 代码块仍横向滚（§8.58）|
