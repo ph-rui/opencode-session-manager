@@ -2349,6 +2349,22 @@ else
   echo "FAIL: §8.69 的子会话选择、父会话入口或收工行跳转缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R26 组:/timeline 跳到用户消息 + /fork 从消息分叉(§8.70 / A2 + A3)----
+SMOKE_PICKS="$(dirname "$0")/ui-picks.html"
+if has "$APPJS" 'function jumpToMessage(id)' &&
+   has "$APPJS" 'function openTimeline()' &&
+   has "$APPJS" 'function openForkPick(sid)' &&
+   has "$APPJS" 'async function forkSession(sid, before, open)' &&
+   has "$APPJS" "name: 'timeline'" && has "$APPJS" "name: 'fork'" &&
+   has "$APPJS" 'body: JSON.stringify(before ? { before: before } : {})' &&
+   has "$APPJS" 'await forkSession(id, null, false);' &&
+   has "$(cat "$SMOKE_PICKS")" '/timeline:选中后滚到那条消息' &&
+   has "$(cat "$SMOKE_PICKS")" '/fork:选中某条用户消息发 {before}'; then
+  echo "PASS: §8.70 /timeline 按消息 id 滚过去,/fork 带 before 分叉并打开新会话;列表行分叉保持只刷新"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.70 的时间线 / 分叉函数、命令或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

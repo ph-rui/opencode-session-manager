@@ -116,6 +116,23 @@ function rel(ts) {
   return new Date(ts).toLocaleDateString();
 }
 
+// 时间线 / 分叉选择框的副文案:照 TUI 的 Locale.time(toLocaleTimeString short),
+// 只给时刻,不给「几分钟前」—— 同一批消息按时间排,时刻比相对值更好定位。
+function fmtClock(ts) {
+  if (!ts) return '';
+  try {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (_) {
+    return '';
+  }
+}
+
+// 用户消息在时间线 / 分叉选择框里的主文案:正文压平换行(照 TUI 的 replace(/\n/g, " "))。
+function userMsgLabel(m) {
+  const text = String((m && (m.text || m.summary)) || '').replace(/\s+/g, ' ').trim();
+  return text || '(空消息)';
+}
+
 function fmtCost(c) {
   return c && c > 0 ? '$' + c.toFixed(2) : '';
 }
@@ -2665,6 +2682,27 @@ function updateJumpLatest(atB) {
 function jumpToLatest() {
   pinBottom($('#messages'));
   updateJumpLatest(true); // 刚贴的底,位置已知,不用再量
+}
+
+/* §8.70:按消息 id 跳过去(照 TUI session.timeline 的 jumpToMessage)。
+ * 只认当前已渲染的 .msg 节点:时间线列的本来就是 store.messages 里的消息,所以正常都在;
+ * 万一那条已被删 / 掉出这一页,就明说一句,别让用户以为点了没反应。
+ * 对齐方式照 TUI:消息顶端贴住滚动口上沿(applyScrollAnchor 的 off:0),
+ * 并把跟随底部关掉 —— 否则下一次渲染会把人又拽回最新消息。 */
+function jumpToMessage(id) {
+  const box = $('#messages');
+  let rec = id ? msgEls.get(id) : null;
+  if (rec && rec.absorbed) rec = msgEls.get(rec.absorbed) || rec;
+  if (!box || !rec || !rec.el || rec.el.parentElement !== box) {
+    flash('这条消息不在当前已加载的消息里', 'warn');
+    return false;
+  }
+  applyScrollAnchor({ id: id, off: 0, top: 0 });
+  // 滚完再量一次:长会话里跳到中间就关掉跟随;短会话内容撑不满,目标本来就在底部,
+  // 这时仍应当算「贴着底」(别平白露出「跳到最新」按钮)。
+  updateJumpLatest();
+  saveScrollAnchor();
+  return true;
 }
 
 /* cvmany(content-visibility: auto)下 scrollHeight 是【估值】:贴完底之后浏览器才把
@@ -6478,14 +6516,7 @@ async function onAction(act, id) {
   }
 
   if (act === 'fork') {
-    await guard(() =>
-      api('/api/session/' + id + '/fork', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-    );
-    await loadSessions({ reset: true });
+    await forkSession(id, null, false);
     return;
   }
 }
@@ -6897,6 +6928,8 @@ const PANEL_COMMANDS = [
   { name: 'tui', description: '在 TUI 中打开当前会话', run: () => openTui() },
   { name: 'copy', description: '复制「在 TUI 打开」的命令', run: () => copyTui() },
   { name: 'sessions', description: '切换会话(列表选择)', run: () => openSessionPick() },
+  { name: 'timeline', description: '跳到某条用户消息(时间线)', run: () => openTimeline() },
+  { name: 'fork', description: '从完整会话或某条用户消息分叉', run: (sid) => openForkPick(sid) },
   { name: 'subagents', description: '选择并打开当前会话的子会话', run: (sid) => openSubagentPick(sid) },
   { name: 'parent', description: '回到父会话', run: (sid) => goParent(sid) },
   { name: 'models', description: '选择模型(含推理档位)', run: () => openModelPick() },
@@ -6912,6 +6945,8 @@ const HELP_KEYS = [
   { k: '↑ / ↓', d: '面板里移动;光标在首行/末行时取输入历史' },
   { k: 'Enter / Tab', d: '选中面板项' },
   { k: '/worktrees', d: '列出 / 删除工作树,或把当前会话移进去' },
+  { k: '/timeline', d: '跳到某条用户消息' },
+  { k: '/fork', d: '从完整会话或某条用户消息分叉' },
   { k: '/subagents', d: '选择并打开当前会话的子会话' },
   { k: '/parent', d: '回到父会话' },
   { sec: '会话' },
@@ -7136,6 +7171,92 @@ function openSessionPick() {
     items,
     onPick: (it) => selectSession(it.key),
   });
+}
+
+// /timeline:照 TUI 的 DialogTimeline —— 只列用户消息、最新的在前,选中即滚到那条。
+function openTimeline() {
+  const sid = store.selected;
+  if (!sid) return;
+  const users = currentMessages()
+    .filter((m) => m.type === 'user' && !msgHidden(m))
+    .reverse();
+  if (!users.length) {
+    flash('这个会话还没有用户消息', 'warn');
+    return;
+  }
+  openPick({
+    title: '时间线',
+    filter: true,
+    filterHint: '按消息内容过滤…',
+    items: users.map((m) => ({
+      key: m.id,
+      label: userMsgLabel(m),
+      sub: fmtClock(m.time && m.time.created),
+    })),
+    onPick: (it) => {
+      // 对话框开着时用户不会切会话;保险起见还是确认一下,别把新会话滚到旧位置。
+      if (store.selected === sid) jumpToMessage(it.key);
+    },
+  });
+}
+
+// /fork:照 TUI 的 DialogFork —— 第一项是完整会话(请求体 {}),其余用户消息发 {before:id}。
+function openForkPick(sid) {
+  sid = sid || store.selected;
+  if (!sid) return;
+  const users = currentMessages()
+    .filter((m) => m.type === 'user' && !msgHidden(m))
+    .reverse();
+  const items = [{ key: '', label: '完整会话', sub: '从末尾分叉' }].concat(
+    users.map((m) => ({
+      key: m.id,
+      label: userMsgLabel(m),
+      sub: fmtClock(m.time && m.time.created),
+    }))
+  );
+  openPick({
+    title: '分叉会话',
+    filter: true,
+    filterHint: '按消息内容过滤…',
+    items,
+    onPick: (it) => forkSession(sid, it.key || null, true),
+  });
+}
+
+/* 发分叉请求。open=true 时照 TUI 直接把新会话打开;左栏行上的「分叉」仍只刷新列表
+ * (老行为,不因为加了 /fork 就改掉列表行的习惯)。
+ * 响应形状按服务端两种可能都兜住:直接的会话对象,或 { data: 会话 }(还可能套 info)。 */
+async function forkSession(sid, before, open) {
+  if (!sid) return;
+  let made = null;
+  try {
+    const j = await api('/api/session/' + enc(sid) + '/fork', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(before ? { before: before } : {}),
+    });
+    made = (j && (j.data || j)) || null;
+  } catch (e) {
+    flash('分叉失败:' + e.message, 'bad');
+    return;
+  }
+  const info = made && made.info ? made.info : made;
+  const nid = info && info.id;
+  await loadSessions({ reset: true });
+  if (!open) {
+    flash('已从末尾分叉会话', 'ok');
+    return;
+  }
+  if (!nid) {
+    flash('已分叉会话,列表已刷新', 'ok');
+    return;
+  }
+  if (info && typeof info === 'object') {
+    store.sessions.set(nid, info);
+    if (info.parentID) store.subs.set(nid, info.parentID);
+  }
+  await selectSession(nid);
+  flash('已分叉会话:' + ((info && info.title) || nid), 'ok');
 }
 
 // /models:按 provider 分组;选定后再追问一次变体(模型有 variants 时),与 TUI 一致

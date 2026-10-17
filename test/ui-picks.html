@@ -112,6 +112,11 @@
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
       if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
       if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) return json({ data: { id: 'msg_new' } });
+      if (/^\/api\/session\/[^/?]+\/fork$/.test(u)) {
+        return json({ data: { id: 'ses_fork', title: '分叉会话', projectID: 'pj1',
+          time: { created: 5, updated: 950 }, tokens: {}, cost: 0,
+          location: { directory: '/proj/alpha' } } });
+      }
       var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
       if (m) return json({ data: [
         { id: 'msg_u1', type: 'user', time: { created: 100 }, text: '第一句' },
@@ -406,6 +411,82 @@
         picksOpen() === false && q('#toast').textContent.indexOf('没有子会话') >= 0,
         q('#toast').textContent);
       store.selected = 'ses_a';
+
+      /* ================= /timeline + /fork(§8.70) ================= */
+      store.messages.clear();
+      for (var mt = 0; mt < 40; mt++) {
+        store.messages.set('msg_t' + mt, {
+          id: 'msg_t' + mt,
+          type: 'user',
+          time: { created: 1700000000000 + mt * 60000 },
+          text: '第 ' + mt + ' 问' + (mt === 39 ? '\n第二行' : ''),
+        });
+      }
+      renderMessages();
+      jumpToLatest();
+      var mbox = q('#messages');
+      var bottomTop = mbox.scrollTop;
+
+      openTimeline();
+      T('/timeline:标题', q('#pickTitle').textContent === '时间线');
+      T('/timeline:开着过滤框', q('#pickFilter').hidden === false);
+      T('/timeline:只列用户消息、最新的在前',
+        items().length === 40 && items()[0].key === 'msg_t39' && items()[39].key === 'msg_t0',
+        [items().length, items()[0] && items()[0].key, items()[39] && items()[39].key]);
+      T('/timeline:正文压平换行', items()[0].label === '第 39 问 第二行', items()[0].label);
+      T('/timeline:sub 是时刻', /\d{1,2}:\d{2}/.test(items()[0].sub), items()[0].sub);
+
+      pickChoose(items()[39]);
+      var jumpTop = msgEls.get('msg_t0').el.getBoundingClientRect().top - mbox.getBoundingClientRect().top;
+      T('/timeline:选中后滚到那条消息', Math.abs(jumpTop) <= 2 && mbox.scrollTop < bottomTop,
+        [jumpTop, mbox.scrollTop, bottomTop]);
+      T('/timeline:滚过去后不再跟随底部', store.nearBottom === false, store.nearBottom);
+
+      clearToast();
+      var jumped = jumpToMessage('msg_nope');
+      T('/timeline:消息不在当前页时明说一句',
+        jumped === false && q('#toast').textContent.indexOf('不在当前') >= 0,
+        [jumped, q('#toast').textContent]);
+
+      openForkPick('ses_a');
+      T('/fork:标题', q('#pickTitle').textContent === '分叉会话');
+      T('/fork:开着过滤框', q('#pickFilter').hidden === false);
+      T('/fork:第一项是完整会话',
+        items()[0].key === '' && items()[0].label === '完整会话' && items()[0].sub === '从末尾分叉',
+        items()[0]);
+      T('/fork:后面是用户消息、最新的在前',
+        items().length === 41 && items()[1].key === 'msg_t39' && items()[40].key === 'msg_t0',
+        [items().length, items()[1] && items()[1].key, items()[40] && items()[40].key]);
+
+      window.calls.length = 0;
+      await pickChoose(items().filter(function (i) { return i.key === 'msg_t5'; })[0]);
+      await settle(function () { return store.selected === 'ses_fork'; });
+      T('/fork:选中某条用户消息发 {before}',
+        bodyOf(lastCall(/\/fork$/)).before === 'msg_t5' &&
+        bodyOf(lastCall(/\/fork$/)).sessionID === undefined,
+        bodyOf(lastCall(/\/fork$/)));
+      T('/fork:选中后打开新会话', store.selected === 'ses_fork', store.selected);
+      T('/fork:新会话进了 store',
+        store.sessions.has('ses_fork') && store.sessions.get('ses_fork').title === '分叉会话');
+
+      store.selected = 'ses_a';
+      openForkPick('ses_a');
+      window.calls.length = 0;
+      await pickChoose(items()[0]);
+      await settle(function () { return hadCall(/\/fork$/) && store.selected === 'ses_fork'; });
+      T('/fork:完整会话发空请求体(不带 before)',
+        bodyOf(lastCall(/\/fork$/)).before === undefined, bodyOf(lastCall(/\/fork$/)));
+      T('/fork:完整会话也打开新会话', store.selected === 'ses_fork', store.selected);
+
+      store.selected = 'ses_a';
+      window.calls.length = 0;
+      await onAction('fork', 'ses_a');
+      T('列表行分叉:仍只刷新列表,不切走', store.selected === 'ses_a' && hadCall(/\/fork$/),
+        [store.selected, hadCall(/\/fork$/)]);
+
+      T('命令面板:有 /timeline 与 /fork',
+        PANEL_COMMANDS.some(function (c) { return c.name === 'timeline'; }) &&
+        PANEL_COMMANDS.some(function (c) { return c.name === 'fork'; }));
 
       await openModelPick();
       T('/models:标题', q('#pickTitle').textContent === '选择模型');
