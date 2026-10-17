@@ -2516,6 +2516,25 @@ else
   echo "FAIL: §8.79 的列表 / 状态 / 只读交互 / 命令入口或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R36 组:导出 Markdown / JSON(§8.80)----
+if has "$APPJS" 'function exportFormat()' &&
+   has "$APPJS" 'function syncExportForm()' &&
+   has "$APPJS" 'function setupExport()' &&
+   has "$APPJS" 'function downloadText(name, text, mime)' &&
+   has "$APPJS" "if (format === 'markdown') {" &&
+   has "$APPJS" 'const md = transcriptText(d.info || s, d.messages || []);' &&
+   has "$APPJS" "downloadText(name, md, 'text/markdown;charset=utf-8');" &&
+   has "$APPJS" 'setupExport(); // §8.80' &&
+   has "$APPJS" "description: '导出当前会话为 Markdown / JSON'" &&
+   has "$(cat "$(dirname "$0")/../public/index.html")" 'id="exportFormatMarkdown"' &&
+   has "$CSS" '#exportSanitizeRow[hidden] { display: none; }' &&
+   has "$(cat "$(dirname "$0")/ui-capabilities.html")" 'Markdown 导出是转录正文,不是 JSON' &&
+   has "$(cat "$(dirname "$0")/ui-capabilities.html")" 'Markdown 导出文件名带标题与 .md'; then
+  echo "PASS: §8.80 导出默认 Markdown、JSON 仍可脱敏、转录文件与格式切换都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.80 的格式切换 / Markdown 转录 / 文件下载 / 脱敏显隐或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

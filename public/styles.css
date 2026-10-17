@@ -1315,6 +1315,7 @@ html.narrow .dlgfoot .hNarrow { display: inline; }
   user-select: none;
 }
 .chk input { width: auto; margin: 0; }
+#exportSanitizeRow[hidden] { display: none; }
 #archivedCount { color: var(--muted); }
 
 .arch-badge { color: #8a6a00; font-size: 11px; white-space: nowrap; }

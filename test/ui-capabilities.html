@@ -71,7 +71,12 @@
     <button type="button" id="importOk">导入</button></div></dialog>
 
   <dialog id="dlgExport" class="dlg"><div class="dlgform"><h3>导出会话</h3>
-    <input type="checkbox" id="exportSanitize" checked>
+    <div class="fldrow" id="exportFormats">
+      <label class="chk"><input type="radio" name="exportFormat" id="exportFormatMarkdown" value="markdown" checked> Markdown(转录)</label>
+      <label class="chk"><input type="radio" name="exportFormat" id="exportFormatJson" value="json"> JSON(原始数据)</label>
+    </div>
+    <label class="chk" id="exportSanitizeRow"><input type="checkbox" id="exportSanitize" checked> 脱敏</label>
+    <p class="dlghint" id="exportHint"></p>
     <p id="exportErr" hidden></p>
     <button type="button" id="exportOk">导出</button></div></dialog>
 
@@ -802,13 +807,52 @@
       /* ---------------- 导出 ---------------- */
       seed();
       store.selected = 'ses_a';
+      var useExport = function (fmt) {
+        q('#exportFormatMarkdown').checked = fmt === 'markdown';
+        q('#exportFormatJson').checked = fmt === 'json';
+        syncExportForm();
+      };
+
+      /* §8.80 默认 Markdown:照 TUI 的 DialogExportOptions,打开就是转录格式 */
+      openExport();
+      T('导出默认选 Markdown', q('#exportFormatMarkdown').checked === true &&
+        q('#exportFormatJson').checked === false);
+      T('Markdown 时不显示脱敏勾选,提示写清不含思考',
+        q('#exportSanitizeRow').hidden === true &&
+        q('#exportHint').textContent.indexOf('不含思考') >= 0,
+        [q('#exportSanitizeRow').hidden, q('#exportHint').textContent]);
+
+      reset();
+      window.__blobs = [];
+      window.__downloads = [];
+      await submitExport();
+      var ce = reqs(/\/export/)[0];
+      T('Markdown 导出 GET export?sanitize=false', !!ce &&
+        ce.url === '/api/experimental/session/ses_a/export?sanitize=false', ce && ce.url);
+      T('Markdown 导出文件名带标题与 .md', window.__downloads.length === 1 &&
+        window.__downloads[0] === '活动会话-ses_a.md', window.__downloads);
+      var mdTxt = await window.__blobs[0].text();
+      T('Markdown 导出是转录正文,不是 JSON',
+        mdTxt.indexOf('# 活动会话') === 0 &&
+        mdTxt.indexOf('**Session ID:** ses_a') >= 0 &&
+        mdTxt.indexOf('## User\n\nhello') >= 0 &&
+        mdTxt.indexOf('"messages"') < 0,
+        mdTxt);
+      T('Markdown 导出的 MIME 是 text/markdown',
+        window.__blobs[0].type.indexOf('text/markdown') === 0, window.__blobs[0].type);
+
+      useExport('json');
+      T('JSON 时显示脱敏勾选与完整内容提示',
+        q('#exportSanitizeRow').hidden === false &&
+        q('#exportHint').textContent.indexOf('完整内容') >= 0,
+        [q('#exportSanitizeRow').hidden, q('#exportHint').textContent]);
       reset();
       window.__blobs = [];
       window.__downloads = [];
       q('#exportSanitize').checked = false;
       q('#exportErr').hidden = true;
       await submitExport();
-      var ce = reqs(/\/export/)[0];
+      ce = reqs(/\/export/)[0];
       T('导出 GET export?sanitize=false', !!ce && ce.url === '/api/experimental/session/ses_a/export?sanitize=false', ce && ce.url);
       T('导出触发一次下载', window.__downloads.length === 1, window.__downloads);
       T('不脱敏时文件名带标题', window.__downloads[0].indexOf('活动会话') === 0 && /ses_a\.json$/.test(window.__downloads[0]), window.__downloads[0]);

@@ -3977,6 +3977,54 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 **回归**：`smoke.sh` 366 → **367**，`ui-picks` 159 → **169**；其余套件计数不变；
 全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-879.log`。
 
+### 8.80 导出:默认 Markdown 转录,JSON 保留脱敏
+
+**起因**：TUI 的 `session.export`（`routes/session/index.tsx:1201`）先弹 `DialogExportOptions`，
+可选 JSON / Markdown，Markdown 还能选 thinking / tools；面板的 `#dlgExport` 只有 JSON +
+脱敏。B5 先补 Markdown 与格式选择，thinking / tools 开关随后。
+
+**结论**：导出对话框默认 Markdown（与 TUI 一致），JSON 作为第二种格式保留原来的
+`sanitize` 选项。Markdown 复用 §8.72 的 `transcriptText()`（用户 + 助手正文 + 工具摘要，
+不含思考），走同一个 export 接口，下载成 `.md`；JSON 仍是 `{data:{info,messages}}` 原始载荷。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 对话框 | `#exportFormats` 两个 radio：Markdown（默认）/ JSON；`#exportSanitizeRow` 只在 JSON 时显示（`syncExportForm()`） |
+| 打开 | `openExport()` 每次复位成 Markdown、脱敏勾选、清错误，避免上次选的 JSON 留在那里 |
+| 请求 | 两种格式都走 `GET /api/experimental/session/:id/export`；Markdown 固定 `sanitize=false`（它本来就不带 metadata），JSON 按勾选发 `true` / `false` |
+| Markdown | `transcriptText(d.info || s, d.messages || [])` → `downloadText(name, md, 'text/markdown;charset=utf-8')`；文件名 `标题-ses_x.md`，无标题用 `session-ses_x.md` |
+| JSON | 保持原行为：`JSON.stringify({data}, null, 2)`、`.json`、脱敏时文件名不带标题 |
+| 空转录 | Markdown 没有可导出的正文时在对话框里报「这个会话还没有可导出的正文」，不下载空文件 |
+
+**取舍**：
+
+- **先只做格式**：TUI 的 thinking / tools 两个开关会改变 `formatSessionTranscript` 的参数；
+  面板的 `transcriptText()` 目前固定「不含思考、带工具摘要」，先把这个默认行为交付，
+  两个开关单独一项做，免得一次改导出、复制、转录三处。
+- **工具只留摘要**：Markdown 里的工具行是 §8.72 的摘要（名字 + 关键参数 + 错误标记），
+  不是 TUI 的完整 input / output 代码块；完整内容仍在 JSON 里。纯文本导出先保证可读。
+- **直接下载，不写临时文件**：TUI 写 tmpdir 再弹路径对话框；浏览器有下载目录，直接
+  `Blob` + `<a download>` 更符合页面习惯，也不需要在服务端写文件。
+- **Markdown 不脱敏**：它的契约是完整转录；`sanitize` 只属于 JSON 原始载荷。要脱敏的
+  会话标题 / 目录不会进 Markdown 的正文，但标题本身仍会出现在文件头，这是转录语义。
+- **每次打开复位 Markdown**：照 TUI 的 `DialogExportOptions` 初始值；不把格式写进 local
+  storage，避免下次误导出。
+
+**验证**：
+
+- `ui-capabilities.html` 新增 7 项：默认 Markdown、Markdown 隐藏脱敏并提示不含思考、
+  Markdown 请求 `sanitize=false`、文件名 `.md`、正文是转录不是 JSON、MIME 是
+  `text/markdown`、切 JSON 后脱敏勾选与完整内容提示回来。
+- `smoke.sh` 新增 1 项静态锁：`exportFormat` / `syncExportForm` / `setupExport` /
+  `downloadText` / Markdown 分支调用 `transcriptText`、radio 与隐藏样式、命令说明，以及
+  `ui-capabilities.html` 的关键断言都在。
+- `node --check public/app.js` 通过。
+
+**回归**：`smoke.sh` 367 → **368**，`ui-capabilities` 183 → **190**；其余套件计数不变；
+全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-880.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -3999,6 +4047,7 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 | **`/skills` 选技能，按 `prompt.skills` 发送**（§8.77）| 与 TUI 的 `prompt.skills` / `DialogSkill` 同入口；技能和文件在请求体里彻底分流，同名也不会串；`skillHits` 按会话留在内存，切回草稿仍可发 | `@` 补全仍只找文件；技能只认显式选择；不跨刷新持久化；只列当前工程 |
 | **探索工具组可切「逐条显示」**（§8.78）| 与 TUI 的 `session.toggle.exploration_grouping` 对齐；关掉时跨消息吸收一起短路，续步恢复独立消息；偏好本机保存，不动数据 | 只做探索分组，思考块的全局折叠仍没做；偏好不写 `cli.json`；切换会重画 DOM，已摊开的组回到默认折叠 |
 | **`/mcps` 只读列服务器状态**（§8.79）| 与 TUI 的 `mcp.list` 同入口；先交代有哪些服务器、连没连上、为什么失败，不碰运行时写操作 | 不接 connect / disconnect / add / remove；`/api/mcp` 没有工具数，不编假计数；列表是快照，不跟 SSE 自动刷新 |
+| **导出默认 Markdown，JSON 保留脱敏**（§8.80）| 与 TUI 的 `DialogExportOptions` 同一默认；Markdown 复用 `transcriptText`，不另造一套；JSON 行为不动 | thinking / tools 两个开关还没做；Markdown 工具只留摘要；不写临时文件（浏览器直接下载）；空转录只报错不下载 |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|

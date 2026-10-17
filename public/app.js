@@ -1617,7 +1617,42 @@ async function submitImport() {
   showDlgErr(err, '导入失败:' + (lastErr ? lastErr.message : '未知错误'));
 }
 
+/* §8.80 导出格式照 TUI 的 DialogExportOptions:Markdown(转录) / JSON。
+ * Markdown 复用 §8.72 的 transcriptText(),不另造一套;JSON 仍是原来的原始载荷。 */
+function exportFormat() {
+  const el = $('#exportFormatJson');
+  return el && el.checked ? 'json' : 'markdown';
+}
+
+function syncExportForm() {
+  const json = exportFormat() === 'json';
+  const row = $('#exportSanitizeRow');
+  if (row) row.hidden = !json;
+  const hint = $('#exportHint');
+  if (hint) {
+    hint.textContent = json
+      ? '下载为 JSON 文件;取消勾选可得到完整内容(含会话标题与工程目录)。'
+      : '下载为 Markdown 转录(用户 + 助手正文 + 工具摘要,不含思考)。';
+  }
+}
+
+function setupExport() {
+  const md = $('#exportFormatMarkdown');
+  const js = $('#exportFormatJson');
+  if (md) md.addEventListener('change', syncExportForm);
+  if (js) js.addEventListener('change', syncExportForm);
+  syncExportForm();
+}
+
 function openExport() {
+  // 照 TUI 每次打开都从 Markdown 开始,不记住上一次的格式。
+  const md = $('#exportFormatMarkdown');
+  if (md) md.checked = true;
+  const js = $('#exportFormatJson');
+  if (js) js.checked = false;
+  const san = $('#exportSanitize');
+  if (san) san.checked = true;
+  syncExportForm();
   $('#exportErr').hidden = true;
   openDlg($('#dlgExport'));
 }
@@ -1629,8 +1664,8 @@ function safeName(s) {
     .slice(0, 60);
 }
 
-function downloadJson(name, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+function downloadText(name, text, mime) {
+  const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1641,24 +1676,40 @@ function downloadJson(name, obj) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+function downloadJson(name, obj) {
+  downloadText(name, JSON.stringify(obj, null, 2), 'application/json');
+}
+
 async function submitExport() {
   const sid = store.selected;
   if (!sid) return;
   const err = $('#exportErr');
   err.hidden = true;
-  const sanitize = $('#exportSanitize').checked;
+  const format = exportFormat();
+  const sanitize = format === 'json' && $('#exportSanitize').checked;
   const btn = $('#exportOk');
   setBusy(btn, true, '导出中…');
   try {
     const q = sanitize ? 'true' : 'false';
     const j = await api('/api/experimental/session/' + enc(sid) + '/export?sanitize=' + q);
+    const d = (j && j.data) || {};
     const s = store.sessions.get(sid);
-    const stem = sanitize ? '' : safeName(s && s.title) + '-';
-    const name = (stem || '') + sid + '.json';
-    // 与 `opencode session export` 一致:外层 data 包裹 {info, messages}
-    downloadJson(name, { data: j && j.data });
-    closeDlg($('#dlgExport'));
-    flash('已导出 ' + name, 'ok');
+    if (format === 'markdown') {
+      const md = transcriptText(d.info || s, d.messages || []);
+      if (!md) throw new Error('这个会话还没有可导出的正文');
+      const stem = (safeName((d.info && d.info.title) || (s && s.title)) || 'session') + '-' + sid;
+      const name = stem + '.md';
+      downloadText(name, md, 'text/markdown;charset=utf-8');
+      closeDlg($('#dlgExport'));
+      flash('已导出 ' + name, 'ok');
+    } else {
+      // 与 `opencode session export` 一致:外层 data 包裹 {info, messages}
+      const stem = sanitize ? '' : safeName(s && s.title) + '-';
+      const name = (stem || '') + sid + '.json';
+      downloadJson(name, { data: d });
+      closeDlg($('#dlgExport'));
+      flash('已导出 ' + name, 'ok');
+    }
   } catch (e) {
     showDlgErr(err, '导出失败:' + e.message);
   }
@@ -7300,7 +7351,7 @@ const PANEL_COMMANDS = [
   { name: 'worktrees', description: '管理工作树(列出 / 删除 / 把当前会话移进去)', run: () => openWorktrees() },
   { name: 'rename', description: '重命名当前会话', run: (sid) => onAction('rename', sid) },
   { name: 'delete', description: '删除当前会话(需确认)', run: (sid) => onAction('del', sid) },
-  { name: 'export', description: '导出当前会话为 JSON', run: () => openExport() },
+  { name: 'export', description: '导出当前会话为 Markdown / JSON', run: () => openExport() },
   { name: 'archive', description: '归档 / 取消归档当前会话', run: (sid) => toggleArchive(sid) },
   { name: 'tui', description: '在 TUI 中打开当前会话', run: () => openTui() },
   { name: 'copy', description: '复制当前会话转录(纯文本)', run: (sid) => copyTranscript(sid) },
@@ -7330,6 +7381,7 @@ const HELP_KEYS = [
   { k: '/fork', d: '从完整会话或某条用户消息分叉' },
   { k: '/copy', d: '复制当前会话转录(纯文本,不含思考)' },
   { k: '/copyid', d: '复制当前会话 ID' },
+  { k: '/export', d: '导出会话为 Markdown 转录或 JSON(JSON 可选脱敏)' },
   { k: '/tab-reopen', d: '重开最近关闭的标签(对应 TUI session.tab.reopen)' },
   { k: '/mcps', d: 'MCP 服务器与连接状态(只读,对应 TUI mcp.list)' },
   { k: '/exploration', d: '折叠 / 逐条显示探索工具组(对应 TUI session.toggle.exploration_grouping)' },
@@ -9441,6 +9493,7 @@ function init() {
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)
+  setupExport(); // §8.80 导出格式在 Markdown / JSON 间切换
   paintDelivery();
 
   $('#refresh').addEventListener('click', () => {

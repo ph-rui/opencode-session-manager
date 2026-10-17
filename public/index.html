@@ -245,8 +245,12 @@
   <dialog id="dlgExport" class="dlg">
     <div class="dlgform">
       <h3>导出会话</h3>
-      <label class="chk"><input type="checkbox" id="exportSanitize" checked> 脱敏(隐藏标题、目录与 metadata)</label>
-      <p class="dlghint">下载为 JSON 文件;取消勾选可得到完整内容(含会话标题与工程目录)。</p>
+      <div class="fldrow" id="exportFormats">
+        <label class="chk"><input type="radio" name="exportFormat" id="exportFormatMarkdown" value="markdown" checked> Markdown(转录)</label>
+        <label class="chk"><input type="radio" name="exportFormat" id="exportFormatJson" value="json"> JSON(原始数据)</label>
+      </div>
+      <label class="chk" id="exportSanitizeRow"><input type="checkbox" id="exportSanitize" checked> 脱敏(隐藏标题、目录与 metadata)</label>
+      <p class="dlghint" id="exportHint">下载为 Markdown 转录(用户 + 助手正文 + 工具摘要,不含思考)。</p>
       <p class="dlgerr" id="exportErr" hidden></p>
       <div class="dlgacts">
         <button type="button" class="chip" data-close>取消</button>
