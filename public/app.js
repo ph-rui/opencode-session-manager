@@ -1238,6 +1238,85 @@ async function copyTui() {
   flash(ok ? '命令已复制' : '已选中命令,请按 Ctrl+C 复制', ok ? 'ok' : 'warn');
 }
 
+/* ----------------------- 变更总览(照 TUI 的 /diff,最近一轮) ----------------------- */
+
+// 服务端 /api/session/:id/diff 默认就是「最新一条用户消息那一轮」的净变更:
+// 它按 turn 的 idle 快照算,同一个文件在一轮里改了多次也只算最终结果。TUI 的
+// diff viewer 把这叫 Last turn;branch / working / committed 三档还没接。
+//
+// 并发用 diffSeq 兜住:点「刷新」或切会话时旧请求晚到,不能盖掉新结果。
+let diffSeq = 0;
+
+function openDiff() {
+  const sid = store.selected;
+  if (!sid) {
+    flash('先选一个会话', 'warn');
+    return;
+  }
+  const err = $('#diffErr');
+  if (err) err.hidden = true;
+  const stat = $('#diffStat');
+  if (stat) stat.textContent = '';
+  const body = $('#diffBody');
+  if (body) body.innerHTML = '<p class="dlghint">正在加载变更…</p>';
+  const dlg = $('#dlgDiff');
+  if (!dlg) return; // 老测试页没有这个框
+  if (!dlg.open) openDlg(dlg);
+  return loadDiff();
+}
+
+function renderDiffFiles(files, sid) {
+  const body = $('#diffBody');
+  const stat = $('#diffStat');
+  if (!body) return;
+  if (!files.length) {
+    body.innerHTML =
+      '<p class="dlghint">' +
+      (sid && isRunning(sid)
+        ? '最近一轮还在跑;这轮改了文件的话,结束后点「刷新」。'
+        : '最近一轮没有文件变更。') +
+      '</p>';
+    if (stat) stat.textContent = '0 个文件';
+    return;
+  }
+  let adds = 0;
+  let dels = 0;
+  for (const f of files) {
+    adds += typeof f.additions === 'number' ? f.additions : 0;
+    dels += typeof f.deletions === 'number' ? f.deletions : 0;
+  }
+  // 不传 pid:框里不出「并排 / 统一」按钮,视图跟消息卡片共享同一个全局偏好。
+  body.innerHTML = diffHtml(files);
+  if (stat) stat.textContent = files.length + ' 个文件 · +' + adds + ' -' + dels;
+}
+
+async function loadDiff() {
+  const sid = store.selected;
+  const dlg = $('#dlgDiff');
+  if (!sid || !dlg) return;
+  const seq = ++diffSeq;
+  const err = $('#diffErr');
+  const body = $('#diffBody');
+  const btn = $('#diffReload');
+  if (err) err.hidden = true;
+  if (body && !body.innerHTML) body.innerHTML = '<p class="dlghint">正在加载变更…</p>';
+  setBusy(btn, true, '刷新中…');
+  try {
+    const j = await api('/api/session/' + enc(sid) + '/diff?context=3');
+    if (seq !== diffSeq || store.selected !== sid) return;
+    if (!j || !Array.isArray(j.data)) throw new Error('服务端没有返回变更列表');
+    renderDiffFiles(j.data, sid);
+  } catch (e) {
+    if (seq !== diffSeq || store.selected !== sid) return;
+    if (err) showDlgErr(err, '加载变更失败:' + e.message);
+    if (body) body.innerHTML = '';
+    const stat = $('#diffStat');
+    if (stat) stat.textContent = '';
+  } finally {
+    if (seq === diffSeq) setBusy(btn, false);
+  }
+}
+
 /* ----------------------------- 会话列表 ----------------------------- */
 
 async function loadSessions(opts) {
@@ -5575,6 +5654,7 @@ const PANEL_COMMANDS = [
   { name: 'interrupt', description: '中断当前正在执行的回合', run: () => interrupt() },
   { name: 'undo', description: '撤销到最后一条用户消息(含该轮文件改动)', run: (sid) => runUndo(sid) },
   { name: 'redo', description: '重做:清除已暂存的撤销', run: (sid) => runRedo(sid) },
+  { name: 'diff', description: '查看最近一轮变更(照 TUI 的 /diff)', run: () => openDiff() },
   { name: 'rename', description: '重命名当前会话', run: (sid) => onAction('rename', sid) },
   { name: 'delete', description: '删除当前会话(需确认)', run: (sid) => onAction('del', sid) },
   { name: 'export', description: '导出当前会话为 JSON', run: () => openExport() },
@@ -7437,6 +7517,11 @@ function init() {
   $('#importOk').addEventListener('click', submitImport);
   $('#exportOk').addEventListener('click', submitExport);
   $('#tuiCopy').addEventListener('click', copyTui);
+  $('#diffReload').addEventListener('click', loadDiff);
+  // 关框就让在途请求作废,别在后台把结果写回已关掉的框
+  $('#dlgDiff').addEventListener('close', () => {
+    diffSeq++;
+  });
   document.querySelectorAll('dialog.dlg [data-close]').forEach((b) =>
     b.addEventListener('click', () => closeDlg(b.closest('dialog')))
   );

@@ -1262,6 +1262,37 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
 .dlgerr { margin: 0 0 12px; font-size: 12px; color: var(--danger); white-space: pre-wrap; word-break: break-all; }
 .dlgerr[hidden] { display: none; }
 .dlgacts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* §8.57 变更总览(照 TUI 的 /diff 的 Last turn 档):比普通对话框宽,正文自己滚。
+   桌面主布局一字不动 —— 这个框只有敲 /diff 或命令面板里选才出来。 */
+dialog.dlg.dlgdiff {
+  width: min(92vw, 980px);
+  max-width: min(92vw, 980px);
+}
+.diffhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.diffhead h3 { margin: 0; }
+.diffsub { color: var(--muted); font-weight: 400; font-size: 0.85em; }
+.diffstat { color: var(--muted); font-family: var(--mono); font-size: 0.86em; white-space: nowrap; }
+.diffbody {
+  min-height: 80px;
+  max-height: min(62vh, 680px);
+  overflow: auto;
+  padding: 0 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel2);
+  font-size: var(--chat-fs);
+}
+.diffbody:empty { display: none; }
+.diffbody > .dlghint { margin: 12px; }
+.diffbody > .dfile:first-child { margin-top: 0; }
+.diffbody > .diff { margin-bottom: 10px; }
 .cmdbox { display: flex; margin-bottom: 12px; }
 .cmdbox input, .cmdbox textarea {
   width: 100%;
@@ -1502,6 +1533,8 @@ html.narrow dialog.dlg {
   max-height: calc(100vh - 24px);
 }
 html.narrow .dlgform { padding: 14px 14px 12px; }
+/* 变更总览在手机上把标题和按钮留住,中间那块自己滚(横屏 393 高也还有得看) */
+html.narrow .diffbody { max-height: max(120px, calc(100vh - 230px)); }
 html.narrow .fldrow { flex-direction: column; }
 html.narrow .chkfld { min-height: 44px; }
 html.narrow .pick-item { padding: 11px 14px; }

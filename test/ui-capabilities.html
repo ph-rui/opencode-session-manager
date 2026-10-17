@@ -71,6 +71,13 @@
   <dialog id="dlgTui" class="dlg"><div class="dlgform"><h3>在 TUI 中继续</h3>
     <input id="tuiCmd"><button type="button" id="tuiCopy">复制</button></div></dialog>
 
+  <dialog id="dlgDiff" class="dlg dlgdiff"><div class="dlgform">
+    <div class="diffhead"><h3>变更 <span class="diffsub">最近一轮</span></h3><span class="diffstat" id="diffStat"></span></div>
+    <div class="diffbody" id="diffBody"></div>
+    <p class="dlgerr" id="diffErr" hidden></p>
+    <div class="dlgacts"><button type="button" data-close>关闭</button><button type="button" id="diffReload">刷新</button></div>
+  </div></dialog>
+
   <pre id="results"></pre>
 
   <script>
@@ -99,6 +106,13 @@
       { id: 'ses_c', title: '带其它 metadata', projectID: 'pj1', time: { created: 1, updated: 3 },
         tokens: { input: 1, output: 1 }, cost: 0, location: { directory: '/proj/b' },
         metadata: { other: { x: 1 }, ocs: { note: 'keep' } } },
+    ];
+
+    var DIFF_FILES = [
+      { file: '/proj/a/a.js', status: 'modified', additions: 2, deletions: 1,
+        patch: '@@ -1,3 +1,4 @@\n-let a = 1;\n+let a = 2;\n+let b = 3;\n console.log(a);' },
+      { file: '/proj/a/new.txt', status: 'added', additions: 1, deletions: 0,
+        patch: '@@ -0,0 +1 @@\n+hello' },
     ];
 
     /* 打桩:记录请求;可控制 import 首次返回 409 以验证重试 */
@@ -165,6 +179,10 @@
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (/^\/api\/session\/[^/?]+\/diff\?context=3$/.test(u)) {
+        if (window.diffFail) return fail(500, { message: 'diff boom' });
+        return json({ data: window.diffEmpty ? [] : DIFF_FILES });
+      }
       if (/^\/api\/session\/[^/?]+\/(inbox|message|form|permission)/.test(u)) return json({ data: [] });
       if (u.indexOf('/api/session?') === 0) {
         if (window.listFailOnce) {
@@ -422,6 +440,65 @@
         bodyOf(retrySessions[1]).location.directory === '/wt/retry-wt',
         bodyOf(retrySessions[1]).location);
       q('#newWt').checked = false;
+
+      /* ---------------- 变更总览 /diff(§8.57) ---------------- */
+      seed();
+      store.selected = 'ses_a';
+      reset();
+      window.diffFail = false;
+      window.diffEmpty = false;
+      await openDiff();
+      var dreqs = reqs(/^\/api\/session\/ses_a\/diff\?context=3$/);
+      T('变更:openDiff 打开对话框并拉最近一轮',
+        q('#dlgDiff').open === true && dreqs.length === 1, dreqs.map(function (c) { return c.url; }));
+      T('变更:按文件渲染状态徽标与路径',
+        qa('#diffBody .dfile').length === 2 &&
+        q('#diffBody').textContent.indexOf('a.js') >= 0 &&
+        q('#diffBody').textContent.indexOf('new.txt') >= 0,
+        qa('#diffBody .dfile').length);
+      T('变更:汇总文件数与增删',
+        q('#diffStat').textContent === '2 个文件 · +3 -1', q('#diffStat').textContent);
+      T('变更:框里不出并排/统一按钮(视图跟消息卡片共享全局偏好)',
+        qa('#diffBody .dswap').length === 0);
+      var dc = PANEL_COMMANDS.filter(function (c) { return c.name === 'diff'; })[0];
+      T('变更:/diff 在面板命令里且指向 openDiff',
+        !!dc && typeof dc.run === 'function' && dc.description.indexOf('最近一轮') >= 0, dc);
+      var dp = parseCommand('/diff');
+      T('变更:输入 /diff 命中面板命令', !!dp && dp.cmd.panel === true, dp && dp.name);
+
+      window.diffEmpty = true;
+      await openDiff();
+      T('变更:空结果显示「没有文件变更」且统计归零',
+        q('#diffBody').textContent.indexOf('没有文件变更') >= 0 &&
+        q('#diffStat').textContent === '0 个文件', q('#diffBody').textContent);
+
+      store.active.set('ses_a', {});
+      await openDiff();
+      T('变更:轮次还在跑时空结果提示「结束后点刷新」',
+        q('#diffBody').textContent.indexOf('还在跑') >= 0, q('#diffBody').textContent);
+      store.active.delete('ses_a');
+
+      window.diffEmpty = false;
+      window.diffFail = true;
+      await openDiff();
+      T('变更:失败时显示服务端原因、正文清空',
+        q('#diffErr').hidden === false &&
+        q('#diffErr').textContent === '加载变更失败:diff boom' &&
+        q('#diffBody').textContent === '' &&
+        q('#diffStat').textContent === '', q('#diffErr').textContent);
+
+      window.diffFail = false;
+      await loadDiff();
+      T('变更:刷新成功后错误收起、内容回来',
+        q('#diffErr').hidden === true && qa('#diffBody .dfile').length === 2);
+
+      q('#dlgDiff').close();
+      store.selected = null;
+      reset();
+      openDiff();
+      T('变更:没选会话时不开框、不发请求,只提示',
+        q('#dlgDiff').open === false && reqs(/\/diff\?/).length === 0 &&
+        q('#toast').textContent === '先选一个会话', q('#toast').textContent);
 
       /* ---------------- 导入 ---------------- */
       var exportFile = JSON.stringify({ data: { info: { id: 'ses_old', title: '导入我', projectID: 'pjo' }, messages: [ { id: 'm1', type: 'user' } ] } });

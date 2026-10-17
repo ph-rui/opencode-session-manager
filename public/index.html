@@ -243,6 +243,21 @@
     </div>
   </dialog>
 
+  <dialog id="dlgDiff" class="dlg dlgdiff">
+    <div class="dlgform">
+      <div class="diffhead">
+        <h3>变更 <span class="diffsub">最近一轮</span></h3>
+        <span class="diffstat" id="diffStat"></span>
+      </div>
+      <div class="diffbody" id="diffBody"></div>
+      <p class="dlgerr" id="diffErr" hidden></p>
+      <div class="dlgacts">
+        <button type="button" class="chip" data-close>关闭</button>
+        <button type="button" class="chip" id="diffReload">刷新</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="dlgTui" class="dlg">
     <div class="dlgform">
       <h3>在 TUI 中继续</h3>

@@ -2058,6 +2058,41 @@ else
   echo "FAIL: worktree 失败文案 / data.message 解包 / 复选框复位 / 接线缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R17 组:变更总览 /diff(§8.57;照 TUI 的 diff viewer 的 Last turn 档)----
+if has "$HOME_HTML" 'id="dlgDiff" class="dlg dlgdiff"' && has "$HOME_HTML" 'id="diffStat"' &&
+   has "$HOME_HTML" 'id="diffBody"' && has "$HOME_HTML" 'id="diffErr" hidden' &&
+   has "$HOME_HTML" 'id="diffReload"' &&
+   has "$CSS" 'dialog.dlg.dlgdiff {' && has "$CSS" 'html.narrow .diffbody {' &&
+   has "$CSS" 'font-size: var(--chat-fs);'; then
+  echo "PASS: 变更总览有独立的框(标题/统计/正文/错误/刷新),正文用会话字号,窄屏整宽且自己滚"; pass=$((pass + 1))
+else
+  echo "FAIL: 变更总览的框缺节点 / 样式,或没有跟会话字号、窄屏规则"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function openDiff()' && has "$APPJS" 'function loadDiff()' &&
+   has "$APPJS" 'function renderDiffFiles(files, sid)' &&
+   has "$APPJS" '/diff?context=3' && has "$APPJS" 'diffHtml(files)' &&
+   has "$APPJS" 'Array.isArray(j.data)'; then
+  echo "PASS: /diff 拉服务端的最近一轮 diff,正文复用消息卡片那套 diffHtml(不另造渲染)"; pass=$((pass + 1))
+else
+  echo "FAIL: 变更总览没接 /api/session/:id/diff?context=3,或没有复用 diffHtml"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'let diffSeq = 0;' && has "$APPJS" 'seq !== diffSeq' &&
+   has "$APPJS" 'diffSeq++' &&
+   has "$APPJS" "name: 'diff', description: '查看最近一轮变更" &&
+   has "$APPJS" "diffReload').addEventListener('click', loadDiff)" &&
+   has "$APPJS" 'isRunning(sid)' && has "$APPJS" '最近一轮还在跑'; then
+  echo "PASS: /diff 进了面板命令;刷新/切会话用序号挡旧响应;轮次在跑时空结果说清「结束后点刷新」"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 /diff 命令、旧响应防护、或「还在跑」的空结果文案"; fail=$((fail + 1))
+fi
+SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
+if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '变更:openDiff 打开对话框并拉最近一轮' &&
+   has "$(cat "$SMOKE_CAP")" '变更:轮次还在跑时' && has "$(cat "$SMOKE_CAP")" '变更:没选会话时不开框'; then
+  echo "PASS: test/ui-capabilities.html 里有 /diff 的浏览器断言(渲染 / 空结果 / 失败刷新 / 没选中)"; pass=$((pass + 1))
+else
+  echo "FAIL: test/ui-capabilities.html 缺 /diff 的关键断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
