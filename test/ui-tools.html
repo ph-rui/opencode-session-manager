@@ -830,6 +830,54 @@
         el('cb1').hidden === false && qa('#messages .explore').length === 1 &&
         el('cb1').querySelectorAll('.toolrow').length === 1);
 
+      /* ================= §8.78 探索工具组开关(命令面板 + localStorage) ================= */
+      var exSaved = store.exploreGroup;
+      var exKeySaved = localStorage.getItem('ocs.exploreGroup');
+      localStorage.removeItem('ocs.exploreGroup');
+      store.exploreGroup = true;
+      setExploreGroup(false);
+      T('探索开关:关掉写 localStorage=0',
+        store.exploreGroup === false && localStorage.getItem('ocs.exploreGroup') === '0');
+      var mOff = renderMessage({
+        id: 'moff', type: 'assistant', time: { created: 1, completed: 2 },
+        content: [rd('a'), rd('b'), gr('x')],
+      });
+      T('探索开关:关掉后单条消息不再折组,工具逐条显示',
+        mOff.querySelectorAll('.explore').length === 0 &&
+        mOff.querySelectorAll('.tool, .toolrow').length === 3,
+        mOff.querySelectorAll('.explore').length + '/' + mOff.querySelectorAll('.tool, .toolrow').length);
+      T('探索开关:关掉后跨消息不再吸收',
+        exploreAbsorbPlan([crossUser, ca1, cb1]).absorbed.size === 0);
+      crossRender([crossUser, ca1, cb1]);
+      T('探索开关:关掉后续步恢复成独立消息(不再藏成占位)',
+        el('cb1').hidden === false && el('cb1').className.indexOf('absorbed') < 0 &&
+        qa('#messages .explore').length === 0,
+        { hidden: el('cb1').hidden, groups: qa('#messages .explore').length });
+      T('探索开关:命令面板有 /exploration',
+        PANEL_COMMANDS.some(function (c) {
+          return c.name === 'exploration' && c.description.indexOf('探索') >= 0;
+        }));
+      setExploreGroup(true);
+      T('探索开关:再打开写回 localStorage=1 并恢复分组',
+        store.exploreGroup === true && localStorage.getItem('ocs.exploreGroup') === '1');
+      crossRender([crossUser, ca1, cb1]);
+      T('探索开关:恢复后跨消息又并回上一组',
+        el('cb1').hidden === true &&
+        el('ca1').querySelectorAll('.explore > .gbody > *').length === 2,
+        { hidden: el('cb1') && el('cb1').hidden, kids: el('ca1') && el('ca1').querySelectorAll('.explore > .gbody > *').length });
+      /* 不切会话 / 不清消息表,原地来回切:占位与独立消息要能互相恢复 */
+      setExploreGroup(false);
+      T('探索开关:已有占位原地关掉后恢复成独立消息',
+        el('cb1').hidden === false && el('cb1').className.indexOf('absorbed') < 0 &&
+        el('cb1').querySelectorAll('.tool, .toolrow').length === 1,
+        el('cb1') && el('cb1').outerHTML.slice(0, 160));
+      setExploreGroup(true);
+      T('探索开关:原地再打开又变回占位并并组',
+        el('cb1').hidden === true && el('ca1').querySelectorAll('.explore > .gbody > *').length === 2);
+      if (exKeySaved === null) localStorage.removeItem('ocs.exploreGroup');
+      else localStorage.setItem('ocs.exploreGroup', exKeySaved);
+      store.exploreGroup = exSaved;
+
       q('#messages').innerHTML = '';
       msgEls.clear();
       store.messages = new Map();

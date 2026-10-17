@@ -3889,6 +3889,52 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 **回归**：`smoke.sh` 364 → **365**，`ui-picks` 146 → **159**；其余套件计数不变；
 全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-877.log`。
 
+### 8.78 探索工具组开关:折叠 / 逐条显示
+
+**起因**：TUI 的 `session.toggle.exploration_grouping`（`routes/session/index.tsx:1071`）能在
+`grouping="auto"` 与 `"none"` 之间切；面板的探索组永远按 `EXPLORE_MIN_RUN` 折，用户没有
+「把工具调用逐条摊开」的入口。B3 拆成两半，这一项先做探索分组，思考块的全局折叠（TUI 的
+`session.toggle.thinking`）留到后面。
+
+**结论**：新增本机开关 `store.exploreGroup` 与命令 `/exploration`，默认开着（与 TUI 的
+`grouping="auto"` 一致），选择写 `localStorage['ocs.exploreGroup']`（`'0'` = 关，其它 / 没存 = 开）。
+关掉时两条渲染路径一起让路：同一助手消息内不再把相邻探索工具折成 `.explore`；跨消息的
+纯探索续步也不再吸收，原来被藏成 hidden 占位的消息原地恢复成独立消息。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 偏好 | `EXPLORE_GROUP_KEY = 'ocs.exploreGroup'`；`store.exploreGroup` 在模块加载时读一次，没存 / 读失败按 `true`，刷新后保持 |
+| 命令 | `PANEL_COMMANDS` 加 `exploration`（“探索工具组:折叠 / 逐条显示”），帮助面板补 `/exploration`；TUI 这条动作的 keybind 本来就是 `none`，面板也不硬造快捷键 |
+| 切换 | `setExploreGroup(on)` 写偏好；有选中会话就 `renderMessages()` 原地重画，不重新拉消息、不动 `store.messages` 与滚动锚点。`toggleExploreGroup()` 取反 |
+| 单条消息 | `renderMessage()` 的探索分支加 `store.exploreGroup && isExploreTool(p)`；关掉后每条工具各自走 `toolHtml()` |
+| 跨消息 | `exploreAbsorbPlan()` 在关掉时直接返回空表；`absorbed` 消息不再被换成 hidden 占位，正常渲染自己的助手头与脚注 |
+| 恢复 | 已有占位不靠清空消息表：`renderMessages()` 发现 `rec.absorbed` 没了会重画该条并清掉占位状态；再打开则重新吸收 |
+
+**取舍**：
+
+- **只做探索分组，不动思考块**：TUI 的 thinking 是 `hide` / `show` 两档全局模式，牵动
+  reasoning 的默认展开、组行与流式块；先交付一个不会误伤探索组、也不会改变思考内容的开关。
+- **偏好放 localStorage，不写 `cli.json`**：TUI 的 `session.grouping` 走 config；面板没有
+  这条会话配置通道，硬写 `cli.json` 会和 TUI 的 schema / 并发写纠缠。只影响本浏览器。
+- **切换会重画消息 DOM**：已摊开的探索组 / 思考块会回到默认折叠状态；内容与 `store.messages`
+  不变。要保留展开状态得给每个组做跨模式的稳定 key，当前不做。
+- **不改数据、不改分页**：关掉只是换渲染方式；被吸收的续步在数据里一直是一条独立消息，
+  所以恢复不需要请求服务端。
+
+**验证**：
+
+- `ui-tools.html` 新增 9 项：写 `localStorage=0`、单条消息逐条显示、跨消息不吸收、续步恢复
+  独立消息、命令面板入口、写回 `=1`、恢复并组、已有占位原地关掉 / 原地再打开。
+- `smoke.sh` 新增 1 项静态锁：`EXPLORE_GROUP_KEY` / `store.exploreGroup` 读取 / `setExploreGroup` /
+  `toggleExploreGroup` / 吸收短路 / 渲染条件 / 命令与帮助文案、以及 `ui-tools.html` 的两条
+  原地切换断言都在。
+- `node --check public/app.js` 通过。
+
+**回归**：`smoke.sh` 365 → **366**，`ui-tools` 348 → **357**；其余套件计数不变；
+全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-878.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -3909,6 +3955,7 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 | **最近关闭标签放内存，`↺` / `/tab-reopen` 重开**（§8.75）| 与 TUI 的 `session.tab.reopen` 对齐；关掉最后一个标签后栏不收起，手机上始终点得回来；`touchTab()` 去重，不会重复加回 | 栈上限 8、刷新即清；重开会切过去；指向的会话若被删仍按原错误路径报错 |
 | **滚动存档带 `bottom`，切回直接贴底**（§8.76）| 「离开前看最新」和「离开前翻旧」是两种意图，分开记；新消息在离开期间到达也跟到新底，符合看最新的预期；旧存档兼容 | 离底 80px 内都算最新；只有底部状态不保存具体像素目标；中间位置仍按消息锚点还原 |
 | **`/skills` 选技能，按 `prompt.skills` 发送**（§8.77）| 与 TUI 的 `prompt.skills` / `DialogSkill` 同入口；技能和文件在请求体里彻底分流，同名也不会串；`skillHits` 按会话留在内存，切回草稿仍可发 | `@` 补全仍只找文件；技能只认显式选择；不跨刷新持久化；只列当前工程 |
+| **探索工具组可切「逐条显示」**（§8.78）| 与 TUI 的 `session.toggle.exploration_grouping` 对齐；关掉时跨消息吸收一起短路，续步恢复独立消息；偏好本机保存，不动数据 | 只做探索分组，思考块的全局折叠仍没做；偏好不写 `cli.json`；切换会重画 DOM，已摊开的组回到默认折叠 |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|

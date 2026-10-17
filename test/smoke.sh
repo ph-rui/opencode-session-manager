@@ -2483,6 +2483,22 @@ else
   echo "FAIL: §8.77 的技能列表 / 插入 / 请求体 / 与 files[] 分流或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R34 组:探索工具组开关(§8.78)----
+if has "$APPJS" "const EXPLORE_GROUP_KEY = 'ocs.exploreGroup';" &&
+   has "$APPJS" 'exploreGroup: (function () {' &&
+   has "$APPJS" 'function setExploreGroup(on)' &&
+   has "$APPJS" 'function toggleExploreGroup()' &&
+   has "$APPJS" 'if (!store.exploreGroup) return { absorbed: absorbed, partsByOwner: partsByOwner };' &&
+   has "$APPJS" 'if (store.exploreGroup && isExploreTool(p)) {' &&
+   has "$APPJS" "name: 'exploration', description: '探索工具组:折叠 / 逐条显示'" &&
+   has "$APPJS" "k: '/exploration', d: '折叠 / 逐条显示探索工具组" &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '探索开关:已有占位原地关掉后恢复成独立消息' &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '探索开关:原地再打开又变回占位并并组'; then
+  echo "PASS: §8.78 探索工具组可折叠 / 逐条切换,偏好写 localStorage,跨消息吸收同步关掉"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.78 的开关 / localStorage / 打包条件 / 吸收短路或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

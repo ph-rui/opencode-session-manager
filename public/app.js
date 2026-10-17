@@ -7,6 +7,9 @@
  * 也就是说「接着打一句」在 TUI 里本来就发得出去,不用等整个回合。面板原来默认排队,
  * 用户实测「TUI 里发得出去、网页版躺在队列里」,这里对齐成插话(工具栏仍可切回排队)。 */
 const DEFAULT_DELIVERY = 'steer';
+/* §8.78 探索工具组开关:默认照 TUI 的 grouping="auto" 折叠,存本机偏好。
+ * 只影响「探索类工具行怎么画」,不动消息数据本身。 */
+const EXPLORE_GROUP_KEY = 'ocs.exploreGroup';
 
 const store = {
   sessions: new Map(),
@@ -37,6 +40,15 @@ const store = {
   // 干净时 0.95ms,脏了 23~29ms)。滚动事件、每次 renderMessages 收尾都会刷新它,
   // 增量重绘只认这个缓存,不再自己去读。
   nearBottom: false,
+  /* §8.78 探索工具组默认折叠(与 TUI 的 session.grouping="auto" 一致)。本机偏好,
+   * 不写服务端配置;关闭后每条探索工具各占一行,跨消息的纯探索续步也不再吸收。 */
+  exploreGroup: (function () {
+    try {
+      return localStorage.getItem(EXPLORE_GROUP_KEY) !== '0';
+    } catch (_) {
+      return true;
+    }
+  })(),
   // 「上一次看到的 scrollTop」。光看离底多远分不出「用户往上滚了」和「容器变矮 / 内容
   // 变长了」—— 后两者也会让离底距离变大,却完全不该关掉跟随。两次 scrollTop 一比,
   // 只有变小才是用户自己往回翻。只在滚动事件与贴底动作里刷(见 pinBottom)。
@@ -4654,6 +4666,24 @@ function isExploreTool(p) {
   return EXPLORE_TOOLS.indexOf(toolKind(p)) >= 0;
 }
 
+/* §8.78 切「折叠探索组 / 逐条显示」。照 TUI 的 session.toggle.exploration_grouping,
+ * 但偏好只存本机 localStorage(面板没有 TUI 的 cli.json 会话配置通道,不硬造一个)。 */
+function setExploreGroup(on) {
+  store.exploreGroup = !!on;
+  try {
+    localStorage.setItem(EXPLORE_GROUP_KEY, store.exploreGroup ? '1' : '0');
+  } catch (_) {}
+  if (store.selected) renderMessages();
+  flash(
+    store.exploreGroup ? '已折叠探索工具组' : '探索工具已改为逐条显示',
+    'ok'
+  );
+}
+
+function toggleExploreGroup() {
+  setExploreGroup(!store.exploreGroup);
+}
+
 /* 计数照 TUI 的 GroupContent.label():grep / glob / websearch 都算 search,webfetch 算
  * fetch,其余用工具名本身;复数照 TUI —— search/fetch 加 es,别的加 s(1 read / 2 reads,
  * 1 search / 2 searches,1 fetch / 2 fetches),几条之间用 `, ` 连。 */
@@ -5193,6 +5223,8 @@ function canStartExploreAbsorb(m) {
 function exploreAbsorbPlan(msgs) {
   const absorbed = new Map(); // 被吸收的消息 id -> 吸收方消息 id
   const partsByOwner = new Map(); // 吸收方消息 id -> 追加进来的探索工具 part
+  // §8.78 逐条显示时不做跨消息吸收:续步要恢复成独立消息,不再藏成占位。
+  if (!store.exploreGroup) return { absorbed: absorbed, partsByOwner: partsByOwner };
   let owner = null;
   for (const m of msgs) {
     if (liveView(m.id) || m.live) {
@@ -5297,8 +5329,8 @@ function renderMessage(m, opts) {
         html += reasoningGroupHtml(run, m, rbody);
       } else if (p.type === 'tool') {
         // 相邻的探索类工具(read/glob/grep/webfetch/websearch)折成一组,照 TUI 的
-        // exploration 分组 —— 见 EXPLORE_TOOLS 那段的说明。
-        if (isExploreTool(p)) {
+        // exploration 分组 —— 见 EXPLORE_TOOLS 那段的说明。§8.78 关掉时逐条显示。
+        if (store.exploreGroup && isExploreTool(p)) {
           const start = i;
           const run = [p];
           while (i + 1 < content.length && content[i + 1].type === 'tool' && isExploreTool(content[i + 1])) {
@@ -7280,6 +7312,7 @@ const PANEL_COMMANDS = [
   { name: 'models', description: '选择模型(含推理档位)', run: () => openModelPick() },
   { name: 'agents', description: '选择智能体', run: () => openAgentPick() },
   { name: 'skills', description: '插入技能(@skill,按 TUI 的 prompt.skills)', run: () => openSkillPick() },
+  { name: 'exploration', description: '探索工具组:折叠 / 逐条显示', run: () => toggleExploreGroup() },
   { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
   { name: 'help', description: '命令与快捷键', run: () => openHelp() },
 ];
@@ -7296,6 +7329,7 @@ const HELP_KEYS = [
   { k: '/copy', d: '复制当前会话转录(纯文本,不含思考)' },
   { k: '/copyid', d: '复制当前会话 ID' },
   { k: '/tab-reopen', d: '重开最近关闭的标签(对应 TUI session.tab.reopen)' },
+  { k: '/exploration', d: '折叠 / 逐条显示探索工具组(对应 TUI session.toggle.exploration_grouping)' },
   { k: '/subagents', d: '选择并打开当前会话的子会话' },
   { k: '/parent', d: '回到父会话' },
   { sec: '会话' },
