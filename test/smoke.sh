@@ -1525,6 +1525,38 @@ if has "$APPJS" 'const CV_MIN_MSGS' && has "$APPJS" "classList.toggle('cvmany'" 
 else
   echo "FAIL: .cvmany 开关的接线不对(或缺 ui-layout 断言)"; fail=$((fail + 1))
 fi
+# §8.83 工具卡正文懒渲染:只对大正文工具卡出 summary 壳,进入预加载范围后一帧补一张。
+if has "$APPJS" 'const LAZY_TOOL_CARD_MIN' && has "$APPJS" 'const LAZY_TOOL_TOTAL_MIN' &&
+   has "$APPJS" 'function lazyToolsWanted' && has "$APPJS" 'function toolBodyHtml' &&
+   has "$APPJS" 'const lazyTools = lazyToolsWanted(msgs);' &&
+   has "$APPJS" 'function lazyToolSupported()'; then
+  echo "PASS: 工具正文懒渲染按总正文字节门槛启用,正文构建抽成同一段"; pass=$((pass + 1))
+else
+  echo "FAIL: 工具正文懒渲染的门槛或正文构建接线缺失"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'data-lazy-tool="' && has "$APPJS" 'new IntersectionObserver(' &&
+   has "$APPJS" "rootMargin: '300px 0px'" &&
+   has "$APPJS" 'hydrateLazyTool(el)) break;' &&
+   has "$APPJS" 'observeLazyToolCards();'; then
+  echo "PASS: 懒壳进入预加载范围后逐帧补正文(一帧一张,不替换 details)"; pass=$((pass + 1))
+else
+  echo "FAIL: 懒壳的 observer / 逐帧补正文接线不对"; fail=$((fail + 1))
+fi
+if has "$APPJS" "typeof IntersectionObserver === 'function'" &&
+   has "$APPJS" "typeof requestAnimationFrame === 'function'" &&
+   has "$APPJS" 'function toolHtml(p, lazy)' &&
+   has "$APPJS" 'if (lazy && lazyToolBodyCandidate(p))'; then
+  echo "PASS: 无 IntersectionObserver/rAF 时退回完整渲染,直接 renderMessage 默认不懒"; pass=$((pass + 1))
+else
+  echo "FAIL: 懒渲染的降级或直接 renderMessage 默认语义不对"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-tools.html")" '懒渲染:一帧最多补一张' &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '懒渲染:中段补正文不顶走滚动锚点' &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '懒渲染:直接 renderMessage 默认完整渲染'; then
+  echo "PASS: ui-tools 锁逐帧补正文 / 滚动锚点 / 直接渲染默认完整"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-tools 缺工具正文懒渲染的行为断言"; fail=$((fail + 1))
+fi
 
 # ---- R 组:探索类工具行的分组(照 TUI 的 exploration 分组) ----
 # TUI 的 explorationTools 就是 read/glob/grep/webfetch/websearch 这五类

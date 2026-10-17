@@ -1530,6 +1530,115 @@
         [copiedText, q('#toast').textContent]);
       copyText = realCopyText;
 
+      /* ================= §8.83 工具卡正文懒渲染 ================= */
+      function lazyPatch(i, f) {
+        var s = '@@ -1,24 +1,25 @@\n';
+        s += ' const anchor' + i + '_' + f + ' = true;\n';
+        s += '-const oldValue' + i + '_' + f + ' = ' + i + ';\n';
+        s += '+const newValue' + i + '_' + f + ' = ' + (i + 1) + ';\n';
+        for (var j = 0; j < 20; j++) {
+          s += ' const context' + j + ' = "line ' + i + '/' + f + '/' + j + '";\n';
+        }
+        return s;
+      }
+      function lazyMessages(n) {
+        var msgs = new Map();
+        for (var i = 0; i < n; i++) {
+          var id = 'lazy_msg_' + i;
+          if (i % 4 === 0) {
+            msgs.set(id, { id: id, type: 'user', time: { created: 1000 + i }, text: '问题 ' + i });
+            continue;
+          }
+          var files = [];
+          for (var f = 0; f < 3; f++) {
+            files.push({
+              file: 'src/lazy' + i + '_' + f + '.js',
+              status: 'modified', additions: 1, deletions: 1,
+              patch: lazyPatch(i, f),
+            });
+          }
+          msgs.set(id, {
+            id: id, type: 'assistant', time: { created: 1000 + i },
+            content: [
+              { type: 'text', text: '第 ' + i + ' 条回复，包含 **粗体** 和 `code`。' },
+              { type: 'tool', id: 'lazy_tool_' + i, name: 'edit',
+                state: { status: 'completed', input: { path: 'src/lazy' + i + '.js' },
+                  metadata: { files: files }, content: [] } },
+            ],
+          });
+        }
+        return msgs;
+      }
+      function lazyFrames(n) {
+        return new Promise(function (resolve) {
+          var left = n;
+          (function step() {
+            if (left-- <= 0) resolve();
+            else requestAnimationFrame(step);
+          })();
+        });
+      }
+
+      store.selected = 'ses_a';
+      store.messages = lazyMessages(100);
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.forceBottom = true;
+      store.restoreScroll = null;
+      renderMessages();
+
+      var lazyShells = qa('#messages details.tool.lazy');
+      var lazyNodes = qa('#messages *').length;
+      T('懒渲染:工具密集会话先出懒壳', lazyShells.length > 0, lazyShells.length);
+      T('懒渲染:懒壳正文先空着',
+        lazyShells.every(function (el) { return el.querySelector('.toolbody').children.length === 0; }),
+        lazyShells.length);
+      T('懒渲染:首屏不建 diff 正文', qa('#messages .diff .dl').length === 0,
+        qa('#messages .diff .dl').length);
+      T('懒渲染:懒壳保留默认展开与 data-def',
+        lazyShells.length > 0 && lazyShells[0].open && lazyShells[0].getAttribute('data-def') === '1');
+      T('懒渲染:首屏节点数受控', lazyNodes < 8000, lazyNodes);
+
+      await lazyFrames(1);
+      var oneFrameHydrated = qa('#messages details.tool:not(.lazy)').length;
+      T('懒渲染:一帧最多补一张', oneFrameHydrated <= 1, oneFrameHydrated);
+      await lazyFrames(7);
+      var hydratedCards = qa('#messages details.tool:not(.lazy)');
+      T('懒渲染:可见工具卡补出正文', hydratedCards.length > 0 &&
+        qa('#messages .diff .dl').length > 0 &&
+        q('#messages .diff').textContent.indexOf('newValue') >= 0,
+        { hydrated: hydratedCards.length, rows: qa('#messages .diff .dl').length });
+      T('懒渲染:补正文不替换原 details', hydratedCards.length > 0 &&
+        !!hydratedCards[0].querySelector('.toolbody .diff'), hydratedCards.length);
+
+      store.nearBottom = false;
+      var anchorId = 'lazy_msg_53';
+      applyScrollAnchor({ id: anchorId, off: 0 });
+      await lazyFrames(2);
+      var anchorBox = q('#messages');
+      var anchorRec = msgEls.get(anchorId);
+      var anchorBefore = anchorRec.el.getBoundingClientRect().top - anchorBox.getBoundingClientRect().top;
+      await lazyFrames(8);
+      var anchorAfter = anchorRec.el.getBoundingClientRect().top - anchorBox.getBoundingClientRect().top;
+      T('懒渲染:中段补正文不顶走滚动锚点',
+        Math.abs(anchorAfter - anchorBefore) <= 1,
+        { before: anchorBefore, after: anchorAfter });
+
+      var directLazy = renderMessage(lazyMessages(2).get('lazy_msg_1'));
+      T('懒渲染:直接 renderMessage 默认完整渲染',
+        !!directLazy.querySelector('.diff .dl'), directLazy.innerHTML.slice(0, 120));
+
+      store.messages = lazyMessages(2);
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.forceBottom = true;
+      store.restoreScroll = null;
+      renderMessages();
+      T('懒渲染:短会话不启用懒壳', qa('#messages details.tool.lazy').length === 0,
+        qa('#messages details.tool.lazy').length);
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

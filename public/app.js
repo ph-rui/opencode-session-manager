@@ -2731,6 +2731,7 @@ function clearSelection() {
   persistSelected(null, 'replace');
   store.messages.clear();
   msgEls.clear();
+  resetLazyToolWatch();
   if (id) dropAsksFor(id);
   $('#messages').innerHTML = ''; // 里面的「跳到最新」按钮由 updateJumpLatest() 自己搬回来
   /* 「加载更旧消息」跟着选中会话走:游标和那一格都清掉 —— 只清 store.messages 的话,这一格
@@ -3356,6 +3357,7 @@ async function selectSession(id) {
   const s = store.sessions.get(id);
   paintChatHeader(s);
   msgEls.clear();
+  resetLazyToolWatch();
   $('#messages').innerHTML = '';
   store.msgError = ''; // 切会话了:上一个会话的失败/加载状态都不该跟过来
   store.msgSeq++; // 这一下就把在途的响应与重试作废(下面 loadMessages 还会再记一代)
@@ -4344,6 +4346,10 @@ function findToolPart(pid) {
     const list = (L && L.parts) || (m && m.content) || [];
     for (const p of list) if (p && p.id === pid) return p;
   }
+  // 还没落盘、只存在于本地流式缓冲的助手消息(懒壳补正文也会走到这里)
+  for (const L of store.live.values()) {
+    for (const p of L.parts || []) if (p && p.id === pid) return p;
+  }
   return null;
 }
 
@@ -4637,7 +4643,168 @@ function toolOutputHtml(st) {
   return txt ? '<pre>' + esc(txt) + '</pre>' : '';
 }
 
-function toolHtml(p) {
+/* §8.83 工具卡正文懒渲染。
+ *
+ * 工具密集的长会话里,diff / write 正文才是 DOM 大头:100 条消息、75 张 edit 卡实测
+ * 四万多节点,首屏渲染 400ms 以上。这里只把「正文很大」的工具卡先渲染成 summary 壳,
+ * 等它进入 #messages 的预加载范围后,一帧只补一张正文 —— 不引入 Worker,也不做整表
+ * 虚拟化,消息壳、msgEls、滚动锚点都保持原样。
+ *
+ * 触发门槛按正文字节数算:单卡至少 2KB,整段会话合计至少 32KB。短会话、普通文本、
+ * 小 diff 完全不走这条路;直接调用 renderMessage() 也默认完整渲染(测试语义不变)。 */
+const LAZY_TOOL_CARD_MIN = 2 * 1024;
+const LAZY_TOOL_TOTAL_MIN = 32 * 1024;
+
+let lazyToolObserver = null;
+let lazyToolQueue = [];
+let lazyToolFrame = 0;
+
+function lazyToolSupported() {
+  return typeof IntersectionObserver === 'function' && typeof requestAnimationFrame === 'function';
+}
+
+function toolBodyBytes(p) {
+  const st = (p && p.state) || {};
+  const md = st.metadata || {};
+  const input = st.input;
+  const kind = toolKind(p);
+  if (kind === 'edit' || kind === 'patch') {
+    const files = Array.isArray(md.files) ? md.files : [];
+    let n = 0;
+    for (const f of files) n += String((f && f.patch) || '').length;
+    return n;
+  }
+  if (kind === 'write' && input && typeof input.content === 'string') return input.content.length;
+  return 0;
+}
+
+function lazyToolBodyCandidate(p) {
+  return !!(p && p.id && toolBodyBytes(p) >= LAZY_TOOL_CARD_MIN);
+}
+
+function lazyToolsWanted(msgs) {
+  if (!lazyToolSupported()) return false;
+  let total = 0;
+  for (const m of msgs || []) {
+    const content = m && m.content;
+    if (!Array.isArray(content)) continue;
+    for (const p of content) {
+      if (!p || p.type !== 'tool') continue;
+      total += toolBodyBytes(p);
+      if (total >= LAZY_TOOL_TOTAL_MIN) return true;
+    }
+  }
+  return false;
+}
+
+// 正文单独抽出来:懒壳补正文和完整渲染走同一段,避免两边 diff / 诊断的 HTML 漂移。
+function toolBodyHtml(p) {
+  const st = (p && p.state) || {};
+  const md = st.metadata || {};
+  const input = st.input;
+  const kind = toolKind(p);
+  const files = Array.isArray(md.files) ? md.files : [];
+  const path = (input && input.path) || md.filepath || (files[0] && files[0].file) || '';
+  if (kind === 'edit' || kind === 'patch') {
+    if (!files.length) return '';
+    return diffToolHtml(p, files) + diagHtml(md, path);
+  }
+  if (kind === 'write') {
+    if (!input || typeof input.content !== 'string') return '';
+    return codeHtml(input.content, path) + diagHtml(md, path);
+  }
+  return '';
+}
+
+function lazyToolCard(p, line, counts) {
+  return (
+    '<details class="tool lazy" data-def="1" data-lazy-tool="' + esc(p.id) + '" open><summary>' +
+    toolHead(p, line, counts) + '</summary>' +
+    '<div class="toolbody"></div></details>'
+  );
+}
+
+function ensureLazyToolObserver() {
+  if (!lazyToolSupported()) return null;
+  const box = $('#messages');
+  if (!box) return null;
+  if (!lazyToolObserver) {
+    lazyToolObserver = new IntersectionObserver(
+      (entries) => {
+        for (const en of entries) {
+          if (!en.isIntersecting) continue;
+          const el = en.target;
+          lazyToolObserver.unobserve(el);
+          if (!el.isConnected) continue;
+          lazyToolQueue.push(el);
+        }
+        scheduleLazyToolHydration();
+      },
+      { root: box, rootMargin: '300px 0px' }
+    );
+  }
+  return lazyToolObserver;
+}
+
+function scheduleLazyToolHydration() {
+  if (lazyToolFrame) return;
+  lazyToolFrame = requestAnimationFrame(() => {
+    lazyToolFrame = 0;
+    /* 一帧只补一张:单张大 diff 卡自己就接近一帧,别一次把两三张压进同一帧。 */
+    while (lazyToolQueue.length) {
+      const el = lazyToolQueue.shift();
+      if (el && el.isConnected && el.classList.contains('lazy') && hydrateLazyTool(el)) break;
+    }
+    if (lazyToolQueue.length) scheduleLazyToolHydration();
+  });
+}
+
+function hydrateLazyTool(el) {
+  if (!el || !el.classList || !el.classList.contains('lazy')) return false;
+  const pid = el.getAttribute('data-lazy-tool') || '';
+  const p = pid ? findToolPart(pid) : null;
+  if (!p) return false;
+  const host = el.querySelector('.toolbody');
+  if (!host) return false;
+  const box = $('#messages');
+  let guard = null;
+  // 只有「在视口上方」的卡补正文才会把当前阅读位置往下推;视口内/下方的卡不用付锚点读布局的钱。
+  if (box && el.getBoundingClientRect().top < box.getBoundingClientRect().top) guard = scrollAnchor();
+  const html = toolBodyHtml(p);
+  if (!html) return false;
+  host.innerHTML = html;
+  el.classList.remove('lazy');
+  el.removeAttribute('data-lazy-tool');
+  if (lazyToolObserver) lazyToolObserver.unobserve(el);
+  if (guard) applyScrollAnchor(guard);
+  return true;
+}
+
+function observeLazyToolCards() {
+  if (!lazyToolSupported()) return;
+  const box = $('#messages');
+  if (!box) return;
+  const obs = ensureLazyToolObserver();
+  if (!obs) return;
+  for (const el of Array.from(box.querySelectorAll('details.tool.lazy[data-lazy-tool]'))) {
+    if (el.__lazyObserved) continue;
+    el.__lazyObserved = true;
+    obs.observe(el);
+  }
+}
+
+function forgetLazyTool(el) {
+  if (lazyToolObserver && el) lazyToolObserver.unobserve(el);
+}
+
+function resetLazyToolWatch() {
+  lazyToolQueue.length = 0;
+  if (lazyToolFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(lazyToolFrame);
+  lazyToolFrame = 0;
+  if (lazyToolObserver) lazyToolObserver.disconnect();
+}
+
+function toolHtml(p, lazy) {
   const st = p.state || {};
   const md = st.metadata || {};
   const input = st.input;
@@ -4649,7 +4816,8 @@ function toolHtml(p) {
   // edit / patch:服务端算好的多文件 unified diff(TUI 的 BlockTool:edit 是「← Edit <路径>」)
   if (kind === 'edit' || kind === 'patch') {
     if (files.length) {
-      return toolCard(p, line, diffCounts(files), diffToolHtml(p, files) + diagHtml(md, path), true);
+      if (lazy && lazyToolBodyCandidate(p)) return lazyToolCard(p, line, diffCounts(files));
+      return toolCard(p, line, diffCounts(files), toolBodyHtml(p), true);
     }
     // 还在跑:服务端尚未给出 files,只显示目标(与服务端 TUI 的「← Edit <path>」一致)
     return '<div class="toolrow">' + toolHead(p, line) + '</div>';
@@ -4659,7 +4827,8 @@ function toolHtml(p) {
   if (kind === 'write') {
     const wrote = { head: 'Wrote', tail: abbrevPath(path), icon: '#' };
     if (input && typeof input.content === 'string') {
-      return toolCard(p, wrote, null, codeHtml(input.content, path) + diagHtml(md, path), true);
+      if (lazy && lazyToolBodyCandidate(p)) return lazyToolCard(p, wrote, null);
+      return toolCard(p, wrote, null, toolBodyHtml(p), true);
     }
     return '<div class="toolrow">' + toolHead(p, line) + '</div>';
   }
@@ -5397,10 +5566,10 @@ function renderMessage(m, opts) {
             html += exploreGroupHtml(run);
             continue;
           }
-          for (const q of run) html += toolHtml(q);
+          for (const q of run) html += toolHtml(q, opts.lazyTools);
           continue;
         }
-        html += toolHtml(p);
+        html += toolHtml(p, opts.lazyTools);
       }
     }
     // 收工后这一轮的数字进了下面那个 Tokens 块,.meta 只留费用(不再重复一份);
@@ -5539,6 +5708,7 @@ function renderMessages() {
   // 删除已不存在的消息(live 缓冲里的消息不算「不存在」)
   for (const [id, rec] of msgEls) {
     if (!store.messages.has(id) && !liveView(id)) {
+      forgetLazyTool(rec.el);
       rec.el.remove();
       msgEls.delete(id);
     }
@@ -5547,6 +5717,8 @@ function renderMessages() {
   // §8.68:先算一遍跨消息吸收关系。被吸收的消息仍留在 msgs / msgEls 里,
   // 只是换成 hidden 占位 —— 删除清理、滚动锚点、顺序都还认得出它。
   const absorbPlan = exploreAbsorbPlan(msgs);
+  // §8.83 长会话工具正文懒渲染:只在这段会话的工具正文总量过门槛时启用。
+  const lazyTools = lazyToolsWanted(msgs);
 
   // 增量渲染:仅重建变化的消息,其余复用 DOM(保留已展开的 details)
   let prev = null;
@@ -5567,6 +5739,7 @@ function renderMessages() {
         msgEls.set(m.id, rec);
       } else if (rec.sig !== asig || rec.absorbed !== absorbedBy) {
         const el = absorbedPlaceholder(absorbedBy);
+        forgetLazyTool(rec.el);
         rec.el.replaceWith(el);
         rec.el = el;
         rec.sig = asig;
@@ -5596,7 +5769,7 @@ function renderMessages() {
     const crossSig = absorb && absorb.length ? '|absorb:' + JSON.stringify(absorb) : '';
     const sig = L ? 'live|' + liveFp : JSON.stringify(view) + fpExtra + crossSig;
     // 脚注要按「整轮」算时长与速度,所以把整张消息表与自己在表里的位置一起交下去
-    const rOpts = { msgs: msgs, index: mi, absorb: absorb };
+    const rOpts = { msgs: msgs, index: mi, absorb: absorb, lazyTools: lazyTools };
     let rec = msgEls.get(m.id);
     if (!rec) {
       rec = { sig: sig, fp: liveFp, el: renderMessage(view, rOpts), absorbed: null };
@@ -5604,6 +5777,7 @@ function renderMessages() {
     } else if (rec.sig !== sig) {
       const el = renderMessage(view, rOpts);
       syncDetailsOpen(rec.el, el);
+      forgetLazyTool(rec.el);
       rec.el.replaceWith(el);
       rec.el = el;
       rec.sig = sig;
@@ -5649,6 +5823,7 @@ function renderMessages() {
   // 贴完底之后再跟几帧:cvmany 的离屏估值是【贴完之后】才落定的,一落定就把底顶歪(见 repinUntilStable)
   if (pinned && box.classList.contains('cvmany')) repinUntilStable(box);
   syncRepinWatch(); // §8.46:盯内容高度那只眼(新建/换掉的节点跟着换,晚了才撑开的图也接得住)
+  observeLazyToolCards(); // §8.83:新出现的工具卡懒壳进入预加载范围后逐帧补正文
 
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
