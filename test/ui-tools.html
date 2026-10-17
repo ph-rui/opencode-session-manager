@@ -712,6 +712,130 @@
         renderMessage({ id: 'm3', type: 'assistant', content: [rd('a'), bashTool('ls'), rd('b')] })
           .querySelectorAll('.explore').length === 2);
 
+      /* ================= §8.68 跨消息探索并组(只吸收纯探索续步) ================= */
+      var crossUser = { id: 'cu', type: 'user', text: 'go', time: { created: 1 } };
+      var crossStep = function (id, created, content, extra) {
+        var m = { id: id, type: 'assistant', finish: 'tool-calls',
+          time: { created: created, completed: created + 1 }, content: content };
+        if (extra) { for (var k in extra) m[k] = extra[k]; }
+        return m;
+      };
+      var crossRender = function (msgs) {
+        store.selected = 'ses_x';
+        store.live = new Map();
+        store.messages = new Map(msgs.map(function (m) { return [m.id, m]; }));
+        store.msgOlderCursor = null;
+        store.forceBottom = true;
+        store.restoreScroll = null;
+        q('#messages').innerHTML = '';
+        msgEls.clear();
+        renderMessages();
+      };
+      var ca1 = crossStep('ca1', 10, [rd('a1')]);
+      var cb1 = crossStep('cb1', 20, [rd('b1')]);
+      var crossPlan = exploreAbsorbPlan([crossUser, ca1, cb1]);
+      T('跨消息:只吸收非终步、整条都是探索工具的续步',
+        crossPlan.absorbed.get('cb1') === 'ca1' && crossPlan.partsByOwner.get('ca1').length === 1,
+        crossPlan);
+      var unknownPlan = exploreAbsorbPlan([
+        crossUser,
+        crossStep('ua', 10, [rd('a1')]),
+        crossStep('ub', 20, [rd('b1')], { finish: 'unknown' }),
+      ]);
+      T('跨消息:finish=unknown 仍算非终步', unknownPlan.absorbed.get('ub') === 'ua', unknownPlan);
+
+      crossRender([crossUser, ca1, cb1]);
+      var caEl = el('ca1');
+      var cbEl = el('cb1');
+      T('跨消息:续步整条换成 hidden 占位,不再多一个助手头',
+        cbEl.hidden === true && cbEl.className.indexOf('absorbed') >= 0 &&
+        cbEl.getAttribute('data-absorbed-by') === 'ca1',
+        cbEl && cbEl.outerHTML);
+      T('跨消息:上一段最后一个探索组合并成一组(2 reads)',
+        caEl.querySelectorAll('.explore').length === 1 &&
+        caEl.querySelector('.explore > summary').textContent.indexOf('2 reads') >= 0 &&
+        caEl.querySelectorAll('.explore > .gbody > *').length === 2,
+        caEl.querySelector('.explore > summary').textContent);
+      T('跨消息:占位仍留在消息流里、顺序不变',
+        cbEl.parentElement === q('#messages') && caEl.nextElementSibling === cbEl);
+      T('跨消息:msgEls 记住归属,上一段自己不是占位',
+        msgEls.get('cb1').absorbed === 'ca1' && !msgEls.get('ca1').absorbed);
+
+      var crossDet = caEl.querySelector('details.explore');
+      crossDet.open = true;
+      cb1.content[0].state.input.path = 'b1-changed';
+      renderMessages();
+      caEl = el('ca1');
+      T('跨消息:续步内容变了会重绘上一段,摊开状态留住',
+        caEl.querySelector('details.explore').open === true &&
+        caEl.textContent.indexOf('b1-changed') >= 0,
+        caEl.textContent);
+
+      store.messages.delete('ca1');
+      renderMessages();
+      cbEl = el('cb1');
+      T('跨消息:上一段被删后,续步恢复成独立消息',
+        cbEl.hidden === false && cbEl.className.indexOf('absorbed') < 0 &&
+        cbEl.querySelectorAll('.explore > .gbody > *').length === 1 &&
+        cbEl.querySelector('.explore > summary').textContent.indexOf('1 read') >= 0,
+        cbEl && cbEl.outerHTML);
+
+      crossRender([
+        crossUser, crossStep('ca1', 10, [rd('a1')]),
+        crossStep('cb1', 20, [rd('b1')]),
+      ]);
+      store.messages.delete('cb1');
+      renderMessages();
+      T('跨消息:续步被删后,上一段组只剩自己的工具',
+        !el('cb1') && el('ca1').querySelectorAll('.explore > .gbody > *').length === 1,
+        el('ca1') && el('ca1').querySelectorAll('.explore > .gbody > *').length);
+
+      crossRender([
+        crossUser, crossStep('ca1', 10, [rd('a1')]),
+        crossStep('cb1', 20, [{ type: 'text', text: 'done' }, rd('b1')]),
+      ]);
+      T('跨消息:续步里只要有正文就仍分成两条',
+        el('cb1').hidden === false && qa('#messages .explore').length === 2,
+        { hidden: el('cb1').hidden, groups: qa('#messages .explore').length });
+
+      crossRender([
+        crossUser, crossStep('ca1', 10, [rd('a1')]),
+        crossStep('cb1', 20, [rd('b1')], { finish: 'stop' }),
+      ]);
+      T('跨消息:终步续消息不吸收(它要留自己的脚注)',
+        el('cb1').hidden === false && qa('#messages .explore').length === 2);
+
+      crossRender([
+        crossUser, crossStep('ca1', 10, [{ type: 'text', text: '先看' }, rd('a1')]),
+        crossStep('cb1', 20, [rd('b1')]),
+      ]);
+      T('跨消息:上一段有正文但以探索组收尾,也能吸收',
+        el('cb1').hidden === true &&
+        el('ca1').querySelectorAll('.explore > .gbody > *').length === 2 &&
+        el('ca1').textContent.indexOf('先看') >= 0);
+
+      crossRender([
+        crossUser, crossStep('ca1', 10, [rd('a1')]),
+        { id: 'ci', type: 'idle', time: { created: 15 } },
+        crossStep('cb1', 20, [rd('b1')]),
+      ]);
+      T('跨消息:idle 不出行,也不打断吸收',
+        el('cb1').hidden === true && el('cb1').getAttribute('data-absorbed-by') === 'ca1');
+
+      crossRender([
+        crossUser, crossStep('ca1', 10, [rd('a1')]),
+        crossStep('cb1', 20, [bashTool('ls')]),
+      ]);
+      T('跨消息:纯 shell 续步不吸收',
+        el('cb1').hidden === false && qa('#messages .explore').length === 1 &&
+        el('cb1').querySelectorAll('.toolrow').length === 1);
+
+      q('#messages').innerHTML = '';
+      msgEls.clear();
+      store.messages = new Map();
+      store.selected = null;
+      store.live = new Map();
+
       /* ================= 思考块摘要(照 TUI 的 reasoningSummary / ReasoningHeader) ================= */
       T('reasoningTitle:捞出正文最前面那段加粗的概要标题',
         reasoningTitle('**Inspecting PR workflow**\n\nbody') === 'Inspecting PR workflow',

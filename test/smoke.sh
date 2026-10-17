@@ -2313,6 +2313,19 @@ else
   echo "FAIL: /diff 文件树 / 跳转 / reviewed / 窄屏样式缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R23 组:跨消息探索并组(只吸收纯探索续步;§8.68)----
+if has "$APPJS" 'function exploreAbsorbPlan(msgs)' &&
+   has "$APPJS" 'function isPureExploreStep(m)' &&
+   has "$APPJS" 'const absorbPlan = exploreAbsorbPlan(msgs)' &&
+   has "$APPJS" "data-absorbed-by" &&
+   has "$APPJS" 'if (rec && rec.absorbed) rec = msgEls.get(rec.absorbed) || rec;' &&
+   has "$CSS" '.msg.absorbed { display: none; }' &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '跨消息:只吸收非终步、整条都是探索工具的续步'; then
+  echo "PASS: §8.68 跨消息只吸收纯探索续步,占位 / 锚点 / 静态样式与浏览器断言都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.68 的跨消息吸收 / 占位 / 锚点 / 样式缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

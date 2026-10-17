@@ -2477,7 +2477,8 @@ function scrollAnchor() {
   if (!box) return null;
   const boxTop = box.getBoundingClientRect().top;
   const owner = new Map();
-  for (const [id, rec] of msgEls) owner.set(rec.el, id);
+  // 被吸收的续步是 hidden 占位,不该成为锚点;它下面的内容本来就在上一段里。
+  for (const [id, rec] of msgEls) if (!rec.absorbed) owner.set(rec.el, id);
   for (const el of box.children) {
     const id = owner.get(el);
     if (!id) continue; // 不是消息节点的跳过
@@ -2509,7 +2510,9 @@ function savedAnchor(sid) {
 function applyScrollAnchor(a) {
   const box = $('#messages');
   if (!a) return;
-  const rec = a.id ? msgEls.get(a.id) : null;
+  let rec = a.id ? msgEls.get(a.id) : null;
+  // 存档可能落在被吸收的续步上:改锚到它的吸收方,位置仍在这组附近。
+  if (rec && rec.absorbed) rec = msgEls.get(rec.absorbed) || rec;
   if (rec && rec.el && rec.el.parentElement === box) {
     // 量出锚点相对滚动口上沿的差,滚掉它 —— 一步就准:滚完之后锚点正好落在 off 处,
     // 而且接下来重排的是【锚点下方】刚露头那一屏,锚点自己不会动。
@@ -4841,6 +4844,87 @@ function msgHidden(m) {
   return false;
 }
 
+/* §8.68 跨消息探索并组(只做方案 A):
+ * TUI 按 part 投影,助手消息不插 message 行,所以相邻两条助手消息里的 read/grep
+ * 只要前一条不是终步、没有 footer,就会并进同一个探索组。面板按消息渲染,
+ * 这一版只吸收一种最干净、实测占满那 8 处的形态:下一条助手消息是
+ * 非终步(finish 仍是 tool-calls/unknown)、非流式、非出错/重试,且整条内容
+ * 除空文本/空思考外全是探索工具。把它整条藏掉,工具并进上一段最后一个探索组。
+ * 带正文、终步、流式中的续步一律不吸收,仍各印各的。 */
+function isBlankPart(p) {
+  return (p.type === 'text' || p.type === 'reasoning') && !String(p.text || '').trim();
+}
+
+function lastVisiblePartIndex(content) {
+  for (let i = content.length - 1; i >= 0; i--) if (!isBlankPart(content[i])) return i;
+  return -1;
+}
+
+function stepCanContinue(m) {
+  return m.finish === 'tool-calls' || m.finish === 'unknown';
+}
+
+function isPureExploreStep(m) {
+  if (!m || m.type !== 'assistant' || m.live || m.error || m.retry || !stepCanContinue(m)) return false;
+  const content = m.content || [];
+  let seen = false;
+  for (const p of content) {
+    if (isBlankPart(p)) continue;
+    seen = true;
+    if (p.type !== 'tool' || !isExploreTool(p)) return false;
+  }
+  return seen;
+}
+
+// 上一段能不能当「吸收方」:自己也得是非终步、非流式,并且最后一个可见 part 是探索工具。
+function canStartExploreAbsorb(m) {
+  if (!m || m.type !== 'assistant' || m.live || m.error || m.retry || !stepCanContinue(m)) return false;
+  const content = m.content || [];
+  const at = lastVisiblePartIndex(content);
+  return at >= 0 && content[at].type === 'tool' && isExploreTool(content[at]);
+}
+
+/* 一次遍历算出「谁吸谁」和「每个吸收方多出哪些工具」。
+ * idle / 没 description 的 synthetic 在 TUI 里不出行,所以 continue 而不 reset owner;
+ * 用户、系统、压缩、其它助手消息、流式消息都会断组。 */
+function exploreAbsorbPlan(msgs) {
+  const absorbed = new Map(); // 被吸收的消息 id -> 吸收方消息 id
+  const partsByOwner = new Map(); // 吸收方消息 id -> 追加进来的探索工具 part
+  let owner = null;
+  for (const m of msgs) {
+    if (liveView(m.id) || m.live) {
+      owner = null;
+      continue;
+    }
+    if (msgHidden(m)) continue;
+    if (m.type !== 'assistant') {
+      owner = null;
+      continue;
+    }
+    if (owner && isPureExploreStep(m)) {
+      const parts = (m.content || []).filter((p) => p.type === 'tool' && isExploreTool(p));
+      if (parts.length) {
+        absorbed.set(m.id, owner.id);
+        const list = partsByOwner.get(owner.id) || [];
+        for (const p of parts) list.push(p);
+        partsByOwner.set(owner.id, list);
+      }
+      continue;
+    }
+    owner = canStartExploreAbsorb(m) ? m : null;
+  }
+  return { absorbed: absorbed, partsByOwner: partsByOwner };
+}
+
+function absorbedPlaceholder(ownerId) {
+  const el = document.createElement('div');
+  el.className = 'msg absorbed';
+  el.hidden = true;
+  el.setAttribute('aria-hidden', 'true');
+  el.setAttribute('data-absorbed-by', ownerId);
+  return el;
+}
+
 function renderMessage(m, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -4857,6 +4941,7 @@ function renderMessage(m, opts) {
 
   if (m.type === 'assistant') {
     const content = m.content || [];
+    const lastVisible = lastVisiblePartIndex(content);
     // 流式时光标落在最后一个文本/思考块上
     let lastBlock = -1;
     for (let i = 0; i < content.length; i++) {
@@ -4911,9 +4996,15 @@ function renderMessage(m, opts) {
         // 相邻的探索类工具(read/glob/grep/webfetch/websearch)折成一组,照 TUI 的
         // exploration 分组 —— 见 EXPLORE_TOOLS 那段的说明。
         if (isExploreTool(p)) {
+          const start = i;
           const run = [p];
           while (i + 1 < content.length && content[i + 1].type === 'tool' && isExploreTool(content[i + 1])) {
             run.push(content[++i]);
+          }
+          // §8.68:只有「最后一个可见 part 所在的这一组」接收被吸收的续步工具;
+          // 前面被正文/别的工具隔开的探索组不参与。
+          if (opts.absorb && opts.absorb.length && lastVisible >= start && lastVisible <= i) {
+            for (const q of opts.absorb) run.push(q);
           }
           if (run.length >= EXPLORE_MIN_RUN) {
             html += exploreGroupHtml(run);
@@ -5065,6 +5156,10 @@ function renderMessages() {
     }
   }
 
+  // §8.68:先算一遍跨消息吸收关系。被吸收的消息仍留在 msgs / msgEls 里,
+  // 只是换成 hidden 占位 —— 删除清理、滚动锚点、顺序都还认得出它。
+  const absorbPlan = exploreAbsorbPlan(msgs);
+
   // 增量渲染:仅重建变化的消息,其余复用 DOM(保留已展开的 details)
   let prev = null;
   for (let mi = 0; mi < msgs.length; mi++) {
@@ -5074,6 +5169,27 @@ function renderMessages() {
     // idle 与「没有 description 的 synthetic」压根不出行(照 TUI 的 rows.ts:383)。
     // 在这里 continue:不建 DOM、不占 msgEls 记录,也不动 prev —— 整条就像不存在。
     if (!L && msgHidden(view)) continue;
+    // 被吸收的纯探索续步:整条换成 hidden 占位,内容已经并进上一段最后一个探索组。
+    const absorbedBy = L ? null : absorbPlan.absorbed.get(m.id);
+    if (absorbedBy) {
+      const asig = 'absorbed|' + absorbedBy;
+      let rec = msgEls.get(m.id);
+      if (!rec) {
+        rec = { sig: asig, fp: '', el: absorbedPlaceholder(absorbedBy), absorbed: absorbedBy };
+        msgEls.set(m.id, rec);
+      } else if (rec.sig !== asig || rec.absorbed !== absorbedBy) {
+        const el = absorbedPlaceholder(absorbedBy);
+        rec.el.replaceWith(el);
+        rec.el = el;
+        rec.sig = asig;
+        rec.fp = '';
+        rec.absorbed = absorbedBy;
+      }
+      const anchor = prev ? prev.nextSibling : box.firstChild;
+      if (rec.el !== anchor) box.insertBefore(rec.el, anchor);
+      prev = rec.el;
+      continue;
+    }
     // 压缩块的正文在压缩期间是流式的(store.compactText 一段段涨):把当前正文并进
     // view 再算签名,签名才会跟着变 —— 不然新攒的正文上不了屏。
     if (!L && view && view.type === 'compaction') {
@@ -5087,12 +5203,15 @@ function renderMessages() {
     let fpExtra = '';
     if (!L && view && view.type === 'assistant') fpExtra = '|' + modelDisplayName(view.model);
     else if (!L && view && view.type === 'model-switched') fpExtra = '|' + switchLabel(view.model, view.previous);
-    const sig = L ? 'live|' + liveFp : JSON.stringify(view) + fpExtra;
+    // 吸收进来的工具也算这一条消息的一部分:它们的状态 / 输出一变,上一段就得重绘。
+    const absorb = L ? null : absorbPlan.partsByOwner.get(m.id) || null;
+    const crossSig = absorb && absorb.length ? '|absorb:' + JSON.stringify(absorb) : '';
+    const sig = L ? 'live|' + liveFp : JSON.stringify(view) + fpExtra + crossSig;
     // 脚注要按「整轮」算时长与速度,所以把整张消息表与自己在表里的位置一起交下去
-    const rOpts = { msgs: msgs, index: mi };
+    const rOpts = { msgs: msgs, index: mi, absorb: absorb };
     let rec = msgEls.get(m.id);
     if (!rec) {
-      rec = { sig: sig, fp: liveFp, el: renderMessage(view, rOpts) };
+      rec = { sig: sig, fp: liveFp, el: renderMessage(view, rOpts), absorbed: null };
       msgEls.set(m.id, rec);
     } else if (rec.sig !== sig) {
       const el = renderMessage(view, rOpts);
@@ -5101,8 +5220,10 @@ function renderMessages() {
       rec.el = el;
       rec.sig = sig;
       rec.fp = liveFp;
+      rec.absorbed = null;
     } else {
       rec.fp = liveFp;
+      rec.absorbed = null;
       if (L) paintLiveText(rec.el, L);
     }
     const anchor = prev ? prev.nextSibling : box.firstChild;

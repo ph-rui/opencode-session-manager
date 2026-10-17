@@ -421,6 +421,8 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   padding: 1px 0 1px 12px;
   margin: 0 0 22px;
 }
+/* §8.68:被吸收的纯探索续步只留一个壳,整条不出行 */
+.msg.absorbed { display: none; }
 /* 更猛的优化:离屏消息整块跳过渲染(content-visibility: auto)。改完 #messages 再读
    scrollHeight/atBottom 那次强制同步排版(flush),原来要连看不见的消息一起算,长会话里
    是整个界面最贵的一步(实测 100 条消息时 24ms,进度条/spinner/流式 delta 每次都要吃一次);
