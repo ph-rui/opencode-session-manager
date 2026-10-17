@@ -623,7 +623,8 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .dswap.on { color: var(--accent); border-color: var(--accent); }
 html.narrow .dswap { display: none; }
 
-/* 统一视图正文:行号列 + 符号列 + 源码列,不折行、横向滚动 */
+/* 统一视图正文:行号列 + 符号列 + 源码列;长行按字符折行(§8.58,照 TUI 的
+   wrapMode="char"),行号列留在第一行,`.diff` 的横向滚只当超长 token 的兜底。 */
 .diff {
   background: #fff;
   border: 1px solid var(--diff-rule);
@@ -634,7 +635,8 @@ html.narrow .dswap { display: none; }
   line-height: 1.55;
 }
 .diff:first-child { border-radius: 5px; }
-.dl { display: flex; align-items: stretch; white-space: pre; }
+.dl { display: flex; align-items: stretch; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dl .src { min-width: 0; }
 .dl .ln {
   flex: none;
   width: 3.4em;

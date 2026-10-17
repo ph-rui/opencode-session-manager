@@ -268,6 +268,22 @@ if has "$CSS" 'white-space: pre-wrap' && has "$CSS" 'overflow-wrap: anywhere' &&
 else
   echo "FAIL: styles.css 分栏仍靠横向滚(§8.53 要照 TUI 折行)"; fail=$((fail + 1))
 fi
+# §8.58 统一视图也折行:全局 .dl 就是 pre-wrap/anywhere,不能再写 white-space: pre
+if has "$CSS" '.dl { display: flex; align-items: stretch; white-space: pre-wrap; overflow-wrap: anywhere; }' &&
+   has "$CSS" '.dl .src { min-width: 0; }' &&
+   ! has "$CSS" '.dl { display: flex; align-items: stretch; white-space: pre; }'; then
+  echo "PASS: styles.css 统一视图的长行也按字符折行(§8.58,不再是 white-space: pre)"; pass=$((pass + 1))
+else
+  echo "FAIL: 统一视图仍不折行(§8.58 要给 .dl 加 pre-wrap / anywhere,并给 .src 留 min-width: 0)"; fail=$((fail + 1))
+fi
+SMOKE_TOOLS="$(dirname "$0")/ui-tools.html"
+if [ -f "$SMOKE_TOOLS" ] && has "$(cat "$SMOKE_TOOLS")" '折行:统一视图的长行按字符折行' &&
+   has "$(cat "$SMOKE_TOOLS")" '折行:源码列不把容器撑宽' &&
+   has "$(cat "$SMOKE_TOOLS")" '折行:行号仍在第一行'; then
+  echo "PASS: ui-tools.html 有统一视图折行的浏览器断言(折行 / 不撑宽 / 行号留在第一行)"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-tools.html 缺统一视图折行的断言"; fail=$((fail + 1))
+fi
 # H 组 1:会话区字号由一个变量统管,区内字号一律相对 em(整块等比缩放,不是只有正文变大)
 if has "$CSS" '--chat-fs: 14px' && has "$CSS" 'font-size: var(--chat-fs)' &&
    has "$CSS" 'font-size: 0.92em' && has "$CSS" 'font-size: 0.88em'; then

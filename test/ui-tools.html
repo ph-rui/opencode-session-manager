@@ -1155,6 +1155,28 @@
       T('并排:面板再变宽时按偏好自动回到两栏', qa('#messages .diff.split').length === 2,
         qa('#messages .diff.split').length);
 
+      /* ================= §8.58 统一视图长行折行 ================= */
+      diffViewSet('unified');
+      var wrapBox = document.createElement('div');
+      wrapBox.innerHTML = diffHtml([{ file: 'long.js', status: 'modified', additions: 1, deletions: 0,
+        patch: '@@ -0,0 +1 @@\n+' + 'x'.repeat(400) }]);
+      document.body.appendChild(wrapBox);
+      var wrapDl = wrapBox.querySelector('.diff .dl.add');
+      var wrapSrc = wrapDl.querySelector('.src');
+      T('折行:统一视图的长行按字符折行(不再只靠横向滚)',
+        getComputedStyle(wrapDl).whiteSpace === 'pre-wrap' &&
+        getComputedStyle(wrapDl).overflowWrap === 'anywhere' &&
+        wrapDl.getBoundingClientRect().height > 25,
+        { ws: getComputedStyle(wrapDl).whiteSpace, ow: getComputedStyle(wrapDl).overflowWrap,
+          h: wrapDl.getBoundingClientRect().height });
+      T('折行:源码列不把容器撑宽',
+        wrapSrc.scrollWidth <= wrapSrc.clientWidth + 1,
+        { sw: wrapSrc.scrollWidth, cw: wrapSrc.clientWidth });
+      T('折行:行号仍在第一行,不跟着被折走',
+        wrapDl.querySelector('.ln.n').textContent === '1' &&
+        wrapDl.querySelector('.ln.o').textContent === '');
+      wrapBox.remove();
+
       try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
       window.diffWide = realWide;
       diffWideSeen = diffCanSplit();
