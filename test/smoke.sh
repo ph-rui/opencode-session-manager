@@ -1826,6 +1826,37 @@ else
   echo "FAIL: 缺 test/strip-run.js(或它没断言 omitted / 真图)"; fail=$((fail + 1))
 fi
 
+# ---- R14b 组:SSE 里也摘掉同一批 data: 图(§8.47;面板在 session.tool.success 上只取 text)----
+if has "$SERVERJS" 'function stripSseData(json)' && has "$SERVERJS" 'function stripSseLine(line)' &&
+   has "$SERVERJS" 'function createSseStripper()' && has "$SERVERJS" 'function isEventStream(method, contentType)' &&
+   has "$SERVERJS" "if (!json || json.type !== 'session.tool.success') return 0;"; then
+  echo "PASS: 代理有「SSE 摘图」那几个纯函数,事件范围只认 session.tool.success"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 stripSseData / stripSseLine / createSseStripper / isEventStream,或范围没收在一个事件上"; fail=$((fail + 1))
+fi
+if has "$SERVERJS" "if (isEventStream(req.method, outHeaders['content-type']))" &&
+   has "$SERVERJS" 'nodeStream.pipe(stripper).pipe(res);' &&
+   has "$SERVERJS" 'return line; // 不是 JSON(或者只是半截):原样发' &&
+   has "$SERVERJS" 'stripSseData,' && has "$SERVERJS" 'createSseStripper,'; then
+  echo "PASS: 只有 SSE 那条走按行改写,解析失败一律原样发(代理不因为省流量把流弄坏)"; pass=$((pass + 1))
+else
+  echo "FAIL: SSE 改写的接线不对(缺内容类型判定 / 中间这条 Transform / 出错退回 / 导出)"; fail=$((fail + 1))
+fi
+if [ -f "$(dirname "$0")/sse-strip-run.js" ] && has "$(cat "$(dirname "$0")/sse-strip-run.js")" 'session.tool.success' &&
+   has "$(cat "$(dirname "$0")/sse-strip-run.js")" '跨 chunk' &&
+   has "$(cat "$(dirname "$0")/sse-strip-run.js")" '心跳'; then
+  echo "PASS: SSE 摘图这套有专门的纯函数断言(test/sse-strip-run.js:跨 chunk / 心跳 / 坏 JSON)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 test/sse-strip-run.js(或它没断言跨 chunk / 心跳帧)"; fail=$((fail + 1))
+fi
+if [ -f "$(dirname "$0")/sse-e2e-run.js" ] && has "$(cat "$(dirname "$0")/sse-e2e-run.js")" 'session.tool.success' &&
+   has "$(cat "$(dirname "$0")/sse-e2e-run.js")" '真代理 + 假上游' &&
+   has "$(cat "$(dirname "$0")/sse-e2e-run.js")" 'OPENCODE_CONFIG_DIR'; then
+  echo "PASS: 另有一条端到端断言(真起代理 + 假上游:600KB 的图走一遍 SSE,别的帧一个字节不动)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 test/sse-e2e-run.js(或它没真起代理 / 没隔离 service.json)"; fail=$((fail + 1))
+fi
+
 # ---- R15 组:选中的会话不在列表页里时,头部操作条与底板工具栏不许整条消失(§8.39)----
 # 手机上这两处会「一起没」:两排的显示判据都写着「选中的会话在不在 store.sessions 里」,
 # 而 store.sessions 只装当前筛选/分页那一页 —— 列表请求或深链补拉任何一条没回来,它们就永远

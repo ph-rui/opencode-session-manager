@@ -1904,6 +1904,9 @@ ui-jump 反向断言）；`ui-jump` 90 → **95**（5 项：桌面 100 / 窄屏 
 摘前摘后「面板看得见的 text」完全一致）。其余套件与 6 个 `e2e-*` 全 0 失败。
 **服务端改了要重启**：`systemctl --user restart opencode-session-manager.service`。
 
+**后续**：另一条路上也背着同一批字节（SSE 的 `session.tool.success`），已按行改写摘掉，
+见 §8.47。
+
 ---
 
 ### 8.38 追加：列表折叠跨刷新保持（但只在同一个标签页里）
@@ -2329,6 +2332,49 @@ README 的两处计数与「贴完底再跟几帧」那段同步;§10 第 7 条�
 
 ---
 
+### 8.47 SSE 里也摘掉同一批 `data:` 图
+
+**起因**:用户——「都行」(§10 第 8 条)。§8.37 只在「消息列表」那一条响应上摘了
+`data:` 图,但同一批字节还会**从 SSE 再走一遍**:`public/app.js` 在
+`session.tool.success` 上写着 `p.state.content = d.content`。某次工具真返回图,
+那【一个】事件就是 600KB 级 —— 面板一个字都不显示它(`toolOutputHtml()` 只取
+`content[].text`),手机上是「这一下卡一下」。
+
+**做法**:在 SSE 的透传中间插一个按【行】改写的 `Transform`:
+
+| 件 | 内容 |
+|---|---|
+| `isEventStream(method, contentType)` | 按**内容类型**认(`GET` + `text/event-stream`),不按 URL 白名单 —— OpenCode 换路径也不用改代理 |
+| `stripSseData(json)` | 只认 `type === 'session.tool.success'`(唯一带 `content` 的 tool 事件,`progress` 只有 metadata);`content[].uri` 是 `data:` 才摘,留 `name`/`mime` + `omitted` 字节数(与 §8.37 同一套语义) |
+| `stripSseLine(line)` | 只认 `data:` 开头的行;解析失败 / 不是对象 / 没摘到 → **原样返回那一行字节** |
+| `createSseStripper()` | 按 `\n` 切行、跨 chunk 用 `StringDecoder` 缓冲(**别把多字节汉字切坏**);`event:` / `:` 注释 / 心跳 / 空行 / 别的 `session.*` 一律原样;单行超 `SSE_MAX_LINE = 8MB` 还没换行就原样放出去(自保) |
+
+接线在 `res.writeHead()` 之后、`nodeStream.pipe()` 那一处:`isEventStream()` 为真时走
+`nodeStream.pipe(stripper).pipe(res)`,否则一个字都不动。**任何一步出错都退回原字节** ——
+SSE 改坏了整条面板就瞎了,省流量不值这个价。
+
+**验证**:两条互补的断言(都不需要「等一次真的读图回合」):
+
+- `test/sse-strip-run.js`(45 项纯函数):只动那一个事件;注释 / 心跳 / `event:` / 坏 JSON /
+  不是对象的 JSON / 没 `data:` 前缀的行原样;跨 chunk 的三种切法(整段一次喂、**按 1 字节切**、
+  1/2/3/5/8/13/21/34 字节错开切)输出完全一致,**汉字没被切坏**,帧边界与 `\n\n` 一个不少,
+  流被掐断(没有结尾换行)也照样处理,单行超 8MB 原样放出去、后面的帧照常。
+- `test/sse-e2e-run.js`(16 项,**真起一份代理 + 一个假上游**;上游地址靠 PATH 里的假
+  `opencode service status`,密码靠 `OPENCODE_CONFIG_DIR` 指向临时目录 —— 不碰线上那唯一的
+  OpenCode):让 `session.tool.success` 背着 **600KB 的 `data:` 图**走一遍 SSE ——
+  那一帧的图没了、整段掉到 5KB 以下;`server.connected` / 心跳 / 一个**身上也挂着 `data:` 的
+  别的 `session.*`** / 半截 JSON 帧一个字节不动;而且**第一帧先到、结尾后到**(证明是按行改写,
+  不是攒完再吐)。真机另跑了一遍:代理的 `/api/event` 与直连上游逐字节对比只差
+  `server.connected` 的随机事件 id;正在跑的会话开 25s,连接、消息、工具卡一切照旧、控制台零错误。
+
+**回归**:`smoke.sh` 303 → **307**(四条:`stripSseData`/`stripSseLine`/`createSseStripper`/
+`isEventStream` 在且范围只认一个事件、只有 SSE 那条走按行改写且解析失败原样发、
+`test/sse-strip-run.js` 在、`test/sse-e2e-run.js` 在);其余套件与 6 个 `e2e-*` 全 0 失败;
+改了 `server.js` 要 `systemctl --user restart opencode-session-manager.service`(已重启)。
+README 的测试清单与 §8.37 那段同步;§10 第 8 条改成「已定」。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
@@ -2361,11 +2407,11 @@ README 的两处计数与「贴完底再跟几帧」那段同步;§10 第 7 条�
    残留的不确定只有一处：预算写成 `REPIN_BUDGET_MS = 800`，若估值落定比这更晚
    （例如某条消息里的图迟一步撑开），那一轮就跟不上了 —— **已定，见 §8.46**
    （不再盯时间：高度连续两帧没变就收手，迟到撑开的由 `ResizeObserver` 接住）。
-8. **流式事件里可能也背着同一批 `data:` 图**（§8.37 只摘了「消息列表」那一条）：
-   面板在 `session.tool.success` 上写着 `p.state.content = d.content`，若某次工具真的
-   返回图，那一个 SSE 事件就是 600KB 级（不是「打开会话慢」，而是「这一下卡一下」）。
-   未实测（要等真有一次读图的回合）。真出现再摘：得按 SSE 的 `data:` 行逐个改，
-   比消息列表风险高，所以没提前做
+8. **流式事件里可能也背着同一批 `data:` 图** —— **已定,见 §8.47**(SSE 按行改写:
+   只认 `session.tool.success`,其余帧一个字节不动;纯函数 + 端点两端到端各一套断言)。
+   §8.37 只摘了「消息列表」那一条,而面板在 `session.tool.success` 上写着
+   `p.state.content = d.content`,某次工具真返回图,那一个事件就是 600KB 级
+   (不是「打开会话慢」,而是「这一下卡一下」)。
 9. **拉会话列表失败仍然只在控制台** —— **已定,见 §8.45**(左栏一条 `#listState`:
    `加载失败:<原因>` +「重试」;慢过 250ms 先露「正在加载会话…」)。§8.39 已经把
    「列表没回来 → 聊天区两排跟着消失」这条连锁反应掐掉了。

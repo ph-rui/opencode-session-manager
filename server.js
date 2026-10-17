@@ -21,7 +21,8 @@ const path = require('path');
 const os = require('os');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
-const { Readable } = require('stream');
+const { Readable, Transform } = require('stream');
+const { StringDecoder } = require('string_decoder');
 
 const HOST = process.env.OCS_HOST || '127.0.0.1';
 const PORT = Number.parseInt(process.env.OCS_PORT || '49450', 10);
@@ -297,8 +298,79 @@ function stripToolUris(json) {
   return n;
 }
 
-/* 把上游的响应体整个读成一个 Buffer(读断了返回 null,由调用方收尾)。 */
-async function readAll(webBody) {
+/* ----------------------- SSE 里同一批 data: 图也摘掉(§8.47) -----------------------
+ * 「消息列表」那条(§8.37)已经摘了,但同一批字节还会从 SSE 走一遍:public/app.js 在
+ * session.tool.success 上写着 `p.state.content = d.content` —— 某次工具真返回图,
+ * 那【一个】事件就是 600KB 级,而面板一个字都不显示它(只取 content[].text)。
+ * 这里在代理层按【行】改写这条流:
+ *   - 只认 `data:` 开头的行,只认 type === 'session.tool.success'(唯一带 content 的);
+ *   - 其余(event: / 注释 / 心跳 / 别的 session.* / 解析失败)一律原样字节;
+ *   - 跨 chunk 的行缓冲(用 StringDecoder,别把多字节汉字切坏);
+ *   - 单行超 8MB 还没换行就原样放出去(自保,不无限攒内存)。
+ * 任何一步出错都退回原字节 —— SSE 改坏了整条面板就瞎了,省流量不值这个价。 */
+const SSE_MAX_LINE = 8 * 1024 * 1024;
+
+/* 就地摘掉一个 SSE 事件里的 data: 图,返回摘掉几处(0 = 没动)。纯函数。 */
+function stripSseData(json) {
+  if (!json || json.type !== 'session.tool.success') return 0;
+  const d = json.data;
+  const items = d && Array.isArray(d.content) ? d.content : null;
+  if (!items) return 0;
+  let n = 0;
+  for (const it of items) {
+    if (!it || typeof it.uri !== 'string' || !it.uri.startsWith('data:')) continue;
+    it.omitted = it.uri.length;
+    it.uri = '';
+    n++;
+  }
+  return n;
+}
+
+/* 一行 SSE → 可能被改写的一行(其余原样)。纯函数,给测试直接喂。 */
+function stripSseLine(line) {
+  if (typeof line !== 'string' || line.slice(0, 5) !== 'data:') return line;
+  let json;
+  try {
+    json = JSON.parse(line.slice(5));
+  } catch (_) {
+    return line; // 不是 JSON(或者只是半截):原样发
+  }
+  if (!stripSseData(json)) return line;
+  return 'data: ' + JSON.stringify(json);
+}
+
+/* 把上游 SSE 流接成「按行改写」的 Transform。结构与帧边界一个字节不动,只换 data: 行。 */
+function createSseStripper() {
+  const dec = new StringDecoder('utf8');
+  let buf = '';
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      buf += dec.write(chunk);
+      let i;
+      while ((i = buf.indexOf('\n')) !== -1) {
+        this.push(stripSseLine(buf.slice(0, i)) + '\n');
+        buf = buf.slice(i + 1);
+      }
+      if (buf.length > SSE_MAX_LINE) {
+        this.push(buf); // 一条行长得离谱:原样放出去,别把内存攒爆
+        buf = '';
+      }
+      cb();
+    },
+    flush(cb) {
+      buf += dec.end();
+      if (buf) this.push(stripSseLine(buf));
+      cb();
+    },
+  });
+}
+
+/* 这一条响应是不是 SSE。按内容类型认(不按 URL 白名单:OpenCode 换路径也不用改代理)。 */
+function isEventStream(method, contentType) {
+  return method === 'GET' && /event-stream/i.test(contentType || '');
+}
+
+/* 把上游的响应体整个读成一个 Buffer(读断了返回 null,由调用方收尾)。 */async function readAll(webBody) {
   const chunks = [];
   try {
     for await (const c of Readable.fromWeb(webBody)) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
@@ -419,6 +491,22 @@ async function proxy(req, res, attempt) {
       nodeStream.destroy();
     } catch (_) {}
   });
+  if (isEventStream(req.method, outHeaders['content-type'])) {
+    // §8.47:SSE 里 session.tool.success 背着的 data: 图按行摘掉,其余帧一个字节不动
+    const stripper = createSseStripper();
+    stripper.on('error', () => {
+      try {
+        res.end();
+      } catch (_) {}
+    });
+    res.on('close', () => {
+      try {
+        stripper.destroy();
+      } catch (_) {}
+    });
+    nodeStream.pipe(stripper).pipe(res);
+    return;
+  }
   nodeStream.pipe(res);
 }
 
@@ -636,4 +724,9 @@ module.exports = {
   MESSAGE_LIST_RE,
   isMessageListUrl,
   stripToolUris,
+  // SSE 里也摘(§8.47):纯函数 + 按行改写的 Transform,给 test/sse-strip-run.js 直接断言
+  stripSseData,
+  stripSseLine,
+  createSseStripper,
+  isEventStream,
 };
