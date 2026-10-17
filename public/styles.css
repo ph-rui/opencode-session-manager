@@ -221,6 +221,89 @@ table#list { width: 100%; border-collapse: collapse; }
 #list td.actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
 #chatpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; font-size: var(--chat-fs); }
+
+/* §8.59 最近会话标签栏(聊天区顶部,左列表照旧保留)。
+   一条 36px 的横条:tab 区自己横向滚(隐藏滚动条),+ 新建 钉在右边。
+   没有 tab 时由 JS 加 hidden,整条不占高度。 */
+#sessionTabs {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  min-width: 0;
+  height: 36px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#sessionTabs[hidden] { display: none; }
+#tabStrip {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* 手机/桌面上都不想让滚动条占一条线 */
+}
+#tabStrip::-webkit-scrollbar { display: none; }
+.tab {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  max-width: 220px;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+.tab:hover { background: var(--bg); }
+.tab.active { background: var(--bg); box-shadow: inset 0 -2px 0 var(--accent); }
+.tabmain {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 6px 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.92em;
+  cursor: pointer;
+}
+.tab.active .tabmain { color: var(--fg); font-weight: 600; }
+.tabtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabx {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+}
+/* 桌面上悬停露 ×、当前 tab 常驻;窄屏只给当前 tab 露(见下面的窄屏一节) */
+.tab:hover .tabx,
+.tab.active .tabx { display: flex; }
+.tabx:hover { color: var(--danger); background: var(--panel); }
+#tabNew {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.92em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+#tabNew:hover { background: var(--bg); }
+#tabNew .tnShort { display: none; }
+
 #chatHeader { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .chline { display: flex; align-items: center; gap: 10px; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1490,6 +1573,20 @@ html.narrow #input,
 html.narrow #ctoolbar .ctl select { font-size: 16px; }
 
 /* ---- 对话区 ---- */
+/* §8.59 手机上的标签栏:再压 2px、tab 更窄、+ 只留一个加号;
+   横屏(矮)再收 4px。当前 tab 才露 ×,别的 tab 先点一下再关,少一排小叉。 */
+html.narrow #sessionTabs { height: 34px; }
+html.narrow .tab { max-width: 150px; }
+html.narrow .tabmain { padding: 0 5px 0 8px; font-size: 12px; }
+html.narrow .tabx { width: 26px; font-size: 1.2em; }
+html.narrow .tab .tabx { display: none; }
+html.narrow .tab.active .tabx { display: flex; }
+html.narrow #tabNew { min-width: 40px; justify-content: center; padding: 0 8px; font-size: 12px; }
+html.narrow #tabNew .tnFull { display: none; }
+html.narrow #tabNew .tnShort { display: inline; }
+html.narrow.short #sessionTabs { height: 30px; }
+/* 横屏宽度够,别把每格都压成 150px;竖屏仍收窄给后面的 tab 留位置 */
+html.narrow.short .tab { max-width: 220px; }
 html.narrow #chatHeader { padding: 8px 10px; }
 html.narrow .chline { gap: 8px; }
 /* §8.43(用户「123 做」里的第 2 条):标题下面那行「更新 1 天前 · 8e9e6e25」手机上收掉 ——

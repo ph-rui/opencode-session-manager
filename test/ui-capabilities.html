@@ -17,6 +17,12 @@
     <section id="listpane"><table id="list"><tbody></tbody></table><div id="listState" class="msgstate" hidden><span id="listStateText"></span><button type="button" id="lsRetry" class="chip" hidden>重试</button></div><button id="loadMore" hidden></button></section>
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">
+      <nav id="sessionTabs" aria-label="最近打开的会话" hidden>
+        <div id="tabStrip"></div>
+        <button type="button" id="tabNew" title="新建会话" aria-label="新建会话">
+          <span class="tnFull">+ 新建</span><span class="tnShort" aria-hidden="true">+</span>
+        </button>
+      </nav>
       <div id="chatHeader">
         <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
         <div id="chatMeta"></div>
@@ -654,6 +660,140 @@
       T('拉成功了那条话自己收起来、重试跟着藏',
         listState.hidden === true && lsRetry.hidden === true && store.listError === '');
       T('(复原)列表照旧填回去了', store.sessions.size === SESSIONS.length, store.sessions.size);
+
+      /* ---------------- §8.59 最近会话标签栏 ----------------
+       * 打开会话自动进 tab;点 tab 直切;× 只移出 tab、不删会话;关当前 tab 自动切邻居;
+       * 最多 8 个;存 localStorage;手机也显示。 */
+      setupSessionTabs();
+      var nav = q('#sessionTabs');
+      var strip = q('#tabStrip');
+      var resetTabs = function () {
+        try { localStorage.removeItem('ocs.tabs'); } catch (_) {}
+        store.tabs = [];
+        store.selected = null;
+        tabsSig = '';
+        tabsActiveSeen = null;
+        renderTabs();
+      };
+      T('标签栏在聊天区顶部、标题头之前',
+        nav.parentElement === q('#chatpane') && nav.nextElementSibling === q('#chatHeader'));
+      resetTabs();
+      T('没有标签时整条收起来(不占高度)', nav.hidden === true && strip.children.length === 0);
+
+      /* 读回:去重、丢坏项、最多 8 个 */
+      localStorage.setItem('ocs.tabs', JSON.stringify([
+        { id: 'ses_a', title: 'A' }, { id: 'ses_a', title: 'A2' },
+        { id: '' }, null, { id: 'ses_b', title: 'B' },
+      ]));
+      var rt = readTabs();
+      T('读回标签时去重、丢掉空/坏项',
+        rt.length === 2 && rt[0].id === 'ses_a' && rt[1].id === 'ses_b', rt);
+      var many = [];
+      for (var ti = 0; ti < 12; ti++) many.push({ id: 'ses_t' + ti, title: 'T' + ti });
+      localStorage.setItem('ocs.tabs', JSON.stringify(many));
+      rt = readTabs();
+      T('读回标签最多留 8 个(最近的)',
+        rt.length === 8 && rt[7].id === 'ses_t11', rt.map(function (t) { return t.id; }));
+
+      resetTabs();
+      seed();
+      touchTab('ses_a');
+      T('打开会话自动进标签,标题取会话列表',
+        store.tabs.length === 1 && store.tabs[0].id === 'ses_a' && store.tabs[0].title === '活动会话', store.tabs);
+      T('有标签后整条露出来', nav.hidden === false && qa('#tabStrip .tab').length === 1);
+      T('标题过长的省略交给 CSS(.tabtitle)', !!strip.querySelector('.tabtitle'));
+      touchTab('ses_a');
+      T('重复打开同一个会话不会多一个标签', store.tabs.length === 1, store.tabs);
+      T('没选中时不高亮', !strip.querySelector('.tab.active'));
+
+      store.tabs = [];
+      store.selected = null;
+      tabsSig = '';
+      tabsActiveSeen = null;
+      renderTabs();
+      store.msgCache.clear();
+      await selectSession('ses_a');
+      T('选中会话后标签高亮、aria-current 指到当前会话',
+        !!strip.querySelector('.tab.active[data-id="ses_a"]') &&
+        strip.querySelector('.tab.active .tabmain').getAttribute('aria-current') === 'page');
+      await selectSession('ses_b');
+      T('第二个会话按打开顺序追加',
+        store.tabs.map(function (t) { return t.id; }).join(',') === 'ses_a,ses_b', store.tabs);
+      T('当前标签跟着切到第二个',
+        strip.querySelector('.tab.active').dataset.id === 'ses_b');
+
+      strip.querySelector('.tab[data-id="ses_a"] .tabmain').click();
+      T('点标签直接切会话(当前标签同步)',
+        store.selected === 'ses_a' && strip.querySelector('.tab.active').dataset.id === 'ses_a');
+
+      var delBefore = window.calls.filter(function (c) { return c.method === 'DELETE'; }).length;
+      strip.querySelector('.tab[data-id="ses_b"] .tabx').click();
+      T('关闭非当前标签:只移出标签栏,不删会话也不切会话',
+        !store.tabs.some(function (t) { return t.id === 'ses_b'; }) &&
+        store.sessions.has('ses_b') && store.selected === 'ses_a', store.tabs);
+      T('关闭标签不发 DELETE',
+        window.calls.filter(function (c) { return c.method === 'DELETE'; }).length === delBefore);
+
+      await selectSession('ses_b');
+      strip.querySelector('.tab[data-id="ses_b"] .tabx').click();
+      T('关掉当前标签:自动切到左/右邻居',
+        !store.tabs.some(function (t) { return t.id === 'ses_b'; }) && store.selected === 'ses_a',
+        { tabs: store.tabs, sel: store.selected });
+
+      strip.querySelector('.tab[data-id="ses_a"] .tabx').click();
+      T('关掉最后一个标签:回到未选择、整条收起',
+        store.tabs.length === 0 && store.selected === null && nav.hidden === true);
+
+      /* 最多 8 个,丢最旧的;写盘 */
+      store.tabs = [];
+      store.selected = null;
+      tabsSig = '';
+      tabsActiveSeen = null;
+      renderTabs();
+      for (var tj = 0; tj < 10; tj++) touchTab('ses_x' + tj, 'X' + tj);
+      T('最多留 8 个,超出丢最旧的那个',
+        store.tabs.length === 8 && store.tabs[0].id === 'ses_x2' && store.tabs[7].id === 'ses_x9',
+        store.tabs.map(function (t) { return t.id; }));
+      var persisted = JSON.parse(localStorage.getItem('ocs.tabs'));
+      T('标签写进 localStorage(只存 id + 标题)',
+        persisted.length === 8 && persisted[0].id === 'ses_x2' && persisted[0].title === 'X2', persisted[0]);
+
+      seed();
+      store.tabs = [{ id: 'ses_a', title: '旧标题' }];
+      store.selected = null;
+      tabsSig = '';
+      tabsActiveSeen = null;
+      saveTabs();
+      renderTabs();
+      store.sessions.get('ses_a').title = '新标题';
+      renderTabs();
+      T('会话列表里的新标题会同步到标签并回写',
+        strip.querySelector('.tabtitle').textContent === '新标题' &&
+        JSON.parse(localStorage.getItem('ocs.tabs'))[0].title === '新标题');
+
+      q('#tabNew').click();
+      T('「+ 新建」复用现有新建框', q('#dlgNew').open === true);
+      closeDlg(q('#dlgNew'));
+
+      document.documentElement.classList.add('narrow', 'view-chat');
+      store.tabs = [{ id: 'ses_a', title: 'A' }, { id: 'ses_b', title: 'B' }];
+      store.selected = 'ses_a';
+      tabsSig = '';
+      tabsActiveSeen = null;
+      renderTabs();
+      var tabA = strip.querySelector('.tab[data-id="ses_a"]');
+      var tabB = strip.querySelector('.tab[data-id="ses_b"]');
+      T('窄屏:标签栏 34px(横屏 30px 由 html.short 再收)',
+        Math.round(nav.getBoundingClientRect().height) === 34, nav.getBoundingClientRect().height);
+      T('窄屏:「+ 新建」只留一个加号',
+        getComputedStyle(q('#tabNew .tnShort')).display !== 'none' &&
+        getComputedStyle(q('#tabNew .tnFull')).display === 'none',
+        { short: getComputedStyle(q('#tabNew .tnShort')).display,
+          full: getComputedStyle(q('#tabNew .tnFull')).display });
+      T('窄屏:只有当前标签露 ×',
+        getComputedStyle(tabA.querySelector('.tabx')).display === 'flex' &&
+        getComputedStyle(tabB.querySelector('.tabx')).display === 'none');
+      document.documentElement.classList.remove('narrow', 'view-chat');
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

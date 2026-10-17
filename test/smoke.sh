@@ -2109,6 +2109,52 @@ else
   echo "FAIL: test/ui-capabilities.html 缺 /diff 的关键断言"; fail=$((fail + 1))
 fi
 
+# ---- R18 组:最近会话标签栏(§8.59) ----
+NAV_POS=$(printf '%s' "$HOME_HTML" | grep -bo 'id="sessionTabs"' 2>/dev/null | head -1 | cut -d: -f1)
+HEAD_POS=$(printf '%s' "$HOME_HTML" | grep -bo 'id="chatHeader"' 2>/dev/null | head -1 | cut -d: -f1)
+if [ -n "$NAV_POS" ] && [ -n "$HEAD_POS" ] && [ "$NAV_POS" -lt "$HEAD_POS" ] &&
+   has "$HOME_HTML" 'id="tabStrip"' && has "$HOME_HTML" 'id="tabNew"' &&
+   has "$HOME_HTML" '<span class="tnFull">+ 新建</span>'; then
+  echo "PASS: 标签栏挂在 #chatpane 顶部、#chatHeader 之前(左列表保留),含 tabStrip 与 + 新建"; pass=$((pass + 1))
+else
+  echo "FAIL: 标签栏节点缺失 / 顺序不对 / 没有 + 新建"; fail=$((fail + 1))
+fi
+if has "$APPJS" "const TABS_KEY = 'ocs.tabs';" && has "$APPJS" 'const TABS_MAX = 8;' &&
+   has "$APPJS" 'function readTabs()' && has "$APPJS" 'function saveTabs()' &&
+   has "$APPJS" 'function touchTab(id, title)' && has "$APPJS" 'function renderTabs()' &&
+   has "$APPJS" 'function setupSessionTabs()' && has "$APPJS" 'touchTab(id); // §8.59' &&
+   has "$APPJS" 'store.tabs = readTabs();' && has "$APPJS" 'setupSessionTabs();'; then
+  echo "PASS: 打开会话自动进标签;列表存 ocs.tabs、最多 8 个;init 先画再拉列表"; pass=$((pass + 1))
+else
+  echo "FAIL: 标签状态 / 持久化 / 自动入栏 / init 接线缺了一块"; fail=$((fail + 1))
+fi
+CLOSETAB=$(printf '%s' "$APPJS" | sed -n '/^function closeTab(id) {/,/^}/p' 2>/dev/null)
+if [ -n "$CLOSETAB" ] && ! has "$CLOSETAB" "method: 'DELETE'" && ! has "$CLOSETAB" 'api(' &&
+   ! has "$CLOSETAB" 'archive' &&
+   has "$CLOSETAB" 'store.tabs.splice(i, 1);' &&
+   printf '%s' "$CLOSETAB" | grep -Fq 'store.tabs[i] || store.tabs[i - 1]'; then
+  echo "PASS: 关标签只从列表移出(不发 DELETE、不归档),关当前标签切右邻居再左邻居"; pass=$((pass + 1))
+else
+  echo "FAIL: 关标签会误删/误归档会话,或没有邻居回退"; fail=$((fail + 1))
+fi
+if has "$CSS" '#sessionTabs {' && has "$CSS" '#tabStrip {' && has "$CSS" '.tab.active {' &&
+   has "$CSS" 'html.narrow #sessionTabs { height: 34px; }' &&
+   has "$CSS" 'html.narrow.short #sessionTabs { height: 30px; }' &&
+   has "$CSS" 'html.narrow .tab.active .tabx { display: flex; }'; then
+  echo "PASS: 标签栏样式齐全(桌面 36px / 竖屏 34px / 横屏 30px,当前 tab 才露 ×)"; pass=$((pass + 1))
+else
+  echo "FAIL: 标签栏样式缺基础规则或窄屏高度"; fail=$((fail + 1))
+fi
+SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
+if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.59 最近会话标签栏' &&
+   has "$(cat "$SMOKE_CAP")" '关闭非当前标签:只移出标签栏,不删会话也不切会话' &&
+   has "$(cat "$SMOKE_CAP")" '最多留 8 个,超出丢最旧的那个' &&
+   has "$(cat "$SMOKE_CAP")" '窄屏:只有当前标签露 ×'; then
+  echo "PASS: test/ui-capabilities.html 里有标签栏的浏览器断言(自动入栏 / 切换 / 关闭 / 上限 / 窄屏)"; pass=$((pass + 1))
+else
+  echo "FAIL: test/ui-capabilities.html 缺标签栏的关键断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

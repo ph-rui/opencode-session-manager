@@ -2913,6 +2913,94 @@ LAN
 
 ---
 
+### 8.59 最近会话标签栏(聊天区顶部,左列表保留)
+
+**起因**:用户给了一张 TUI 的横向会话 tab 截图,问「能不能实现这种效果」;确认采用默认方案:
+tab 栏放在**聊天区顶部**,**左列表保留**,手机竖屏也显示。其余默认:打开过的会话自动进 tab、
+点 tab 直切、`×` 只移出 tab(不归档不删除)、当前 tab 关掉切右/左邻居、最右 `+ 新建` 复用现有
+新建框、最多 8 个、按打开顺序、存 `localStorage`。
+
+**行为**:
+
+| 场景 | 行为 |
+|---|---|
+| 打开会话(列表 / 深链 / 新建后自动选中) | `touchTab(id)`:没有就追加,有就只更新标题;当前 `store.selected` 高亮并带 `aria-current="page"` |
+| 点 tab | `selectSession(id)`;不重排,仍是打开顺序 |
+| 点当前 tab | 不发请求(和列表点同一行一致) |
+| `×`(悬停 / 当前 tab) | 只从 `store.tabs` 移除并写回 `localStorage`;**不发 DELETE、不归档** |
+| 关当前 tab | 右邻居优先,没有就左邻居;都没有才 `clearSelection()`(回「未选择会话」) |
+| 关非当前 tab | 选中会话不动,只重画 tab 栏 |
+| 最后一个 tab 关掉 | 整条 `hidden`,一个像素都不占;桌面留下空态,手机上回到列表 |
+| `+ 新建` | 直接调现有的 `openNew()`;建完会话自动选中后照常自动进 tab |
+| 最多 8 个 | 第 9 个进来时 `shift()` 掉最旧的;顺序仍是打开顺序 |
+| 刷新 | `init()` 先 `readTabs()` 画标题快照,再拉列表;列表回来后 `renderTabs()` 用最新标题覆盖并回写 |
+| 会话被列表删除 | `onAction('del')` 里 `removeTab(id)`;归档只影响列表过滤,tab 留着 |
+| 手机 | 竖屏 34px、横屏(粗指针 + 矮屏)30px;tab 区 `overflow-x: auto` 横向滑,`+` 只留一个加号;当前 tab 才露 `×` |
+
+**DOM / CSS**:
+
+- `public/index.html` 的 `#chatpane` 顶部、`#chatHeader` **之前**加
+  `<nav id="sessionTabs" hidden><div id="tabStrip"></div><button id="tabNew">…</button></nav>`。
+  左列表、顶栏、输入区、分栏条都没动。
+- 桌面 36px;`#tabStrip` 自己横向滚并隐藏滚动条;`.tab` 最大 220px,标题
+  `text-overflow: ellipsis`;`.tab.active` 用白底 + 2px 蓝色下划线;`#tabNew` 钉在右边。
+- 窄屏全部挂在既有的 `html.narrow` 下,没有第二份 `@media` 断点:
+  `html.narrow #sessionTabs { height: 34px; }`、`html.narrow.short #sessionTabs { height: 30px; }`、
+  tab 竖屏最大 150px / 横屏 220px、`+` 只显示短标签。
+- `#sessionTabs[hidden] { display: none; }` 显式写,免得被 `display: flex` 压过。
+
+**JS**:
+
+- `store.tabs = [{id, title}]`;`TABS_KEY = 'ocs.tabs'`、`TABS_MAX = 8`。
+- `readTabs()` 容错(坏 JSON / 非数组 / 空 id / 重复 id),只留最近 8 个;`saveTabs()` 静默失败
+  (`localStorage` 不可用也不挡会话)。
+- `renderTabs()` 用 `id + title + active` 的签名避免无意义重建;重建时保留
+  `#tabStrip.scrollLeft`;当前 tab 变了才 `revealActiveTab()`。`revealActiveTab()` 只动
+  `#tabStrip.scrollLeft`,不碰页面/聊天区纵向滚动;窄屏从列表进会话时 `#chatpane` 还是
+  `display:none`,所以 `selectSession()` 在 `syncNarrowView()` 之后再叫一次(量不到宽度就返回,幂等)。
+- `closeTab()` 只有 `splice` / `saveTabs` / 选邻居,**没有** `api()` / `method: 'DELETE'` /
+  归档字段;这是 `smoke.sh` 的源码锁之一。
+- `setupSessionTabs()` 一次接线:点 tab、点 `×`、点 `+ 新建`、桌面上中键关闭;`init()` 里
+  `store.tabs = readTabs(); setupSessionTabs(); renderTabs();` 排在拉列表之前。
+
+**实测**(真页面,Playwright Chromium):
+
+```
+桌面 1366×900     nav 790×36 @ (576,47);顶栏仍 47;header 97;messages 581;docScrollW 1366
+竖屏 393×894      nav 393×34 @ (0,0);header 61;messages 750;docScrollW 393
+手机横屏 894×393  nav 894×30 @ (0,0);header 57;messages 257;docScrollW 894
+                  (isMobile + hasTouch,pointer:coarse → html.narrow + html.short)
+```
+
+- 桌面打开 3 个会话:tab 顺序 = 打开顺序,最后打开的会话高亮;点第一个 tab 切回;关掉一个
+  非当前 tab 后,会话仍在列表里、选中不变;`+ 新建` 打开现有 `#dlgNew`;刷新后 tab 从
+  `localStorage` 回来;探针 `ERRORS []`,三种视口都 `docScrollW === innerWidth`。
+- 截图:`/tmp/ocsm-probe/pw/tabs-desktop.png`、`/tmp/ocsm-probe/pw/tabs-portrait.png`、
+  `/tmp/ocsm-probe/pw/tabs-mobile-landscape.png`(横屏真机口径);`tabs-landscape.png` 是
+  同一尺寸但**细指针**的桌面档,仍按桌面布局走(既有断点如此,不是本次引入的)。
+
+**取舍**:
+
+- 高度成本:桌面多 36px、竖屏多 34px、横屏多 30px;换来「最近会话一眼可见、一指直切」。
+  没有 tab 时整条 `hidden`,不占高度。
+- 当前会话标题会在 tab 栏和聊天头部各出现一次;这是用户要的 TUI 形态,不为了省一行把
+  `#chatTitle` 在手机上藏掉(手机上标题行还兼着 `‹ 会话`、状态和上下文用量)。
+- 手机只给当前 tab 露 `×`:少一排小叉,也更难误触;要关别的 tab 先点一下再关。
+- 不做 TUI 的拖拽排序 / 未读脉冲 / `Ctrl+数字` / global-cwd 分域;不做跨标签页同步,
+  也不跨设备同步。标签只存本浏览器的一个小数组(id + 标题快照),不落消息。
+- tab 指向的会话若在别处被删,点开会走现有的失败提示,`×` 仍能移除;不在列表页的会话
+  不会被 tab 自动补拉,只有选中时才走 `refreshSessionInfo()`。
+- 超过 8 个丢最旧的是**打开顺序**里的最旧,不是「最久没点」;这一版没记访问时间,
+  和 TUI 的模型不完全一样,但规则可预期、实现小。
+
+**回归**:`smoke.sh` 333 → **338**(5 项:节点在 `#chatHeader` 之前、自动入栏 + `ocs.tabs`
++ 最多 8 个 + init 接线、`closeTab` 只移出且邻居回退、三档高度样式、`ui-capabilities.html`
+关键断言在);`ui-capabilities` 112 → **136**(24 项:自动入栏 / 切换 / 关闭 / 上限 / 持久化 /
+`+ 新建` / 窄屏样式与只有当前 tab 露 × 等)。其余套件计数不变;全量回归 **0 失败**,
+日志 `/tmp/ocsm-probe/perf/regress-859.log`。
+
+---
+
 ---
 
 ## 9. 取舍与理由
@@ -2929,6 +3017,8 @@ LAN
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
 | worktree 只做「新建」 | 主入口是「+ 新建」；新建那一步把 `projectID`、名字、返回目录、失败原话都接通了，最常用的一半已经能用 | 已有 worktree 的浏览/删除/把会话移进去仍在 TUI 的 `Worktrees` 对话框（§8.56）|
 | 变更总览只接 Last turn | 服务端 `/diff` 按 turn 快照算净变更，同一轮改多次只算最终结果，shell 改的也算；「刚跑完这轮改了什么」是最常看的 | `branch` / `working` / `committed` 三档、文件树、逐文件 reviewed 仍在 TUI 的 diff viewer（§8.57）|
+| 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
+| 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
 | diff 统一视图无条件折行 | 照 TUI 的 `wrapMode="char"`；393px 上不用左右拖着读 | 超长单 token 会断在任意字符；Markdown 代码块仍横向滚（§8.58）|
 
 ---

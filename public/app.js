@@ -13,6 +13,9 @@ const store = {
   messages: new Map(),
   seenDirs: new Set(),
   selected: null,
+  /* §8.59 最近打开的会话标签:[{ id, title }],顺序 = 打开顺序;最多 TABS_MAX 个。
+   * 只存 id 与标题快照(不存消息),刷新后先画出来,点开时照常拉消息。 */
+  tabs: [],
   order: 'desc',
   search: '',
   directory: '',
@@ -1389,6 +1392,184 @@ function visibleSessions() {
   });
 }
 
+/* ----------------------------- 最近会话标签栏(§8.59) -----------------------------
+ * 照 TUI 的 session tabs 的骨架,只做手机/桌面都用得上的那部分:
+ *   · 打开会话自动进 tab;顺序 = 打开顺序,点 tab 不重排;
+ *   · × 只从 tab 栏移除,不归档不删除;关掉当前 tab 自动切右邻居,没有就左邻居;
+ *   · 最多 8 个,超出丢最旧的;列表存 localStorage(只存 id + 标题快照);
+ *   · 手机也显示,横向滑,不折行;没有 tab 时整条 hidden。
+ * 刻意不做:TUI 的拖拽排序 / 未读脉冲 / Ctrl+数字 / global-cwd 分域。 */
+const TABS_KEY = 'ocs.tabs';
+const TABS_MAX = 8;
+let tabsSig = '';
+let tabsActiveSeen = null;
+
+function readTabs() {
+  let raw = null;
+  try {
+    raw = JSON.parse(localStorage.getItem(TABS_KEY) || '[]');
+  } catch (_) {
+    raw = [];
+  }
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const id = typeof item === 'string' ? item : item && item.id;
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    const title = item && typeof item === 'object' && typeof item.title === 'string' ? item.title : '';
+    seen.add(id);
+    out.push({ id: id, title: title });
+  }
+  return out.slice(-TABS_MAX);
+}
+
+function saveTabs() {
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify(store.tabs));
+  } catch (_) {}
+}
+
+/* 选中一个会话时调用:没有就追加,有就只更新标题(重复选中不会多一个 tab)。 */
+function touchTab(id, title) {
+  if (!id) return;
+  const s = store.sessions.get(id);
+  const next = title != null ? String(title || '') : (s && s.title) || '';
+  const tab = store.tabs.find((t) => t.id === id);
+  if (tab) {
+    if (next && next !== tab.title) {
+      tab.title = next;
+      saveTabs();
+    }
+  } else {
+    store.tabs.push({ id: id, title: next || id });
+    while (store.tabs.length > TABS_MAX) store.tabs.shift();
+    saveTabs();
+  }
+  renderTabs();
+}
+
+function removeTab(id) {
+  const i = store.tabs.findIndex((t) => t.id === id);
+  if (i < 0) return false;
+  store.tabs.splice(i, 1);
+  saveTabs();
+  return true;
+}
+
+function renderTabs() {
+  const nav = document.getElementById('sessionTabs');
+  const strip = document.getElementById('tabStrip');
+  if (!nav || !strip) return; // 老测试页没有这条栏 —— 什么都不做
+  let changed = false;
+  for (const t of store.tabs) {
+    const s = store.sessions.get(t.id);
+    if (s && s.title && s.title !== t.title) {
+      t.title = s.title;
+      changed = true;
+    }
+  }
+  if (changed) saveTabs();
+  nav.hidden = store.tabs.length === 0;
+  if (!store.tabs.length) {
+    strip.innerHTML = '';
+    tabsSig = '';
+    tabsActiveSeen = null;
+    return;
+  }
+  const active = store.selected;
+  const sig = JSON.stringify([store.tabs.map((t) => [t.id, t.title]), active]);
+  if (sig === tabsSig) return;
+  const left = strip.scrollLeft;
+  strip.innerHTML = store.tabs
+    .map((t) => {
+      const title = t.title || t.id;
+      const on = t.id === active;
+      return (
+        '<div class="tab' + (on ? ' active' : '') + '" data-id="' + esc(t.id) + '">' +
+        '<button type="button" class="tabmain" title="' + esc(title) + '"' +
+        (on ? ' aria-current="page"' : '') + '>' +
+        '<span class="tabtitle">' + esc(title) + '</span></button>' +
+        '<button type="button" class="tabx" title="关闭标签页" aria-label="关闭标签页">×</button>' +
+        '</div>'
+      );
+    })
+    .join('');
+  tabsSig = sig;
+  strip.scrollLeft = left;
+  // 当前 tab 换了才把它滚进视野;用户自己横向翻着看的时候不要去拽回来。
+  const reveal = !!active && active !== tabsActiveSeen;
+  tabsActiveSeen = active;
+  if (reveal) revealActiveTab();
+}
+
+/* 只动 #tabStrip 自己的 scrollLeft,不碰页面/聊天区的纵向滚动。
+ * 窄屏从列表进会话时 #chatpane 还是 display:none,这时量不到宽度 —— 所以
+ * selectSession 在 syncNarrowView() 之后会再叫一次(同一个函数,幂等)。 */
+function revealActiveTab() {
+  const strip = document.getElementById('tabStrip');
+  if (!strip) return;
+  const el = strip.querySelector('.tab.active');
+  if (!el) return;
+  const er = el.getBoundingClientRect();
+  const sr = strip.getBoundingClientRect();
+  if (!er.width || !sr.width) return;
+  if (er.left < sr.left) strip.scrollLeft -= sr.left - er.left;
+  else if (er.right > sr.right) strip.scrollLeft += er.right - sr.right;
+}
+
+/* 关一个 tab:只移出列表,绝不发 DELETE。关的是当前会话时,右邻居优先、再左邻居。 */
+function closeTab(id) {
+  const i = store.tabs.findIndex((t) => t.id === id);
+  if (i < 0) return;
+  const wasActive = store.selected === id;
+  store.tabs.splice(i, 1);
+  saveTabs();
+  if (wasActive) {
+    const next = store.tabs[i] || store.tabs[i - 1];
+    if (next) selectSession(next.id);
+    else {
+      clearSelection();
+      renderSessions();
+    }
+  }
+  renderTabs();
+}
+
+function setupSessionTabs() {
+  const nav = document.getElementById('sessionTabs');
+  if (!nav || nav.dataset.wired === '1') return;
+  nav.dataset.wired = '1';
+  nav.addEventListener('click', (e) => {
+    const x = e.target.closest('.tabx');
+    if (x) {
+      e.preventDefault();
+      e.stopPropagation();
+      const tab = x.closest('.tab');
+      if (tab) closeTab(tab.dataset.id);
+      return;
+    }
+    if (e.target.closest('#tabNew')) {
+      openNew();
+      return;
+    }
+    const tab = e.target.closest('.tab');
+    if (!tab) return;
+    e.preventDefault();
+    const id = tab.dataset.id;
+    if (id && id !== store.selected) selectSession(id);
+  });
+  // 桌面习惯:中键关闭(只移出 tab,不删会话)
+  nav.addEventListener('auxclick', (e) => {
+    if (e.button !== 1) return;
+    const tab = e.target.closest('.tab');
+    if (tab) {
+      e.preventDefault();
+      closeTab(tab.dataset.id);
+    }
+  });
+}
+
 function renderSessions() {
   const all = Array.from(store.sessions.values());
   const archived = all.filter(isArchived);
@@ -1430,6 +1611,7 @@ function renderSessions() {
   }
   renderDirOptions();
   renderChatOps();
+  renderTabs();
   $('#loadMore').hidden = !store.sessionCursor;
 }
 
@@ -1527,6 +1709,7 @@ function clearSelection() {
   renderInbox();
   renderChatOps();
   updateChatStatus();
+  renderTabs(); // §8.59 取消选中:tab 栏留着(可以直接点回去),只是不再高亮
   syncNarrowView();
 }
 
@@ -2061,6 +2244,7 @@ async function selectSession(id) {
   store.restoreScroll = rs;
   store.selected = id;
   persistSelected(id);
+  touchTab(id); // §8.59 打开过的会话自动进标签栏
   /* §8.55 从别的会话切回来 → 缓存命中就先画,不空着等请求。
    * prev 为空(首屏 / 刷新恢复 / 取消选中后重选)不走缓存,行为和以前一样。 */
   const cached = prev && prev !== id ? store.msgCache.get(id) : null;
@@ -2092,6 +2276,7 @@ async function selectSession(id) {
   renderChatOps();
   updateChatStatus();
   syncNarrowView();
+  revealActiveTab(); // §8.59 窄屏刚把聊天区露出来,再对齐一次当前标签
   /* 深链(#<sid>)或很久以前的会话可能不在当前列表页里(列表只拉最近一页,这里拿不到
    * 它的 location)。补拉一次会话本身 —— 工具栏的 agent/model、提示栏的工程路径都要它,
    * 头部那排操作也要拿它把「归档 / 取消归档」校正过来(§8.39)。
@@ -5216,6 +5401,7 @@ async function onAction(act, id) {
     if (!confirm('确定删除该会话?此操作不可撤销。')) return;
     await guard(() => api('/api/session/' + id, { method: 'DELETE' }));
     store.sessions.delete(id);
+    removeTab(id); // §8.59 真删掉的会话也从标签栏移除
     if (store.selected === id) clearSelection();
     store.msgCache.delete(id); // §8.55 删掉的会话不再留快照(clearSelection 会先快照一次)
     renderSessions();
@@ -7456,6 +7642,10 @@ function setupNarrow() {
 }
 
 function init() {
+  // §8.59 先把上次的标签栏画出来(标题是刷新前的快照),再拉列表对账
+  store.tabs = readTabs();
+  setupSessionTabs();
+  renderTabs();
   health();
   setInterval(health, 15000);
   setupFilters(); // 先回填顶栏筛选/排序/搜索,再拉列表(否则会按默认值白拉一次)
