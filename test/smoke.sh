@@ -2535,6 +2535,28 @@ else
   echo "FAIL: §8.80 的格式切换 / Markdown 转录 / 文件下载 / 脱敏显隐或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R37 组:/status 只读摘要(§8.81)----
+if has "$APPJS" 'function statusRowHtml(label, value)' &&
+   has "$APPJS" 'function configSummary(list)' &&
+   has "$APPJS" 'async function openStatus()' &&
+   has "$APPJS" "'/api/config' + q" &&
+   has "$APPJS" "'/api/mcp' + q" &&
+   has "$APPJS" "h.hasPassword ? 'Basic 已启用(密码不显示)' : '未启用'" &&
+   has "$APPJS" "name: 'status', description: '连接 / 配置 / Provider / MCP 摘要(只读)'" &&
+   has "$APPJS" "k: '/status', d: '连接 / 配置 / Provider / MCP 摘要(只读)'" &&
+   has "$SERVERJS" 'const PKG_VERSION = require('"'"'./package.json'"'"').version;' &&
+   has "$SERVERJS" 'version: PKG_VERSION,' &&
+   has "$HOME_HTML" 'id="dlgStatus"' &&
+   has "$HOME_HTML" 'id="statusBody"' &&
+   has "$CSS" '.strow {' &&
+   has "$CSS" 'html.narrow .strow { grid-template-columns: 84px minmax(0, 1fr); gap: 8px; }' &&
+   has "$(cat "$(dirname "$0")/ui-capabilities.html")" '/status:健康、版本、地址、鉴权都摆出来,不露密码' &&
+   has "$(cat "$(dirname "$0")/ui-capabilities.html")" '/status:没选中会话时不硬塞空目录'; then
+  echo "PASS: §8.81 /status 健康 / 版本 / 配置摘要 / MCP 计数与不露密码都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.81 的状态表 / 摘要 / 版本 / 密码保护 / 命令入口或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

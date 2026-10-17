@@ -1375,6 +1375,28 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
 .dlgerr { margin: 0 0 12px; font-size: 12px; color: var(--danger); white-space: pre-wrap; word-break: break-all; }
 .dlgerr[hidden] { display: none; }
 .dlgacts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* §8.81 /status:标签 + 值两列,长路径/长模型名自己折行;手机只收窄标签列。 */
+.stbody {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  margin: 0 0 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.strow {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.stk { color: var(--muted); }
+.stv { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+html.narrow .stbody { max-height: 62vh; font-size: 11.5px; }
+html.narrow .strow { grid-template-columns: 84px minmax(0, 1fr); gap: 8px; }
 
 /* §8.65 删除工作树前的文件清单(照 TUI 的 DialogWorkspaceFileChanges)。
    只列状态与增删行数,不下载补丁;清单自己滚,手机上也别把对话框撑出屏幕。 */

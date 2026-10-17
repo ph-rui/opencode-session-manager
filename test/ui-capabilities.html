@@ -80,6 +80,10 @@
     <p id="exportErr" hidden></p>
     <button type="button" id="exportOk">导出</button></div></dialog>
 
+  <dialog id="dlgStatus" class="dlg dlgstatus"><div class="dlgform"><h3 id="statusTitle">状态</h3>
+    <div id="statusBody" class="stbody"></div>
+    <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div></div></dialog>
+
   <dialog id="dlgWtDel" class="dlg"><div class="dlgform"><h3>删除工作树?</h3>
     <p id="wtDelMsg"></p>
     <div id="wtDelFiles" role="list"></div>
@@ -195,10 +199,47 @@
     var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
     var fail = function (status, obj) { return { ok: false, status: status, text: async function () { return JSON.stringify(obj); } }; };
 
+    window.__statusFail = {};
+    window.__healthReply = {
+      ok: true, base: 'http://127.0.0.1:9', version: '0.1.0', hasPassword: true,
+      configDir: '/cfg', uploadDir: '/up', diffView: 'split', detail: 'HTTP 200',
+    };
+    window.__configReply = [
+      { type: 'document', path: '/cfg/base.json', info: {
+        model: 'p1/m1',
+        providers: {
+          p1: { name: 'One', models: { m1: {}, m2: {} } },
+          p2: { name: 'Two', models: { m3: {} } },
+        },
+        mcp: { github: {}, local: {} },
+      } },
+      { type: 'directory', path: '/cfg' },
+      { type: 'document', path: '/proj/a/opencode.json', info: {
+        providers: { p1: { models: { m2: {}, m4: {} } } },
+        mcp: { github: {} },
+      } },
+    ];
+    window.__mcpReply = { data: [
+      { name: 'local', status: { status: 'connected' } },
+      { name: 'github', status: { status: 'needs_auth', error: 'auth me' } },
+      { name: 'broken', status: { status: 'failed', error: 'boom' } },
+    ] };
     window.fetch = async function (url, opts) {
       var u = String(url);
       var method = (opts && opts.method) || 'GET';
       window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
+      if (u === '/__health') {
+        if (window.__statusFail.health) return fail(500, { message: 'health boom' });
+        return json(window.__healthReply);
+      }
+      if (u.indexOf('/api/config') === 0) {
+        if (window.__statusFail.config) return fail(500, { message: 'config boom' });
+        return json(window.__configReply);
+      }
+      if (u === '/api/mcp' || u.indexOf('/api/mcp?') === 0) {
+        if (window.__statusFail.mcp) return fail(500, { message: 'mcp boom' });
+        return json(window.__mcpReply);
+      }
       if (method === 'POST' && u === '/api/session') {
         if (window.sessionFailOnce) {
           window.sessionFailOnce = false;
@@ -868,6 +909,92 @@
       ce = reqs(/\/export/)[0];
       T('导出 GET export?sanitize=true', !!ce && ce.url === '/api/experimental/session/ses_a/export?sanitize=true', ce && ce.url);
       T('脱敏时文件名不含标题', window.__downloads[0] === 'ses_a.json', window.__downloads[0]);
+
+      /* ---------------- /status(§8.81 只读摘要) ---------------- */
+      var stVal = function (label) {
+        var rows = qa('#statusBody .strow');
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].querySelector('.stk').textContent === label) {
+            return rows[i].querySelector('.stv').textContent;
+          }
+        }
+        return null;
+      };
+
+      seed();
+      store.selected = 'ses_a';
+      reset();
+      await openStatus();
+      T('/status:健康、版本、地址、鉴权都摆出来,不露密码',
+        stVal('本地代理') === '已连接 · HTTP 200' &&
+        stVal('服务地址') === 'http://127.0.0.1:9' &&
+        stVal('面板版本') === '0.1.0' &&
+        stVal('鉴权') === 'Basic 已启用(密码不显示)' &&
+        stVal('配置目录') === '/cfg' && stVal('附件暂存') === '/up',
+        [stVal('本地代理'), stVal('面板版本'), stVal('鉴权')]);
+      T('/status:配置摘要按文档去重,provider / 模型 / MCP 计数',
+        stVal('配置文件') === '/cfg/base.json\n/proj/a/opencode.json' &&
+        stVal('Providers') === '2 个 · 4 个模型' &&
+        stVal('默认模型') === 'p1/m1' && stVal('MCP 配置') === '2 个',
+        [stVal('配置文件'), stVal('Providers'), stVal('默认模型'), stVal('MCP 配置')]);
+      T('/status:MCP 运行数 / 已连接 / 异常分开算',
+        stVal('MCP 运行') === '3 个 · 1 已连接 · 2 异常', stVal('MCP 运行'));
+      T('/status:按当前工程取配置与 MCP',
+        reqs(/^\/api\/config\?/).length === 1 &&
+        reqs(/^\/api\/config\?/)[0].url.indexOf('location%5Bdirectory%5D=%2Fproj%2Fa') >= 0 &&
+        reqs(/^\/api\/mcp\?/).length === 1 &&
+        reqs(/^\/api\/mcp\?/)[0].url.indexOf('location%5Bdirectory%5D=%2Fproj%2Fa') >= 0,
+        [reqs(/^\/api\/config\?/), reqs(/^\/api\/mcp\?/)]);
+
+      store.selected = null;
+      reset();
+      await openStatus();
+      T('/status:没选中会话时不硬塞空目录',
+        stVal('当前工程') === '未选中会话' &&
+        reqs(/^\/api\/config$/).length === 1 &&
+        reqs(/^\/api\/mcp$/).length === 1,
+        [stVal('当前工程'), reqs(/^\/api\/config$/), reqs(/^\/api\/mcp$/)]);
+
+      store.selected = 'ses_a';
+      window.__statusFail.config = true;
+      reset();
+      await openStatus();
+      T('/status:配置读取失败只占自己那行,健康与 MCP 照常',
+        (stVal('配置读取') || '').indexOf('config boom') >= 0 &&
+        stVal('本地代理') === '已连接 · HTTP 200' &&
+        stVal('MCP 运行') === '3 个 · 1 已连接 · 2 异常',
+        [stVal('配置读取'), stVal('本地代理'), stVal('MCP 运行')]);
+      window.__statusFail.config = false;
+
+      window.__statusFail.health = true;
+      reset();
+      await openStatus();
+      T('/status:代理读取失败也能开,配置摘要还在',
+        (stVal('本地代理') || '').indexOf('读取失败') >= 0 &&
+        stVal('Providers') === '2 个 · 4 个模型' &&
+        stVal('MCP 运行') === '3 个 · 1 已连接 · 2 异常',
+        [stVal('本地代理'), stVal('Providers')]);
+      window.__statusFail.health = false;
+
+      window.__statusFail.mcp = true;
+      await openStatus();
+      T('/status:MCP 读取失败只占自己那行',
+        (stVal('MCP 运行') || '').indexOf('mcp boom') >= 0 &&
+        stVal('Providers') === '2 个 · 4 个模型', stVal('MCP 运行'));
+      window.__statusFail.mcp = false;
+
+      window.__mcpReply = { data: [] };
+      await openStatus();
+      T('/status:没有 MCP 时写 0 个', stVal('MCP 运行') === '0 个', stVal('MCP 运行'));
+      window.__mcpReply = { data: [
+        { name: 'local', status: { status: 'connected' } },
+        { name: 'github', status: { status: 'needs_auth', error: 'auth me' } },
+        { name: 'broken', status: { status: 'failed', error: 'boom' } },
+      ] };
+      T('/status:命令面板有入口',
+        PANEL_COMMANDS.some(function (c) {
+          return c.name === 'status' && c.description.indexOf('Provider') >= 0;
+        }));
 
       /* ---------------- 深链:在 TUI 中打开 ---------------- */
       T('tuiCommand 含 --session 与目录',

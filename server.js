@@ -26,6 +26,7 @@ const zlib = require('zlib');
 const { Readable, Transform } = require('stream');
 const { StringDecoder } = require('string_decoder');
 
+const PKG_VERSION = require('./package.json').version;
 const HOST = process.env.OCS_HOST || '127.0.0.1';
 const PORT = Number.parseInt(process.env.OCS_PORT || '49450', 10);
 const PANEL_AUTH = process.env.OCS_AUTH || ''; // 形如 "user:pass";设置后需 HTTP Basic 登录
@@ -782,6 +783,7 @@ async function health(res) {
   sendJson(res, 200, {
     ok,
     base: state.base,
+    version: PKG_VERSION,
     hasPassword: !!state.password,
     configDir: CONFIG_DIR,
     uploadDir: UPLOAD_DIR,

@@ -7365,6 +7365,7 @@ const PANEL_COMMANDS = [
   { name: 'agents', description: '选择智能体', run: () => openAgentPick() },
   { name: 'skills', description: '插入技能(@skill,按 TUI 的 prompt.skills)', run: () => openSkillPick() },
   { name: 'mcps', description: 'MCP 服务器与连接状态(只读)', run: () => openMcpPick() },
+  { name: 'status', description: '连接 / 配置 / Provider / MCP 摘要(只读)', run: () => openStatus() },
   { name: 'exploration', description: '探索工具组:折叠 / 逐条显示', run: () => toggleExploreGroup() },
   { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
   { name: 'help', description: '命令与快捷键', run: () => openHelp() },
@@ -7384,6 +7385,7 @@ const HELP_KEYS = [
   { k: '/export', d: '导出会话为 Markdown 转录或 JSON(JSON 可选脱敏)' },
   { k: '/tab-reopen', d: '重开最近关闭的标签(对应 TUI session.tab.reopen)' },
   { k: '/mcps', d: 'MCP 服务器与连接状态(只读,对应 TUI mcp.list)' },
+  { k: '/status', d: '连接 / 配置 / Provider / MCP 摘要(只读)' },
   { k: '/exploration', d: '折叠 / 逐条显示探索工具组(对应 TUI session.toggle.exploration_grouping)' },
   { k: '/subagents', d: '选择并打开当前会话的子会话' },
   { k: '/parent', d: '回到父会话' },
@@ -7874,6 +7876,109 @@ async function openMcpPick() {
       };
     }),
   });
+}
+
+/* /status:照 TUI 的 opencode.status + opencode.debug 的只读信息,把面板自己的
+ * /__health、配置文档摘要和 MCP 运行状态摆在一张表里。密码只报「已配置」,原值永不进 DOM。 */
+function statusRowHtml(label, value) {
+  return '<div class="strow"><span class="stk">' + esc(label) + '</span>' +
+    '<span class="stv">' + esc(value == null ? '' : String(value)) + '</span></div>';
+}
+
+function configSummary(list) {
+  const paths = [];
+  const providers = new Map();
+  const models = new Set();
+  const mcps = new Set();
+  let defaultModel = '';
+  for (const d of list || []) {
+    if (!d || d.type !== 'document' || !d.info) continue;
+    if (d.path) paths.push(d.path);
+    const info = d.info;
+    if (typeof info.model === 'string' && info.model) defaultModel = info.model;
+    const ps = info.providers || {};
+    for (const pid of Object.keys(ps)) {
+      const p = ps[pid] || {};
+      // 同一个 provider 可能在全局 / 工程两层各出现一次;按 ID 去重,优先留带名字的写法。
+      if (p.name && p.name !== pid) providers.set(pid, pid + '(' + p.name + ')');
+      else if (!providers.has(pid)) providers.set(pid, pid);
+      const ms = p.models || {};
+      for (const mid of Object.keys(ms)) models.add(pid + '/' + mid);
+    }
+    const mc = info.mcp || {};
+    for (const name of Object.keys(mc)) mcps.add(name);
+  }
+  return {
+    paths: Array.from(new Set(paths)),
+    providers: Array.from(providers.values()),
+    models: models.size,
+    mcps: mcps.size,
+    defaultModel,
+  };
+}
+
+async function openStatus() {
+  const body = $('#statusBody');
+  if (!body) return;
+  body.innerHTML = statusRowHtml('读取中', '…');
+  openDlg($('#dlgStatus'));
+  const dir = sessionDir(store.selected);
+  const q = dir ? '?' + new URLSearchParams({ 'location[directory]': dir }).toString() : '';
+  const catchErr = (p) => p.catch((e) => ({ __error: e }));
+  const [h, cfg, mcp] = await Promise.all([
+    catchErr(api('/__health')),
+    catchErr(api('/api/config' + q)),
+    catchErr(api('/api/mcp' + q)),
+  ]);
+
+  const rows = [];
+  if (h && h.__error) {
+    rows.push(['本地代理', '读取失败:' + h.__error.message]);
+  } else {
+    const hh = h || {};
+    rows.push([
+      '本地代理',
+      (hh.ok ? '已连接' : '未连接') + (hh.detail ? ' · ' + hh.detail : ''),
+    ]);
+    rows.push(['服务地址', hh.base || '未发现']);
+    if (hh.version) rows.push(['面板版本', hh.version]);
+    rows.push(['鉴权', hh.hasPassword ? 'Basic 已启用(密码不显示)' : '未启用']);
+    rows.push(['配置目录', hh.configDir || '未知']);
+    rows.push(['附件暂存', hh.uploadDir || '未知']);
+    rows.push(['Diff 视图', hh.diffView || '未设置']);
+  }
+  rows.push(['当前工程', dir || '未选中会话']);
+
+  if (cfg && cfg.__error) {
+    rows.push(['配置读取', '失败:' + cfg.__error.message]);
+  } else if (!Array.isArray(cfg)) {
+    rows.push(['配置读取', '接口没有返回配置文档']);
+  } else {
+    const cs = configSummary(cfg);
+    rows.push(['配置文件', cs.paths.length ? cs.paths.join('\n') : '(没有文档)']);
+    rows.push([
+      'Providers',
+      cs.providers.length ? cs.providers.length + ' 个 · ' + cs.models + ' 个模型' : '0 个',
+    ]);
+    if (cs.defaultModel) rows.push(['默认模型', cs.defaultModel]);
+    rows.push(['MCP 配置', cs.mcps + ' 个']);
+  }
+
+  if (mcp && mcp.__error) {
+    rows.push(['MCP 运行', '读取失败:' + mcp.__error.message]);
+  } else {
+    const list = mcp && Array.isArray(mcp.data) ? mcp.data : [];
+    const connected = list.filter((s) => s.status && s.status.status === 'connected').length;
+    const bad = list.filter((s) => {
+      const st = s.status && s.status.status;
+      return st === 'failed' || st === 'needs_auth';
+    }).length;
+    rows.push([
+      'MCP 运行',
+      list.length + ' 个' + (list.length ? ' · ' + connected + ' 已连接 · ' + bad + ' 异常' : ''),
+    ]);
+  }
+  body.innerHTML = rows.map((r) => statusRowHtml(r[0], r[1])).join('');
 }
 
 // 光标前最后一个 /token(必须在行首)→ 它在输入框里的 [start, end) 与查询词。

@@ -4025,6 +4025,55 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 **回归**：`smoke.sh` 367 → **368**，`ui-capabilities` 183 → **190**；其余套件计数不变；
 全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-880.log`。
 
+### 8.81 `/status`：连接 / 配置 / Provider / MCP 只读摘要
+
+**起因**：TUI 有 `opencode.status`（`app.tsx:1013`）和 `opencode.debug`（`:1079`）；面板只有
+顶栏的 `/__health` 连接灯，没有版本、服务地址、配置摘要，也没有 provider / MCP 总览。
+B6 先做只读的 `/status`，不碰调试日志和写操作。
+
+**结论**：新增 `/status`，弹一个只读的两列表格：健康（连接 / 地址 / 版本 / 鉴权 /
+配置目录 / 附件暂存 / Diff 视图）、当前工程、配置文档摘要（路径、Provider / 模型数、
+默认模型、MCP 配置数）、MCP 运行摘要（总数 / 已连接 / 异常）。三个请求各自容错：哪个读不到
+就只占自己那行，不把整张表打空。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 服务端 | `/__health` 增加 `version`（`require('./package.json').version`），旧代理没有这个字段时前端不画版本行 |
+| 命令 | `PANEL_COMMANDS` 加 `status`，帮助面板补 `/status`；选中会话时 config / mcp 都带 `location[directory]`，没选中时不带 |
+| 对话框 | 新增 `#dlgStatus` / `#statusBody`；`statusRowHtml()` 输出标签 + 值，长路径和模型名用 `pre-wrap` / `anywhere` 折行；手机只收窄标签列 |
+| health | `本地代理` 写「已连接 / 未连接 · HTTP 200」、`服务地址`、`面板版本`、`鉴权`、`配置目录`、`附件暂存`、`Diff 视图`；`鉴权` 只报「Basic 已启用（密码不显示）」，密码原值永不进 DOM |
+| 配置 | `configSummary()` 遍历 `/api/config` 的 document：路径去重；provider 按 ID 去重（同一层带名字时优先留名字）；模型按 `provider/model` 去重；MCP 配置按名称去重；默认模型取 `info.model` |
+| MCP | 复用 §8.79 的 `/api/mcp`，只报数量 / 已连接 / 异常（`failed` + `needs_auth`）；具体错误仍去 `/mcps` 看 |
+| 失败 | `health` / `config` / `mcp` 各自 catch，失败行写服务端原话；例如配置失败时健康与 MCP 摘要照常显示 |
+
+**取舍**：
+
+- **只读、不自动刷新**：每次 `/status` 重新拉一次；对话框开着时健康或 MCP 状态变化不会
+  自己重画。要盯变化还是看顶栏连接灯和 `/mcps`。
+- **不暴露秘密**：只显示 `hasPassword` 的真假，不显示密码、Authorization、provider 的
+  `settings.baseURL` / API key，也不把 `/api/config` 的原始 JSON 倒进页面。配置摘要只到
+  「几个 provider / 几个模型 / 几个 MCP」这一层。
+- **版本是面板代理的版本，不是 OpenCode 服务版本**：`/__health` 本来就是本地代理自己的
+  健康接口；OpenCode 的 `/api` 没有稳定的 version 端点，不猜。旧代理没重启时这一行不显示。
+- **不做 `opencode.debug`**：日志 / 事件流 / 内部状态是另一类数据，先不混进状态表。
+
+**验证**：
+
+- `ui-capabilities.html` 新增 10 项：健康 / 版本 / 地址 / 鉴权文案、配置路径与去重后的
+  provider / 模型 / MCP 计数、MCP 运行计数、当前工程带 `location`、未选中时不带、
+  配置失败不影响其它行、health 失败仍能看配置、MCP 失败只占自己行、空 MCP 写 0 个、
+  命令入口。
+- `smoke.sh` 新增 1 项静态锁：`openStatus` / `configSummary` / 两个 location 参数 /
+  密码保护文案 / `/status` 命令与帮助 / `/__health.version` / 对话框与窄屏样式，以及
+  `ui-capabilities.html` 的关键断言都在。
+- `node --check public/app.js`、`node --check server.js` 通过；`/__health` 多一个字段不影响
+  `config-e2e` 的既有断言。
+
+**回归**：`smoke.sh` 368 → **369**，`ui-capabilities` 190 → **200**；其余套件计数不变；
+全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-881.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -4048,6 +4097,7 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 | **探索工具组可切「逐条显示」**（§8.78）| 与 TUI 的 `session.toggle.exploration_grouping` 对齐；关掉时跨消息吸收一起短路，续步恢复独立消息；偏好本机保存，不动数据 | 只做探索分组，思考块的全局折叠仍没做；偏好不写 `cli.json`；切换会重画 DOM，已摊开的组回到默认折叠 |
 | **`/mcps` 只读列服务器状态**（§8.79）| 与 TUI 的 `mcp.list` 同入口；先交代有哪些服务器、连没连上、为什么失败，不碰运行时写操作 | 不接 connect / disconnect / add / remove；`/api/mcp` 没有工具数，不编假计数；列表是快照，不跟 SSE 自动刷新 |
 | **导出默认 Markdown，JSON 保留脱敏**（§8.80）| 与 TUI 的 `DialogExportOptions` 同一默认；Markdown 复用 `transcriptText`，不另造一套；JSON 行为不动 | thinking / tools 两个开关还没做；Markdown 工具只留摘要；不写临时文件（浏览器直接下载）；空转录只报错不下载 |
+| **`/status` 只读摘要，不露秘密**（§8.81）| 把 health、配置层级和 MCP 运行数摆在一张表里；三个请求各自容错；密码只报「已启用」 | 版本是面板代理的版本；列表是快照不自动刷新；不显示 provider 设置 / key；不做 `opencode.debug` 的日志与内部状态 |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
