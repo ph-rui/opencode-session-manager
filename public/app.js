@@ -2257,10 +2257,52 @@ async function loadSessions(opts) {
 // 保证对话框里看到的永远是同一批、同一序。
 // 子会话不进主列表(照 TUI 的 dialog-session-list:`.filter((session) => !session.parentID)`);
 // 它们仍留在 store.sessions / store.subs 里,给「子会话」选择、收工行跳转和标签栏用。
+/* §8.73 置顶:照 TUI 的会话列表 —— pin 住的会话排在最前,状态存本地(localStorage)。
+ * 只影响显示顺序,不改 time.updated,也不影响服务端排序 / 分页;取消归档之类的语义照旧。 */
+const PIN_KEY = 'ocs.pinned';
+
+function pinnedSet() {
+  let raw = null;
+  try {
+    raw = JSON.parse(localStorage.getItem(PIN_KEY) || '[]');
+  } catch (_) {
+    raw = [];
+  }
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter((x) => typeof x === 'string' && x));
+}
+
+function isPinned(id) {
+  return !!id && pinnedSet().has(id);
+}
+
+function savePinned(set) {
+  try {
+    localStorage.setItem(PIN_KEY, JSON.stringify(Array.from(set)));
+  } catch (_) {}
+}
+
+function togglePin(id) {
+  if (!id) return false;
+  const set = pinnedSet();
+  const on = set.has(id);
+  if (on) set.delete(id);
+  else set.add(id);
+  savePinned(set);
+  renderSessions();
+  flash(on ? '已取消置顶' : '已置顶', 'ok');
+  return !on;
+}
+
 function visibleSessions() {
   const all = Array.from(store.sessions.values());
   const roots = all.filter((s) => !s.parentID);
+  const pinned = pinnedSet();
   return (store.showArchived ? roots : roots.filter((s) => !isArchived(s))).sort((a, b) => {
+    // 置顶优先,与 asc / desc 无关;两组内部仍按列表排序走
+    const pa = pinned.has(a.id) ? 1 : 0;
+    const pb = pinned.has(b.id) ? 1 : 0;
+    if (pa !== pb) return pb - pa;
     const ta = (a.time && a.time.updated) || 0;
     const tb = (b.time && b.time.updated) || 0;
     return store.order === 'asc' ? ta - tb : tb - ta;
@@ -2450,6 +2492,7 @@ function renderSessions() {
   // 「另 N 个已归档」和左栏是同一个口径:只数顶层会话,子会话不混进来。
   const archived = all.filter((s) => !s.parentID && isArchived(s));
   const rows = visibleSessions();
+  const pinned = pinnedSet();
   const tb = $('#list tbody');
   tb.innerHTML = '';
   $('#count').textContent = rows.length;
@@ -2466,6 +2509,7 @@ function renderSessions() {
     const st = runStatus(s.id) || (compactionRunning(s.id) ? 'busy' : null);
     tr.innerHTML =
       '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
+      (pinned.has(s.id) ? ' <span class="pin-badge" title="已置顶">📌 置顶</span>' : '') +
       (st ? ' <span class="run-badge" title="正在执行">' + (st === 'retry' ? '◌ 重试中' : '● 运行中') + '</span>' : '') +
       (arch ? ' <span class="arch-badge" title="已在面板中归档">📦 已归档</span>' : '') +
       (nAsk ? ' <span class="ask-badge" title="有待处理问询">⚑ ' + nAsk + '</span>' : '') +
@@ -6575,6 +6619,7 @@ async function onAction(act, id) {
   if (act === 'more') {
     if (!s) return;
     const arch = isArchived(s);
+    const pin = isPinned(id);
     openPick({
       title: s.title || '(无标题)',
       items: [
@@ -6582,6 +6627,7 @@ async function onAction(act, id) {
         { key: 'rename', label: '改名' },
         { key: 'move', label: '移动' },
         { key: 'fork', label: '分叉' },
+        { key: 'pin', label: pin ? '取消置顶' : '置顶' },
         { key: 'copyid', label: '复制会话 ID', group: '复制' },
         { key: 'transcript', label: '复制转录', group: '复制' },
         { key: 'archive', label: arch ? '取消归档' : '归档' },
@@ -6633,6 +6679,11 @@ async function onAction(act, id) {
     if (s) s.location = { directory: d };
     store.seenDirs.add(d);
     renderSessions();
+    return;
+  }
+
+  if (act === 'pin') {
+    togglePin(id);
     return;
   }
 

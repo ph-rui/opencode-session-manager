@@ -369,6 +369,24 @@
         items().map(function (i) { return i.key; }).join(',') === 'ses_b,ses_a',
         items().map(function (i) { return i.key; }));
       store.order = 'desc';
+      try { localStorage.removeItem('ocs.pinned'); } catch (_) {}
+      T('置顶:默认没有置顶', visibleSessions().map(function (s) { return s.id; }).join(',') === 'ses_a,ses_b');
+      T('置顶:置顶后排最前(哪怕 updated 更旧)',
+        togglePin('ses_b') === true && isPinned('ses_b') &&
+        visibleSessions().map(function (s) { return s.id; }).join(',') === 'ses_b,ses_a',
+        visibleSessions().map(function (s) { return s.id; }));
+      T('置顶:写进 localStorage',
+        JSON.parse(localStorage.getItem('ocs.pinned') || '[]').indexOf('ses_b') >= 0,
+        localStorage.getItem('ocs.pinned'));
+      store.order = 'asc';
+      T('置顶:asc / desc 都在最前',
+        visibleSessions().map(function (s) { return s.id; }).join(',') === 'ses_b,ses_a',
+        visibleSessions().map(function (s) { return s.id; }));
+      store.order = 'desc';
+      T('置顶:再点取消并恢复原顺序',
+        togglePin('ses_b') === false && !isPinned('ses_b') &&
+        visibleSessions().map(function (s) { return s.id; }).join(',') === 'ses_a,ses_b',
+        visibleSessions().map(function (s) { return s.id; }));
       store.selected = 'ses_b';
       window.calls.length = 0;
       openSessionPick();
@@ -552,6 +570,9 @@
         items().some(function (i) { return i.key === 'copyid'; }) &&
         items().some(function (i) { return i.key === 'transcript'; }),
         items().map(function (i) { return i.key; }));
+      T('更多操作:有置顶(未置顶时显示「置顶」)',
+        items().some(function (i) { return i.key === 'pin' && i.label === '置顶'; }),
+        items().map(function (i) { return i.label; }));
       closePick();
 
       await openModelPick();

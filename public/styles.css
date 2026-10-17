@@ -1300,6 +1300,7 @@ html.narrow .dlgfoot .hNarrow { display: inline; }
 #archivedCount { color: var(--muted); }
 
 .arch-badge { color: #8a6a00; font-size: 11px; white-space: nowrap; }
+.pin-badge { color: var(--accent); font-size: 11px; white-space: nowrap; }
 #list tbody tr.archived td.title { color: var(--muted); }
 #list td.actions button.arch-on { border-color: #d9a520; color: #8a6a00; }
 

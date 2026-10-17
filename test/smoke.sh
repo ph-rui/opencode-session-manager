@@ -2398,6 +2398,22 @@ else
   echo "FAIL: §8.72 的复制函数 / 命令 / 更多操作或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R29 组:会话置顶(§8.73 / A6)----
+if has "$APPJS" "const PIN_KEY = 'ocs.pinned'" &&
+   has "$APPJS" 'function pinnedSet()' && has "$APPJS" 'function isPinned(id)' &&
+   has "$APPJS" 'function togglePin(id)' &&
+   has "$APPJS" 'const pinned = pinnedSet();' &&
+   has "$APPJS" 'if (pa !== pb) return pb - pa;' &&
+   has "$APPJS" 'pin-badge' &&
+   has "$APPJS" "{ key: 'pin', label: pin ? '取消置顶' : '置顶'" &&
+   has "$CSS" '.pin-badge {' &&
+   has "$(cat "$SMOKE_PICKS")" '置顶:置顶后排最前(哪怕 updated 更旧)' &&
+   has "$(cat "$(dirname "$0")/ui-mobile.html")" '九项就是桌面那九个动作'; then
+  echo "PASS: §8.73 置顶持久化、列表排序优先、更多操作入口与置顶徽标都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.73 的置顶存储 / 排序 / 入口 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

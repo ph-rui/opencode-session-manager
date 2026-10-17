@@ -261,10 +261,10 @@
       T('B14 点 ⋯ 打开了选择框', q('#dlgPick').open === true, q('#dlgPick').open);
       T('B15 动作面板标题=该会话标题', q('#pickTitle').textContent === '甲会话', q('#pickTitle').textContent);
       var acts = qa('#pickList .pick-item');
-      T('B16 动作面板有 8 项', acts.length === 8, acts.length);
-      T('B17 八项就是桌面那八个动作',
+      T('B16 动作面板有 9 项', acts.length === 9, acts.length);
+      T('B17 九项就是桌面那九个动作',
         acts.map(function (i) { return i.querySelector('.pi-label').textContent; }).join(',') ===
-          '打开,改名,移动,分叉,复制会话 ID,复制转录,归档,删除',
+          '打开,改名,移动,分叉,置顶,复制会话 ID,复制转录,归档,删除',
         acts.map(function (i) { return i.querySelector('.pi-label').textContent; }));
       closePick();
       T('B18 关掉后选择框关上了', q('#dlgPick').open === false);
