@@ -31,7 +31,10 @@ has() { case "$1" in *"$2"*) return 0;; *) return 1;; esac; }
 PW=$(python3 -c "import json;print(json.load(open('$CFG/service.json'))['password'])" 2>/dev/null)
 BASE=$(opencode service status 2>/dev/null | grep -o 'http://127.0.0.1:[0-9]*' | head -1)
 
-echo "代理: $PROXY  (面板鉴权: ${OCS_AUTH:+开}${OCS_AUTH:-关})"
+# 只报开/关,绝不回显凭据本身 —— `${OCS_AUTH:+开}${OCS_AUTH:-关}` 在设置了变量时
+# 两段都会展开(后一段就是密码),别再用那个写法。
+if [ -n "${OCS_AUTH:-}" ]; then PANEL_AUTH_LABEL=开; else PANEL_AUTH_LABEL=关; fi
+echo "代理: $PROXY  (面板鉴权: $PANEL_AUTH_LABEL)"
 echo "服务: ${BASE:-<未发现>}"
 echo
 
