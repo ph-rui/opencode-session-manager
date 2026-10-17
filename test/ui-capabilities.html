@@ -14,7 +14,7 @@
     <div id="status" class="status"></div>
   </header>
   <main>
-    <section id="listpane"><table id="list"><tbody></tbody></table><button id="loadMore" hidden></button></section>
+    <section id="listpane"><table id="list"><tbody></tbody></table><div id="listState" class="msgstate" hidden><span id="listStateText"></span><button type="button" id="lsRetry" class="chip" hidden>重试</button></div><button id="loadMore" hidden></button></section>
     <div class="resizer" id="resizer-mid"></div>
     <section id="chatpane">
       <div id="chatHeader">
@@ -149,7 +149,13 @@
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
       if (/^\/api\/session\/[^/?]+\/(inbox|message|form|permission)/.test(u)) return json({ data: [] });
-      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      if (u.indexOf('/api/session?') === 0) {
+        if (window.listFailOnce) {
+          window.listFailOnce = false;
+          return fail(500, { message: 'upstream 掉了' });
+        }
+        return json({ data: SESSIONS, cursor: {} });
+      }
       if (method === 'PATCH') return { ok: true, status: 204, text: async function () { return ''; } };
       if (method === 'POST' || method === 'DELETE') return { ok: true, status: 204, text: async function () { return ''; } };
       return json({});
@@ -420,6 +426,55 @@
         modelRefOf('p1/m1'));
       T('modelRefOf 带 variant', JSON.stringify(modelRefOf('p1/m1', 'high')) === JSON.stringify({ providerID: 'p1', id: 'm1', variant: 'high' }));
       T('modelRefOf 空 key 返回 null', modelRefOf('') === null, modelRefOf(''));
+
+      /* ---------------- 拉会话列表失败不再一声不响(§8.45) ----------------
+       * 以前 loadSessions 的 catch 只有 console.error:左栏安静地停在旧数据 /
+       * 「共 0 个会话」上,用户以为「今天真的没有会话」。现在要:露一条带原因的话 +
+       * 「重试」,点重试从头再拉一遍,成功了那条自己收起来。 */
+      setupListState();
+      var listState = q('#listState');
+      var listText = q('#listStateText');
+      var lsRetry = q('#lsRetry');
+      var drain = async function (n) {
+        for (var i = 0; i < (n || 8); i++) await Promise.resolve();
+      };
+      T('#listState 在左栏里、排在「加载更多」之前',
+        !!listState && listState.parentElement === q('#listpane') &&
+        listState.nextElementSibling === q('#loadMore'));
+      T('默认收着(平时一个像素都不占)', listState.hidden === true);
+      T('带 .msgstate、重试是个 .chip(窄屏自动拿到 44px 命中区)',
+        listState.classList.contains('msgstate') &&
+        lsRetry.tagName === 'BUTTON' && lsRetry.classList.contains('chip'));
+      var addL = 0;
+      var origL = lsRetry.addEventListener.bind(lsRetry);
+      lsRetry.addEventListener = function () { addL++; return origL.apply(null, arguments); };
+      setupListState();
+      lsRetry.addEventListener = origL;
+      T('重复接线不再挂监听(init 会被反复调)', addL === 0, addL);
+
+      reset();
+      window.listFailOnce = true;
+      store.listError = '';
+      store.listLoading = false;
+      await loadSessions({ reset: true });
+      T('拉列表失败时状态行露出来、带原因',
+        listState.hidden === false &&
+        listText.textContent === '加载失败:upstream 掉了', listText.textContent);
+      T('失败时状态行标成 .bad(照 #msgState 的红色)',
+        listState.classList.contains('bad') === true);
+      T('失败时「重试」露出来', lsRetry.hidden === false);
+      T('失败没把 store.listError 丢了(切走再回来还看得见)', store.listError === 'upstream 掉了',
+        store.listError);
+
+      reset();
+      lsRetry.click();
+      await drain(8);
+      T('点重试重新拉了一遍列表(从头拉:reset)',
+        reqs(/^\/api\/session\?/).length === 1 && !/cursor=/.test(window.calls[window.calls.length - 1].url),
+        reqs(/^\/api\/session\?/).map(function (c) { return c.url; }));
+      T('拉成功了那条话自己收起来、重试跟着藏',
+        listState.hidden === true && lsRetry.hidden === true && store.listError === '');
+      T('(复原)列表照旧填回去了', store.sessions.size === SESSIONS.length, store.sessions.size);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

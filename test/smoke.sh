@@ -1695,6 +1695,36 @@ if has "$APPJS" "'加载失败:'" && has "$APPJS" "'正在加载消息…'" &&
 else
   echo "FAIL: 失败/加载那两句话或重试按钮没接上"; fail=$((fail + 1))
 fi
+
+# ---- R11b 组:拉会话列表失败也不许只进控制台(§8.45)----
+if has "$HOME_HTML" 'id="listState"' && has "$HOME_HTML" 'id="listStateText"' &&
+   has "$HOME_HTML" 'id="lsRetry"' &&
+   [ "$(printf '%s' "$HOME_HTML" | grep -oF 'id="listState"' | wc -l)" = 1 ]; then
+  echo "PASS: 左栏有一条状态行(#listState + 文案 + 重试),全页只有这一份"; pass=$((pass + 1))
+else
+  echo "FAIL: 左栏没有 #listState/#listStateText/#lsRetry,或不止一份"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function paintListState()' && has "$APPJS" 'function setupListState()' &&
+   has "$INIT_FN_O" 'setupListState()' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setupListState' | wc -l)" = 2 ]; then
+  echo "PASS: setupListState() 接进了 init() 且只有这一处接线(定义 1 + init 1)"; pass=$((pass + 1))
+else
+  echo "FAIL: setupListState 的接线不对(应为 定义 1 次 + init 里 1 次)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'store.listError = String((e && (e.message || e.status)) || e' &&
+   has "$APPJS" "console.error('loadSessions', e)" &&
+   has "$APPJS" "listRetryBtn.addEventListener('click', () => loadSessions({ reset: true }))" &&
+   has "$APPJS" "'加载失败:' + store.listError" && has "$APPJS" "'正在加载会话…'"; then
+  echo "PASS: 列表失败记原因(控制台那条照旧留着) + 「重试」从头拉一遍"; pass=$((pass + 1))
+else
+  echo "FAIL: 列表失败的记录/重试/两句文案缺了一块"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const LIST_LOADING_DELAY_MS = 250' &&
+   [ "$(printf '%s' "$APPJS" | grep -oF 'setListLoading(' | wc -l)" = 3 ]; then
+  echo "PASS: 「正在加载会话…」慢过 250ms 才露(本机不闪),进门/收尾各一次"; pass=$((pass + 1))
+else
+  echo "FAIL: 列表的加载提示延迟不对,或 setListLoading 没在 loadSessions 里配平"; fail=$((fail + 1))
+fi
 if has "$APPJS" 'Array.isArray(j.data)' && has "$APPJS" "throw new Error('响应里没有消息数组')" &&
    has "$APPJS" "'响应不是合法 JSON(可能只下到一半)'"; then
   echo "PASS: 「空数组」和「没拿到」分开:半个正文 / 没有 data 都算失败,不静默成空消息区"; pass=$((pass + 1))

@@ -72,6 +72,8 @@ const store = {
   msgError: '', // 最近一次拉消息失败的原文(空 = 没在失败);画成 #messages 末尾那条状态行
   msgLoading: false, // 「正在加载消息…」是不是真露出来了(慢到 MSG_LOADING_DELAY_MS 才露)
   msgSeq: 0, // 拉消息的「代」号:切会话或新请求一来,旧的重试/在途响应就作废
+  listError: '', // 最近一次拉会话列表失败的原文(空 = 没在失败);画成左栏那条状态行(§8.45)
+  listLoading: false, // 「正在加载会话…」是不是真露出来了(慢到 LIST_LOADING_DELAY_MS 才露)
 };
 
 const $ = (s) => document.querySelector(s);
@@ -1143,6 +1145,7 @@ async function loadSessions(opts) {
     if (!store.sessionCursor) return;
     q.set('cursor', store.sessionCursor);
   }
+  setListLoading(true);
   try {
     const j = await api('/api/session?' + q.toString());
     (j.data || []).forEach((s) => {
@@ -1152,9 +1155,15 @@ async function loadSessions(opts) {
       if (d) store.seenDirs.add(d);
     });
     store.sessionCursor = (j.cursor && j.cursor.next) || null;
+    store.listError = '';
     renderSessions();
   } catch (e) {
+    /* §8.45:失败不许只进控制台 —— 左栏会安静地停在旧数据 /「共 0 个会话」上。
+     * 原因记下来交给 #listState 画(原因 + 重试),控制台那条照旧留着。 */
+    store.listError = String((e && (e.message || e.status)) || e || '未知错误');
     console.error('loadSessions', e);
+  } finally {
+    setListLoading(false);
   }
 }
 
@@ -1625,6 +1634,66 @@ function setupMsgState() {
     msgRetryBtn.addEventListener('click', () => loadMessages({ older: false }));
   }
   paintMsgState();
+}
+
+/* 左栏会话列表的状态行(§8.45)。与上面 #msgState 同一个路子,只是挂在 #listpane 里:
+ *   - 失败必须留下证据:原因 + 一个「重试」(以前只有 console.error,左栏安静地停在
+ *     旧数据 /「共 0 个会话」上 —— 用户以为「今天真的没有会话」);
+ *   - 「正在加载会话…」慢过 LIST_LOADING_DELAY_MS 才露,本机那种几十毫秒就回来的
+ *     不闪一下(请求要是挂住不 reject,也是靠它才看得见);
+ *   - 重试 = 从头拉一遍(reset):失败那次往往连游标都没拿到,接着往后翻没有意义。 */
+const LIST_LOADING_DELAY_MS = 250;
+let listStateEl = null;
+let listStateText = null;
+let listRetryBtn = null;
+let listLoadingTimer = null;
+
+function setListLoading(on) {
+  clearTimeout(listLoadingTimer);
+  listLoadingTimer = null;
+  if (!on) {
+    store.listLoading = false;
+    paintListState(); // 收尾(成功/失败)都走这里:失败话由 store.listError 决定
+    return;
+  }
+  if (store.listError) {
+    store.listError = ''; // 新的一次拉取开始了:上一次的失败话先撤掉
+    paintListState();
+  }
+  if (store.listLoading) return;
+  listLoadingTimer = setTimeout(() => {
+    listLoadingTimer = null;
+    store.listLoading = true;
+    paintListState();
+  }, LIST_LOADING_DELAY_MS);
+}
+
+function paintListState() {
+  const pane = $('#listpane');
+  if (!pane || !listStateEl) return; // 老测试页没有这两个节点 —— 什么都不做
+  if (listStateEl.parentElement !== pane) {
+    // 被人清空过 #listpane 就搬回来;位置仍按 index.html 的顺序(在 #loadMore 之前)
+    const more = $('#loadMore');
+    pane.insertBefore(listStateEl, more && more.parentElement === pane ? more : null);
+  }
+  const bad = !!store.listError;
+  const show = bad || store.listLoading;
+  listStateEl.classList.toggle('bad', bad);
+  listStateEl.hidden = !show;
+  if (listStateText) listStateText.textContent = bad ? '加载失败:' + store.listError : '正在加载会话…';
+  if (listRetryBtn) listRetryBtn.hidden = !bad;
+}
+
+function setupListState() {
+  listStateEl = $('#listState');
+  if (!listStateEl) return;
+  listStateText = $('#listStateText');
+  listRetryBtn = $('#lsRetry');
+  if (listRetryBtn && listRetryBtn.dataset.wired !== '1') {
+    listRetryBtn.dataset.wired = '1';
+    listRetryBtn.addEventListener('click', () => loadSessions({ reset: true }));
+  }
+  paintListState();
 }
 
 /* --------- 顶栏筛选/排序/搜索的持久化(H 组 4)---------
@@ -6512,6 +6581,7 @@ function init() {
   setupAutoOlder(); // 窄屏滚到顶自动拉更旧(§8.41:那一行在手机上收起来了)
   setupJumpLatest(); // 一键回底(TUI 的 Jump to latest / End)
   setupMsgState(); // 拉消息的状态行(正在加载 / 加载失败 + 重试)
+  setupListState(); // 拉会话列表的状态行(同上,挂在左栏里,§8.45)
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)

@@ -321,6 +321,9 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .msgstate[hidden] { display: none; }
 .msgstate.bad { color: var(--danger); }
 #msgStateText { min-width: 0; overflow-wrap: anywhere; }
+/* 左栏那条是同一个 .msgstate(§8.45),文字也要能换行(错误原文里有 URL) */
+#listStateText { min-width: 0; overflow-wrap: anywhere; }
+#listState { margin: 10px 12px 12px; } /* 左边留 12px:对齐窄屏那一行的 padding-left */
 
 .msg {
   border-left: 3px solid var(--border);
