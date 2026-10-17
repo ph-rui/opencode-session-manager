@@ -2354,6 +2354,172 @@ function paintHtml(text, ranges, spans) {
   return html;
 }
 
+/* ---------- §8.50 语法着色:逐行分词,只上色不改变排版 ----------
+ * 零依赖的极简分词器:注释 / 字符串 / 数字 / 关键字四类,认哪些扩展名见 SYN_EXT。
+ * 不追求完备 —— 认错只影响观感,不影响正确性;认不出来(未知扩展名)就纯文本。
+ * 逐行处理是刻意的:diff 的 hunk 会跳行,跨行块注释本来也对不上,别假装能追。
+ * 纯函数,离线断言在 test/ui-tools.html。
+ */
+const SYN_EXT = {
+  js: 'js', mjs: 'js', cjs: 'js', jsx: 'js',
+  ts: 'js', tsx: 'js', mts: 'js', cts: 'js',
+  json: 'json', jsonc: 'json', json5: 'json',
+  go: 'go', rs: 'rs',
+  c: 'c', h: 'c', cc: 'c', cpp: 'c', cxx: 'c', hpp: 'c', hh: 'c', ino: 'c',
+  sh: 'sh', bash: 'sh', zsh: 'sh', ksh: 'sh',
+  py: 'py', pyi: 'py',
+  css: 'css', scss: 'css', less: 'css',
+  md: 'md', markdown: 'md', mdx: 'md',
+  html: 'html', htm: 'html', xml: 'html', svg: 'html', vue: 'html',
+};
+const SYN_KW = {
+  js: new Set(('as async await break case catch class const continue debugger default delete do else enum ' +
+    'export extends false finally for from function get if implements import in instanceof interface let new ' +
+    'null of package private protected public readonly return satisfies set static super switch this throw ' +
+    'true try typeof undefined var void while with yield type declare namespace abstract infer keyof never ' +
+    'unknown any string number boolean object symbol').split(' ')),
+  json: new Set(['true', 'false', 'null']),
+  go: new Set(('break case chan const continue default defer else fallthrough for func go goto if import ' +
+    'interface map package range return select struct switch type var true false nil iota').split(' ')),
+  rs: new Set(('as async await break const continue crate dyn else enum extern false fn for if impl in let ' +
+    'loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where ' +
+    'while').split(' ')),
+  c: new Set(('auto break case char const continue default do double else enum extern float for goto if ' +
+    'inline int long register restrict return short signed sizeof static struct switch typedef union ' +
+    'unsigned void volatile while').split(' ')),
+  sh: new Set(('if then else elif fi for while until do done case esac in function export local readonly ' +
+    'declare return break continue').split(' ')),
+  py: new Set(('and as assert async await break class continue def del elif else except False finally for ' +
+    'from global if import in is lambda None nonlocal not or pass raise return True try while with yield').split(' ')),
+};
+const SYN_CFG = {
+  js: { line: '//', block: '/*', quotes: ['"', "'", '`'], kw: 'js' },
+  json: { quotes: ['"'], kw: 'json' },
+  go: { line: '//', block: '/*', quotes: ['"', "'", '`'], kw: 'go' },
+  rs: { line: '//', block: '/*', quotes: ['"'], kw: 'rs' },
+  c: { line: '//', block: '/*', quotes: ['"', "'"], kw: 'c' },
+  sh: { line: '#', hash: true, quotes: ['"', "'"], kw: 'sh' },
+  py: { line: '#', quotes: ['"', "'"], kw: 'py' },
+  css: { block: '/*', quotes: ['"', "'"], props: true },
+};
+const SYN_NUM = /^(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/;
+const SYN_WORD = /[A-Za-z_$]/;
+const SYN_WORD_REST = /[\w$]/;
+
+// 文件路径 → 语言(认不出来返回空串,渲染时就是纯文本)
+function langOf(path) {
+  const p = String(path == null ? '' : path);
+  const dot = p.lastIndexOf('.');
+  if (dot < 0) return '';
+  return SYN_EXT[p.slice(dot + 1).toLowerCase()] || '';
+}
+
+function synPush(out, s, e, cls) {
+  if (e > s) out.push({ s: s, e: e, cls: cls });
+}
+
+// 注释 / 字符串 / 数字 / 关键字(js/ts/json/go/rs/c/h/sh/py/css 共用)
+function synScanCode(text, cfg, out) {
+  const kw = cfg.kw ? SYN_KW[cfg.kw] : null;
+  let i = 0;
+  while (i < text.length) {
+    const c = text.charAt(i);
+    if (cfg.block && text.startsWith(cfg.block, i)) {
+      const j = text.indexOf('*/', i + cfg.block.length);
+      const e = j < 0 ? text.length : j + 2;
+      synPush(out, i, e, 'com');
+      i = e;
+      continue;
+    }
+    if (cfg.line && text.startsWith(cfg.line, i) &&
+        (!cfg.hash || i === 0 || /[\s;|&(]/.test(text.charAt(i - 1)))) {
+      synPush(out, i, text.length, 'com');
+      break;
+    }
+    if (cfg.quotes.indexOf(c) >= 0) {
+      let j = i + 1;
+      while (j < text.length) {
+        if (text.charAt(j) === '\\') { j += 2; continue; }
+        if (text.charAt(j) === c) { j++; break; }
+        j++;
+      }
+      synPush(out, i, Math.min(j, text.length), 'str');
+      i = j;
+      continue;
+    }
+    if (cfg.props && c === '#') { // CSS 的十六进制颜色
+      const m = /^#[0-9a-fA-F]{3,8}/.exec(text.slice(i));
+      if (m) { synPush(out, i, i + m[0].length, 'num'); i += m[0].length; continue; }
+    }
+    if (c >= '0' && c <= '9' && (i === 0 || !/[\w$.]/.test(text.charAt(i - 1)))) {
+      const m = SYN_NUM.exec(text.slice(i));
+      if (m) { synPush(out, i, i + m[0].length, 'num'); i += m[0].length; continue; }
+    }
+    if (SYN_WORD.test(c)) {
+      let j = i + 1;
+      while (j < text.length && SYN_WORD_REST.test(text.charAt(j))) j++;
+      const w = text.slice(i, j);
+      if (cfg.props) {
+        // CSS 属性名(color: …)与 @media 这类 at-rule
+        let k = j;
+        while (k < text.length && /\s/.test(text.charAt(k))) k++;
+        if (text.charAt(k) === ':' || (i > 0 && text.charAt(i - 1) === '@')) synPush(out, i, j, 'kw');
+      } else if (kw && kw.has(w)) synPush(out, i, j, 'kw');
+      i = j;
+      continue;
+    }
+    i++;
+  }
+}
+
+function synScanMd(text, out) {
+  if (/^\s{0,3}#{1,6}\s/.test(text)) { synPush(out, 0, text.length, 'kw'); return; }
+  const re = /`[^`]*`/g;
+  let m;
+  while ((m = re.exec(text))) synPush(out, m.index, m.index + m[0].length, 'str');
+}
+
+function synScanHtml(text, out) {
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith('<!--', i)) {
+      const j = text.indexOf('-->', i + 4);
+      const e = j < 0 ? text.length : j + 3;
+      synPush(out, i, e, 'com');
+      i = e;
+      continue;
+    }
+    const c = text.charAt(i);
+    if (c === '<') {
+      let j = i + 1;
+      if (text.charAt(j) === '/') j++;
+      const st = j;
+      while (j < text.length && /[A-Za-z0-9:_-]/.test(text.charAt(j))) j++;
+      if (j > st) { synPush(out, i, j, 'kw'); i = j; continue; }
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < text.length && text.charAt(j) !== c) j++;
+      synPush(out, i, Math.min(j + 1, text.length), 'str');
+      i = j + 1;
+      continue;
+    }
+    i++;
+  }
+}
+
+// 一行 → [{s, e, cls}](升序、互不重叠;空白与普通标识符不入表)
+function syntaxSpans(text, lang) {
+  const s = String(text == null ? '' : text);
+  const out = [];
+  if (lang === 'md') synScanMd(s, out);
+  else if (lang === 'html') synScanHtml(s, out);
+  else if (SYN_CFG[lang]) synScanCode(s, SYN_CFG[lang], out);
+  return out;
+}
+
 // 每个 hunk 里连续的删段 + 紧随的增段按位置配对(第 i 个 - 对第 i 个 +)。
 // 落单的增删不点亮(整行底色已经说了它是新加的 / 去掉的)。
 function pairDiffRows(rows) {
@@ -2376,13 +2542,15 @@ function pairDiffRows(rows) {
   return rows;
 }
 
-function diffRowHtml(r) {
+function diffRowHtml(r, lang) {
   const ln =
     '<span class="ln o">' + (r.oldNo == null ? '' : r.oldNo) + '</span>' +
     '<span class="ln n">' + (r.newNo == null ? '' : r.newNo) + '</span>';
   const sign = r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' ';
-  // 只有增删行有点亮;上下文与 hunk 行照旧(它们本来就是同一行原样)
-  const src = r.k === 'add' || r.k === 'del' ? paintHtml(r.text, r.hl) : esc(r.text);
+  // 增删行与上下文行都上语法色(行内高亮只落在增删行);hunk / meta 行保持原样
+  const src = r.k === 'hunk' || r.k === 'meta'
+    ? esc(r.text)
+    : paintHtml(r.text, r.hl, syntaxSpans(r.text, lang));
   return '<div class="dl ' + r.k + '">' + ln +
     '<span class="sign">' + (r.k === 'hunk' || r.k === 'meta' ? '' : sign) + '</span>' +
     '<span class="src">' + src + '</span></div>';
@@ -2413,6 +2581,7 @@ function diffHtml(files) {
   let html = '';
   for (const f of files || []) {
     const b = diffBadge(f && f.status);
+    const lang = langOf(f && f.file);
     const rows = pairDiffRows(parsePatch(f && f.patch));
     const adds = typeof (f && f.additions) === 'number' ? f.additions : rows.filter((r) => r.k === 'add').length;
     const dels = typeof (f && f.deletions) === 'number' ? f.deletions : rows.filter((r) => r.k === 'del').length;
@@ -2427,18 +2596,19 @@ function diffHtml(files) {
       html += '<div class="dnote">' + (dels ? '-' + dels + ' line' + (dels !== 1 ? 's' : '') : '(no content)') + '</div>';
       continue;
     }
-    html += '<div class="diff">' + rows.map(diffRowHtml).join('') + '</div>';
+    html += '<div class="diff">' + rows.map((r) => diffRowHtml(r, lang)).join('') + '</div>';
   }
   return html;
 }
 
 // write 工具的正文:按行号显示,不做增删着色(服务端没给 diff)。
-function codeHtml(text) {
+function codeHtml(text, path) {
   const lines = String(text == null ? '' : text).split(/\r?\n/);
   if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const lang = langOf(path);
   return '<div class="diff code">' + lines.map((t, i) =>
     '<div class="dl ctx"><span class="ln o"></span><span class="ln n">' + (i + 1) + '</span>' +
-    '<span class="sign"> </span><span class="src">' + esc(t) + '</span></div>'
+    '<span class="sign"> </span><span class="src">' + paintHtml(t, null, syntaxSpans(t, lang)) + '</span></div>'
   ).join('') + '</div>';
 }
 
@@ -2645,7 +2815,7 @@ function toolHtml(p) {
   if (kind === 'write') {
     const wrote = { head: 'Wrote', tail: abbrevPath(path), icon: '#' };
     if (input && typeof input.content === 'string') {
-      return toolCard(p, wrote, null, codeHtml(input.content) + diagHtml(md, path), true);
+      return toolCard(p, wrote, null, codeHtml(input.content, path) + diagHtml(md, path), true);
     }
     return '<div class="toolrow">' + toolHead(p, line) + '</div>';
   }

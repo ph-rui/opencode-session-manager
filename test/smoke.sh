@@ -200,6 +200,13 @@ if has "$CSS" '--hl-add-bg' && has "$CSS" '--hl-del-bg' &&
 else
   echo "FAIL: styles.css 缺行内高亮配色(§8.49 点亮了也看不出来)"; fail=$((fail + 1))
 fi
+# §8.50 语法着色:四档颜色与 .tk 类必须都在
+if has "$CSS" '--syn-kw' && has "$CSS" '--syn-str' && has "$CSS" '--syn-num' && has "$CSS" '--syn-com' &&
+   has "$CSS" '.src .tk.kw'; then
+  echo "PASS: styles.css 有语法着色(§8.50 的 --syn-* 与 .src .tk.*)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺语法着色(§8.50 的 .tk 上不了色)"; fail=$((fail + 1))
+fi
 # H 组 1:会话区字号由一个变量统管,区内字号一律相对 em(整块等比缩放,不是只有正文变大)
 if has "$CSS" '--chat-fs: 14px' && has "$CSS" 'font-size: var(--chat-fs)' &&
    has "$CSS" 'font-size: 0.92em' && has "$CSS" 'font-size: 0.88em'; then
@@ -243,6 +250,15 @@ if has "$APPJS" 'function hlRanges(' && has "$APPJS" 'function pairDiffRows(' &&
   echo "PASS: app.js 有行内高亮(§8.49:hlRanges / pairDiffRows 接到 diff 渲染上)"; pass=$((pass + 1))
 else
   echo "FAIL: app.js 缺行内高亮(§8.49 的配对与 LCS 没接上)"; fail=$((fail + 1))
+fi
+# §8.50 语法着色:逐行分词要接在 diff 与 write 正文两条路上
+if has "$APPJS" 'function syntaxSpans(' && has "$APPJS" 'function langOf(' &&
+   has "$APPJS" 'const lang = langOf(f && f.file);' &&
+   has "$APPJS" 'diffRowHtml(r, lang)' &&
+   has "$APPJS" 'codeHtml(input.content, path)'; then
+  echo "PASS: app.js 有语法着色(§8.50:syntaxSpans 同时接在 diff 与 write 正文上)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺语法着色(§8.50 的 langOf/syntaxSpans 没接上)"; fail=$((fail + 1))
 fi
 if has "$APPJS" "const LIST_KEY = 'ocs.listHiddenTab';" && has "$APPJS" 'function listCollapsed()' &&
    has "$APPJS" 'paint(listCollapsed());' && has "$APPJS" 'sessionStorage.getItem(LIST_KEY)' &&

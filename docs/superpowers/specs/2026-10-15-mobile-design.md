@@ -2447,6 +2447,49 @@ README 的测试清单与 §8.37 那段同步;§10 第 8 条改成「已定」�
 
 ---
 
+### 8.50 语法着色(零依赖、逐行)
+
+**起因**:同一批的第 2 项。此前记在「明确不做」里(对应 TUI 的 `config.diffs.filetype` /
+`syntaxStyle`),真做起来只是一层分词器 + 四个颜色变量,不需要动渲染结构。
+
+**做法**(`public/app.js`):
+
+| 函数 | 干什么 |
+|---|---|
+| `langOf(path)` | 扩展名 → 语言(js/ts/json/go/rs/c/h/sh/py/css/md/html 与常见别名);认不出返回空串 |
+| `syntaxSpans(text, lang)` | 一行 → `[{s, e, cls}]`,cls 是 `com` / `str` / `num` / `kw` 四类之一 |
+| `synScanCode` / `synScanMd` / `synScanHtml` | 三套扫描器:代码类共用一套,markdown / html 各一个小函数 |
+
+`paintHtml(text, ranges, spans)` 把「变了的区间」(§8.49)与「语法区间」的边界并在一起切段,
+每段同时决定要不要包 `.hl`(外层)与 `.tk <cls>`(内层)—— 两套高亮互不打结。
+
+**认哪些**:js/mjs/cjs/jsx、ts/tsx/mts/cts、json/jsonc/json5、go、rs、c/cpp/cc/cxx/h/hpp、sh/bash/zsh/ksh、
+py/pyi、css/scss/less、md/markdown/mdx、html/htm/xml/svg/vue;其余一律纯文本,**不猜**。
+`write` 的正文同样按路径上色(`codeHtml(text, path)`)。
+
+**逐行是刻意的**:diff 的 hunk 会跳行,跨行的块注释本来就对不上,假装能追反而会整块染错;
+代价是「块注释从上一行延续下来」这几行不会被认成注释 —— 记在这里,不修。
+
+**已知不完美**(都是观感,不影响正确性):
+
+- shell 的 `$#` / `${#x}` 不会被当成注释(判据是 `#` 前面得是空白或 `;|&(`);
+- JS 模板字符串里的 `${…}` 不单独分词(整段当字符串);
+- Rust 的生命周期 `'a` 不当字符串(Rust 只认双引号);
+- markdown 只认标题行与行内代码,表格 / 强调 / 链接不染;
+- html 只认注释、标签名、属性值。
+
+**实测**(真面板里同样的 `src/api/session.ts` diff):关键字红、字符串深蓝、数字蓝、注释灰斜体;
+行内高亮(§8.49)仍然压在语法色上面,`const` 那一整词既被点亮又是关键字色,嵌套顺序对。
+
+**回归**:`smoke.sh` 310 → **312**(样式:`--syn-*` 与 `.src .tk.*`;代码:`langOf`/`syntaxSpans`
+同时接在 diff 与 write 正文两条路上);`ui-tools` 261 → **282**(21 项:扩展名表与「不认识的就不猜」、
+四类区间、字符串里的关键字不误判、转义引号、行注释与块注释、shell 的 `$#`、CSS 属性与十六进制颜色、
+markdown、html、两套高亮叠加的嵌套顺序、hunk 不上色、`write` 给了路径才上色且文字不变、字符串里的 HTML 转义)。
+
+**后续**:桌面上的并排视图(§8.52)。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |

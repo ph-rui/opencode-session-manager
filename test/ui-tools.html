@@ -194,12 +194,61 @@
       T('行内高亮:点亮之后整行文字还是原文(textContent 一字不差)',
         hlSrc.textContent === '\t<remote name="origin" fetch="." review="gerrit" />', hlSrc.textContent);
       T('行内高亮:只包 <span class="hl">,不引入别的结构',
-        hlSrc.querySelectorAll('span.hl').length === 1 &&
-        hlSrc.querySelectorAll('span.hl')[0].textContent === 'review="gerrit" ',
+        hlSrc.querySelectorAll('span.hl').length > 0 &&
+        Array.prototype.map.call(hlSrc.querySelectorAll('span.hl'), function (x) { return x.textContent; }).join('') === 'review="gerrit" ',
         hlSrc.innerHTML);
       var evil = diffHtml([{ file: 'x', status: 'modified', patch: '@@ -1 +1 @@\n-a\n+a<i onerror="x">' }]);
       T('行内高亮:变了的那段照样转义(<i> 不会变成标签)',
         evil.indexOf('&lt;i onerror=&quot;x&quot;&gt;') >= 0 && evil.indexOf('<i onerror') < 0, evil);
+
+      /* ================= §8.50 语法着色 ================= */
+      T('langOf:认常见扩展名',
+        langOf('a.js') === 'js' && langOf('x.TSX') === 'js' && langOf('p.json') === 'json' &&
+        langOf('s.py') === 'py' && langOf('m.css') === 'css' && langOf('d.md') === 'md' &&
+        langOf('i.html') === 'html' && langOf('c.go') === 'go' && langOf('r.rs') === 'rs' &&
+        langOf('h.h') === 'c' && langOf('run.sh') === 'sh');
+      T('langOf:不是认识的扩展名就不猜', langOf('/a/b/c.tar.gz') === '' && langOf('Makefile') === '' &&
+        langOf(null) === '' && langOf('') === '');
+      var spJs = syntaxSpans('const n = 1; // 注释', 'js');
+      T('语法:关键字 / 数字 / 注释各有区间',
+        spJs.length === 3 && spJs[0].cls === 'kw' && spJs[0].s === 0 && spJs[0].e === 5 &&
+        spJs[1].cls === 'num' && spJs[1].s === 10 && spJs[2].cls === 'com' && spJs[2].s === 13, spJs);
+      var spStr = syntaxSpans('var s = "const";', 'js');
+      T('语法:字符串里的关键字不会被拆成关键字',
+        spStr.length === 2 && spStr[0].cls === 'kw' && spStr[1].cls === 'str' && spStr[1].s === 8, spStr);
+      var spEsc = syntaxSpans('"a\\"b" + 1', 'js');
+      T('语法:字符串里的转义引号不提前收尾',
+        spEsc[0].cls === 'str' && spEsc[0].e === 6 && spEsc[1].cls === 'num', spEsc);
+      T('语法:行注释吃掉整行(里面的引号不算字符串)',
+        J(syntaxSpans('// "x" = 1', 'js').map(function (x) { return x.cls; })) === '["com"]');
+      T('语法:块注释只吃到 */ 为止',
+        J(syntaxSpans('a /* b */ c', 'js').map(function (x) { return [x.cls, x.s, x.e]; })) === '[["com",2,9]]',
+        syntaxSpans('a /* b */ c', 'js'));
+      var spSh = syntaxSpans('echo $# # tail', 'sh');
+      T('语法:shell 的 $# 不是注释,后面那个 # 才是',
+        spSh.length === 1 && spSh[0].cls === 'com' && spSh[0].s === 8, spSh);
+      var spPy = syntaxSpans('def f():  # hi', 'py');
+      T('语法:python 的 def 是关键字、# 是注释',
+        spPy.length === 2 && spPy[0].cls === 'kw' && spPy[0].e === 3 && spPy[1].cls === 'com' && spPy[1].s === 10, spPy);
+      var spCss = syntaxSpans('color: #fff; /* c */', 'css');
+      T('语法:CSS 属性名 / 十六进制颜色 / 注释',
+        J(spCss.map(function (x) { return x.cls; })) === '["kw","num","com"]', spCss);
+      T('语法:markdown 的标题整行算关键字',
+        J(syntaxSpans('## 标题', 'md').map(function (x) { return x.cls; })) === '["kw"]');
+      T('语法:markdown 的行内代码算字符串',
+        J(syntaxSpans('a `x` b', 'md').map(function (x) { return [x.s, x.e]; })) === '[[2,5]]');
+      var spHtml = syntaxSpans('<div class="x">t</div>', 'html');
+      T('语法:html 的标签名是关键字、属性值是字符串',
+        J(spHtml.map(function (x) { return x.cls; })) === '["kw","str","kw"]' && spHtml[1].s === 11, spHtml);
+      T('语法:认不出的语言返回空表,paint 就是原来的 esc',
+        syntaxSpans('const a = 1;', '').length === 0 &&
+        paintHtml('a<b', null, syntaxSpans('a<b', '')) === 'a&lt;b');
+      T('语法:前后两套区间叠加(变了的整词仍然套着语法色)',
+        paintHtml('const a = 1;', [[0, 5]], syntaxSpans('const a = 1;', 'js')) ===
+          '<span class="hl"><span class="tk kw">const</span></span> a = <span class="tk num">1</span>;',
+        paintHtml('const a = 1;', [[0, 5]], syntaxSpans('const a = 1;', 'js')));
+      T('语法:字符串里的 HTML 照样转义',
+        diffHtml([{ file: 'x.js', status: 'added', patch: '@@ -0,0 +1 @@\n+const s = "<img onerror=x>";' }]).indexOf('<img') < 0);
 
       /* ================= codeHtml(write 正文) ================= */
       var ch = codeHtml('a\nb\nc\n');
@@ -207,6 +256,19 @@
       T('codeHtml:行号从 1 开始', ch.indexOf('>1</span>') >= 0);
       T('codeHtml:整块带 code 类(只有一列行号)', ch.indexOf('diff code') >= 0);
       T('codeHtml:空内容不炸', codeHtml('') === '<div class="diff code"></div>', codeHtml(''));
+      var chJs = codeHtml('const a = 1; // x', 'src/x.js');
+      T('codeHtml:给了路径就按扩展名上语法色', chJs.indexOf('tk kw') >= 0 && chJs.indexOf('tk com') >= 0, chJs);
+      T('codeHtml:没给路径就是纯文本(不上色)', codeHtml('const a = 1;').indexOf('tk ') < 0);
+      T('codeHtml:上色不改文字', (function () {
+        var d = document.createElement('div');
+        d.innerHTML = codeHtml('const a = 1; // x', 'x.js');
+        return d.textContent === '1 const a = 1; // x';
+      })());
+      var dhJs = diffHtml([{ file: 'a.js', status: 'modified', patch: '@@ -1 +1 @@\n-const a = 1;\n+const b = 2;' }]);
+      T('diffHtml:按文件扩展名上语法色(关键字 + 数字)', dhJs.indexOf('tk kw') >= 0 && dhJs.indexOf('tk num') >= 0, dhJs);
+      var dhJsBox = document.createElement('div');
+      dhJsBox.innerHTML = dhJs;
+      T('diffHtml:hunk 行不上色', dhJsBox.querySelector('.dl.hunk .src').querySelectorAll('.tk').length === 0);
 
       /* ================= diagHtml ================= */
       var diag = { '/work/src/lcd.c': [{ range: { start: { line: 13, character: 8 } }, message: 'implicit declaration' }] };
