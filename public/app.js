@@ -1126,6 +1126,59 @@ function wtCurrentRoot(list, dir) {
   return best;
 }
 
+// TUI 的 Worktrees 还会列出「会话落在工作树子目录里」的那些目录。服务端只给根,
+// 子目录只能从会话的 subpath / location.directory 反推;左栏只拉最近 50 条,
+// 所以这里再按 projectID 问一次(失败就只用本地已有会话,不影响根列表)。
+const WT_SESSION_LIMIT = 200;
+async function worktreeSessions(projectID) {
+  const byID = new Map();
+  for (const s of store.sessions.values()) {
+    if (s && s.projectID === projectID) byID.set(s.id, s);
+  }
+  try {
+    const q = new URLSearchParams({ project: projectID, limit: String(WT_SESSION_LIMIT) });
+    const j = await api('/api/session?' + q.toString());
+    const raw = Array.isArray(j) ? j : j && Array.isArray(j.data) ? j.data : [];
+    for (const s of raw) {
+      if (s && typeof s.id === 'string') byID.set(s.id, s);
+    }
+  } catch (_) {
+    // 子目录只是锦上添花:拿不到会话列表时仍把工作树根列出来
+  }
+  return Array.from(byID.values());
+}
+
+// 根已经列出来了,子目录必须落在某个根下面;与根同路径 / 重复的目录不再列。
+// TUI 也是从 session.subpath 派生(见 dialog-workspaces.tsx 的 subdirectories)。
+function wtSubdirs(roots, sessions) {
+  const seen = new Set(roots.map((w) => w.directory));
+  const out = [];
+  for (const s of sessions) {
+    const sub = s && s.subpath;
+    if (!sub || sub === '.' || sub === '/') continue;
+    const raw = s.location && s.location.directory;
+    if (!raw) continue;
+    const dir = normPath(raw);
+    if (seen.has(dir)) continue;
+    const root = wtCurrentRoot(roots, dir);
+    if (!root) continue;
+    seen.add(dir);
+    out.push({ directory: dir, root: root });
+  }
+  return out;
+}
+
+function wtRootOrder(a, b, currentRoot) {
+  const ac = a.directory === currentRoot;
+  const bc = b.directory === currentRoot;
+  if (ac !== bc) return ac ? -1 : 1;
+  const aw = !!a.strategy;
+  const bw = !!b.strategy;
+  if (aw !== bw) return aw ? 1 : -1;
+  if (!aw && !bw) return a.directory.length - b.directory.length;
+  return a.directory.localeCompare(b.directory);
+}
+
 // 每次都向服务端要一次会话信息:移入 / 删除之后本地 store 可能正被后台列表刷新
 // 用旧 location 覆盖(SSE 的 session.moved 与定时 loadSessions 会赛跑),而当前根
 // 标错就会把「删掉当前工作树」误判成「删别的」。多这一趟 GET 换准头,值。
@@ -1184,28 +1237,53 @@ async function openWorktrees() {
   }
   const currentRoot = wtCurrentRoot(list, currentDir);
   // 照 TUI:当前所在根排最前;其余主检出在前、worktree 在后,主检出按路径长短。
-  list.sort((a, b) => {
-    const ac = a.directory === currentRoot;
-    const bc = b.directory === currentRoot;
-    if (ac !== bc) return ac ? -1 : 1;
-    const aw = !!a.strategy;
-    const bw = !!b.strategy;
-    if (aw !== bw) return aw ? 1 : -1;
-    if (!aw && !bw) return a.directory.length - b.directory.length;
-    return a.directory.localeCompare(b.directory);
+  // 子目录跟在自己的根后面,再按路径排。
+  list.sort((a, b) => wtRootOrder(a, b, currentRoot));
+  const sessions = await worktreeSessions(projectID);
+  if (store.selected !== sid) return;
+  const rootIndex = new Map(list.map((w, i) => [w.directory, i]));
+  const subdirs = wtSubdirs(list, sessions).sort((a, b) => {
+    const d = (rootIndex.get(a.root) || 0) - (rootIndex.get(b.root) || 0);
+    return d || a.directory.localeCompare(b.directory);
   });
-  openPick({
-    title: '工作树 · ' + ((s && s.title) || sid),
-    filter: true,
-    filterHint: '按路径过滤…',
-    current: currentRoot,
-    items: list.map((w) => ({
+  const items = list
+    .map((w) => ({
       key: w.directory,
       directory: w.directory,
       label: abbrevHome(w.directory),
       sub: w.strategy ? 'worktree' : '主检出',
       strategy: w.strategy,
-    })),
+      subdirectory: false,
+      rootIndex: rootIndex.get(w.directory) || 0,
+    }))
+    .concat(
+      subdirs.map((w) => ({
+        key: w.directory,
+        directory: w.directory,
+        label: abbrevHome(w.directory),
+        sub: '子目录',
+        strategy: '',
+        subdirectory: true,
+        rootIndex: rootIndex.get(w.root) || 0,
+      }))
+    );
+  // 根和子目录一起排:根在前,各自根下的子目录按路径排 —— 与 TUI 的 toSorted 一致。
+  items.sort(
+    (a, b) =>
+      a.rootIndex - b.rootIndex ||
+      Number(a.subdirectory) - Number(b.subdirectory) ||
+      a.directory.localeCompare(b.directory)
+  );
+  // 会话本身可能就落在子目录里 —— 高亮那一行,而不是它的根。
+  const currentKey = items.some((it) => it.key === normPath(currentDir))
+    ? normPath(currentDir)
+    : currentRoot;
+  openPick({
+    title: '工作树 · ' + ((s && s.title) || sid),
+    filter: true,
+    filterHint: '按路径过滤…',
+    current: currentKey,
+    items,
     onPick: (it) => openWorktreeActions(it, { sid, projectID, currentDir, currentRoot }),
   });
   clearToast(); // 列表已经打开,别让「正在读取」在框后面挂到 2.6s
@@ -1225,12 +1303,14 @@ function openWorktreeActions(it, ctx) {
     {
       key: 'delete',
       label: '删除工作树',
-      sub: !it.strategy
-        ? '主检出不能删'
-        : currentHere
-          ? '当前会话在此;删除后回列表'
-          : '有未提交改动会再确认',
-      disabled: !it.strategy,
+      sub: it.subdirectory
+        ? '子目录不能单独删'
+        : !it.strategy
+          ? '主检出不能删'
+          : currentHere
+            ? '当前会话在此;删除后回列表'
+            : '有未提交改动会先列清单',
+      disabled: !!it.subdirectory || !it.strategy,
     },
     { key: 'refresh', label: '刷新工作树列表' },
   ];
@@ -1273,6 +1353,102 @@ async function moveSessionToWorktree(sid, directory) {
   flash('已移动到 ' + abbrevHome(directory), 'ok');
 }
 
+function wtStatusMark(status) {
+  if (status === 'added') return { char: 'A', cls: 'add' };
+  if (status === 'deleted') return { char: 'D', cls: 'del' };
+  return { char: 'M', cls: 'mod' };
+}
+
+function wtStatusFiles(j) {
+  const raw = Array.isArray(j) ? j : j && Array.isArray(j.data) ? j.data : [];
+  return raw
+    .filter((f) => f && typeof f.file === 'string' && f.file)
+    .map((f) => ({
+      file: f.file,
+      status: typeof f.status === 'string' ? f.status : 'modified',
+      additions: Number(f.additions) || 0,
+      deletions: Number(f.deletions) || 0,
+    }));
+}
+
+// 删除前那一步只问 /api/vcs/status,不下载完整补丁。拿不到就返回 null,
+// 让调用方退回原来的确认框 —— 不能因为预览读失败就把删除卡死。
+async function loadWorktreeStatus(dir) {
+  try {
+    const q = new URLSearchParams({ 'location[directory]': dir });
+    return wtStatusFiles(await api('/api/vcs/status?' + q.toString()));
+  } catch (_) {
+    return null;
+  }
+}
+
+function wtRelFile(dir, file) {
+  const d = normPath(dir);
+  const f = normPath(file);
+  if (f === d) return f;
+  return f.indexOf(d + '/') === 0 ? f.slice(d.length + 1) : file;
+}
+
+function renderWtDeleteFiles(dir, files) {
+  const box = $('#wtDelFiles');
+  const empty = $('#wtDelEmpty');
+  if (empty) empty.hidden = files.length > 0;
+  if (!box) return;
+  box.innerHTML = files
+    .map((f) => {
+      const st = wtStatusMark(f.status);
+      const add = f.additions ? '<span class="wtf-add">+' + f.additions + '</span>' : '';
+      const del = f.deletions ? '<span class="wtf-del">-' + f.deletions + '</span>' : '';
+      return (
+        '<div class="wtfile">' +
+        '<span class="wtf-s ' + st.cls + '">' + st.char + '</span>' +
+        '<span class="wtf-path" title="' + esc(f.file) + '">' +
+        esc(wtRelFile(dir, f.file)) + '</span>' +
+        '<span class="wtf-stat">' + add + (add && del ? ' ' : '') + del + '</span>' +
+        '</div>'
+      );
+    })
+    .join('');
+}
+
+// 照 TUI 的 DialogWorkspaceFileChanges:列出文件后再点一次「仍然删除」。
+// 默认焦点放在「取消」上,不把破坏性动作做成回车默认项。
+function confirmWorktreeDelete(w, files) {
+  const dlg = $('#dlgWtDel');
+  const ok = $('#wtDelOk');
+  const cancel = $('#wtDelCancel');
+  if (!dlg || !ok || !cancel) {
+    return Promise.resolve(confirm('这个工作树有未提交改动,强制删除?'));
+  }
+  const msg = $('#wtDelMsg');
+  if (msg) {
+    msg.textContent = files.length
+      ? '这个工作树有 ' + files.length + ' 个文件改动。强制删除会丢掉这些改动。'
+      : '这个工作树有未提交改动。强制删除会丢掉这些改动。';
+  }
+  renderWtDeleteFiles(w.directory, files);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      ok.removeEventListener('click', onYes);
+      cancel.removeEventListener('click', onNo);
+      dlg.removeEventListener('close', onClose);
+      closeDlg(dlg);
+      resolve(v);
+    };
+    const onYes = () => finish(true);
+    const onNo = () => finish(false);
+    const onClose = () => finish(false);
+    ok.addEventListener('click', onYes);
+    cancel.addEventListener('click', onNo);
+    dlg.addEventListener('close', onClose);
+    openDlg(dlg);
+    cancel.focus();
+  });
+}
+
 async function removeWorktree(w, ctx, force) {
   const dir = w.directory;
   try {
@@ -1287,7 +1463,12 @@ async function removeWorktree(w, ctx, force) {
     });
   } catch (e) {
     if (!force && e.data && e.data.forceRequired === true) {
-      if (!confirm('这个工作树有未提交改动,强制删除?')) return;
+      const files = await loadWorktreeStatus(dir);
+      if (files === null) {
+        if (!confirm('这个工作树有未提交改动,强制删除?')) return;
+      } else if (!(await confirmWorktreeDelete(w, files))) {
+        return;
+      }
       return removeWorktree(w, ctx, true);
     }
     flash('删除工作树失败:' + e.message, 'bad');

@@ -3281,6 +3281,57 @@ ERRORS []
 
 ---
 
+### 8.65 工作树子目录与删除前文件清单
+
+**起因**:§8.61 只列工作树根;TUI 的 `Worktrees` 还会把「会话落在工作树子目录」的目录
+列出来,删除有未提交改动的工作树时也会先列出文件变更(`DialogWorkspaceFileChanges`)。
+面板原来只有根 + 原生 `confirm`,手机上看不见「到底会丢哪些文件」。
+
+**结论**:`openWorktrees()` 在根列表之外,按当前 `projectID` 再拉一次会话,从
+`session.subpath` 派生子目录行(与 TUI `dialog-workspaces.tsx` 的 `subdirectories` 同法);
+子目录只能移入,不能单独删除。删除根遇到 `forceRequired` 时先读 `/api/vcs/status`,
+用新对话框 `#dlgWtDel` 列状态 / 路径 / `+N -M`,再让用户点「仍然删除」或「取消」;
+status 读不到就退回原来的 `confirm`,不把删除卡死。
+
+**改动**:
+
+| 位置 | 行为 |
+|---|---|
+| 子目录来源 | `worktreeSessions(projectID)` 合并本地 `store.sessions` 与 `GET /api/session?project=…&limit=200`;`wtSubdirs()` 只留下 `subpath` 非空、`location.directory` 在某个根下面、且不与根重名的目录 |
+| 排序 | 根照旧(当前根最前、主检出先于 worktree);根和子目录合在一起按「根序号 → 根先于子目录 → 路径」排,和 TUI 的 `toSorted` 一致 |
+| 当前标记 | 会话本身在子目录时,`●` 标在子目录行,不标它的根;动作菜单里移入禁用 |
+| 子目录动作 | 「删除工作树」禁用并写「子目录不能单独删」;移入仍走 `session/move`,目录就是子目录 |
+| 删除预览 | `DELETE force:false` 回 `forceRequired` 后:先 `GET /api/vcs/status?location[directory]=…`,再开 `#dlgWtDel`;文件清单只读 status,不下载补丁 |
+| 预览框 | 文件行 `A/D/M`、相对工作树根的路径、`+N -M`;清单自己滚(240px);默认焦点在「取消」,不把破坏性动作做成回车默认项 |
+| 回退 | status 请求失败 / 对话框节点缺失时,仍用原来的 `confirm`;取消预览不发 `force:true` |
+| 样式 | `.wtfiles / .wtfile / .wtf-*` 全部普通规则;窄屏沿用 `.dlgacts .chip` 的 44px 命中区,不新增 `@media` |
+
+**验证**:
+
+- 真接口:`GET /api/session?project=<id>&limit=200` 正常返回;`GET /api/vcs/status?location[directory]=<dir>`
+  返回 `[{file,status,additions,deletions}]`。
+- `ui-capabilities.html` 浏览器断言:根 / 子目录排序、子目录行标记、会话在子目录时高亮
+  子目录、当前子目录移入禁用、非当前子目录可移入、`forceRequired` 后列出两个文件、取消
+  不重试、点「仍然删除」带 `force:true` 并移除、status 失败回退 `confirm`。
+- 全量回归:见下方「回归」;`node --check public/app.js` 通过。
+
+**取舍**:
+
+- **子目录是「会话去过的地方」,不是文件系统扫描**。与 TUI 一样从会话派生;没会话的
+  子目录不凭空出现,也不多一次 `find`。
+- **最多看 200 条会话**。只用于补子目录,不拿来做列表;拿不到时根列表照旧可用。
+- **删除前只列 status,不列完整 diff**。手机上真正要确认的是「会丢哪些文件、多少行」,
+  不是逐行补丁;完整 diff 仍在 `/diff`。
+- **子目录不能单独删**。删除只能删根;子目录行只是移入目标,避免把「删一个会话目录」和
+  「删整棵工作树」混成一件事。
+
+**回归**:`smoke.sh` 353(仍是 1 项工作树静态锁,条件里补了子目录 / 预览框),
+`ui-capabilities` 167 → **174**(7 项:子目录排序与标记、子目录当前高亮、两个动作菜单、
+删除预览清单、取消、仍然删除、status 回退);其余套件计数不变;全量回归 **0 失败**,
+日志 `/tmp/ocsm-probe/perf/regress-865.log`。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
@@ -3293,7 +3344,7 @@ ERRORS []
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
-| worktree 管理补到列出 / 删除 / 移入 | 复用 `#dlgPick` 和现有 `+ 新建`，不新造对话框；把 TUI `Worktrees` 最常用的后半段补齐 | 只列工程根目录，不拆子目录；删除前不展示文件变更预览，用原生 `confirm`；入口只在 `/worktrees` 命令（§8.61）|
+| worktree 管理补到列出 / 删除 / 移入 | 复用 `#dlgPick` 和现有 `+ 新建`；根之外再按会话 `subpath` 列子目录，删除前用 `#dlgWtDel` 展示 status 文件清单（§8.65 把原来的两处缺口补上）| 子目录只能移入、不能单独删；预览只列文件与增删行数，不列完整 diff；入口只在 `/worktrees` 命令（§8.61 / §8.65）|
 | 变更总览接四档 + 文件树 | `turn` / `branch` / `working` / `committed` 与 TUI 同名同义；多文件时左侧平铺文件树，点文件跳正文，逐文件 reviewed 只在本页内存 | 对比基线不猜 `branch.default`，没 base 时先让用户选；窄屏不显示文件树，reviewed 不持久化（§8.63 / §8.64）|
 | 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
 | 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|

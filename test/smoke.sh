@@ -2200,11 +2200,14 @@ fi
 if has "$APPJS" "api('/api/worktree/refresh'" &&
    has "$APPJS" "/api/worktree?' + new URLSearchParams" &&
    has "$APPJS" "const j = await api('/api/session/' + enc(sid));" &&
+   has "$APPJS" 'function worktreeSessions(projectID)' &&
+   has "$APPJS" 'function wtSubdirs(roots, sessions)' &&
    has "$APPJS" 'function openWorktreeActions(it, ctx)' &&
-   has "$APPJS" 'function wtCurrentRoot(list, dir)'; then
-  echo "PASS: 打开先取会话最新目录,再 refresh 后按 projectID 列;当前根排最前,选中后进动作菜单"; pass=$((pass + 1))
+   has "$APPJS" 'function wtCurrentRoot(list, dir)' &&
+   has "$HOME_HTML" 'id="dlgWtDel"' && has "$CSS" '.wtfiles {'; then
+  echo "PASS: 打开先取会话最新目录,再 refresh 后按 projectID 列;根 / 子目录 / 动作菜单与删除预览框都在"; pass=$((pass + 1))
 else
-  echo "FAIL: 工作树列表 / refresh / 当前根 / 动作菜单缺了一块"; fail=$((fail + 1))
+  echo "FAIL: 工作树列表 / refresh / 子目录 / 当前根 / 动作菜单 / 删除预览框缺了一块"; fail=$((fail + 1))
 fi
 if has "$APPJS" 'function moveSessionToWorktree(sid, directory)' &&
    has "$APPJS" "/api/session/' + enc(sid) + '/move" &&
@@ -2217,17 +2220,21 @@ fi
 SMOKE_DELWT=$(printf '%s' "$APPJS" | sed -n '/^async function removeWorktree(w, ctx, force) {/,/^}/p' 2>/dev/null)
 if [ -n "$SMOKE_DELWT" ] && has "$SMOKE_DELWT" "method: 'DELETE'" &&
    has "$SMOKE_DELWT" 'forceRequired === true' && has "$SMOKE_DELWT" 'force: !!force' &&
+   has "$SMOKE_DELWT" 'loadWorktreeStatus(dir)' &&
+   has "$SMOKE_DELWT" 'confirmWorktreeDelete(w, files)' &&
    has "$SMOKE_DELWT" 'clearSelection();' && has "$APPJS" 'err.data = j && j.data'; then
-  echo "PASS: 删除只对 worktree 开放,有改动先 confirm 再 force;删掉当前目录就回列表"; pass=$((pass + 1))
+  echo "PASS: 删除只对 worktree 开放,有改动先列 status 文件清单再 force;删掉当前目录就回列表"; pass=$((pass + 1))
 else
-  echo "FAIL: 工作树删除的 force 确认 / 当前目录回退 / err.data 解包缺了一块"; fail=$((fail + 1))
+  echo "FAIL: 工作树删除的 force 预览 / 当前目录回退 / err.data 解包缺了一块"; fail=$((fail + 1))
 fi
 SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
 if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.61 worktree 管理' &&
    has "$(cat "$SMOKE_CAP")" '移入:POST session/move' &&
-   has "$(cat "$SMOKE_CAP")" '有未提交改动:先 confirm' &&
+   has "$(cat "$SMOKE_CAP")" '有未提交改动:先读 status' &&
+   has "$(cat "$SMOKE_CAP")" '删除预览点取消' &&
+   has "$(cat "$SMOKE_CAP")" '不在该子目录时' &&
    has "$(cat "$SMOKE_CAP")" '删掉当前会话所在工作树'; then
-  echo "PASS: test/ui-capabilities.html 里有工作树列表 / 移入 / 删除 / force / 当前目录的浏览器断言"; pass=$((pass + 1))
+  echo "PASS: test/ui-capabilities.html 里有工作树列表 / 子目录 / 移入 / 删除预览 / force / 当前目录的浏览器断言"; pass=$((pass + 1))
 else
   echo "FAIL: test/ui-capabilities.html 缺工作树管理的关键断言"; fail=$((fail + 1))
 fi

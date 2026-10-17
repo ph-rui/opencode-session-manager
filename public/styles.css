@@ -1350,6 +1350,35 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, 0.28); }
 .dlgerr[hidden] { display: none; }
 .dlgacts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
+/* §8.65 删除工作树前的文件清单(照 TUI 的 DialogWorkspaceFileChanges)。
+   只列状态与增删行数,不下载补丁;清单自己滚,手机上也别把对话框撑出屏幕。 */
+.wtfiles {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel2);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.wtfile {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.wtfile:last-child { border-bottom: none; }
+.wtf-s { flex: none; width: 1.2em; font-weight: 700; }
+.wtf-s.add { color: var(--diff-add-fg); }
+.wtf-s.del { color: var(--diff-del-fg); }
+.wtf-s.mod { color: var(--muted); }
+.wtf-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtf-stat { flex: none; white-space: nowrap; }
+.wtf-add { color: var(--diff-add-fg); }
+.wtf-del { color: var(--diff-del-fg); }
+
 /* §8.57 变更总览(照 TUI 的 /diff 的 Last turn 档):比普通对话框宽,正文自己滚。
    桌面主布局一字不动 —— 这个框只有敲 /diff 或命令面板里选才出来。 */
 dialog.dlg.dlgdiff {

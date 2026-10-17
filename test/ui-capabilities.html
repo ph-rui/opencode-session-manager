@@ -74,6 +74,13 @@
     <p id="exportErr" hidden></p>
     <button type="button" id="exportOk">导出</button></div></dialog>
 
+  <dialog id="dlgWtDel" class="dlg"><div class="dlgform"><h3>删除工作树?</h3>
+    <p id="wtDelMsg"></p>
+    <div id="wtDelFiles" role="list"></div>
+    <p id="wtDelEmpty" hidden>服务端说有未提交改动,但没列出文件。</p>
+    <button type="button" id="wtDelCancel">取消</button>
+    <button type="button" id="wtDelOk">仍然删除</button></div></dialog>
+
   <dialog id="dlgTui" class="dlg"><div class="dlgform"><h3>在 TUI 中继续</h3>
     <input id="tuiCmd"><button type="button" id="tuiCopy">复制</button></div></dialog>
 
@@ -158,6 +165,15 @@
     window.__wtListFail = false;
     window.__wtMoveFail = false;
     window.__wtDeleteForceOnce = false;
+    window.__wtStatusFail = false;
+    window.__wtStatusFiles = [
+      { file: '/wt/one/a.js', status: 'modified', additions: 2, deletions: 1 },
+      { file: '/wt/one/tmp.txt', status: 'added', additions: 4, deletions: 0 },
+    ];
+    window.__projectSessions = [
+      { id: 'ses_sub', title: '子目录会话', projectID: 'pj1', subpath: 'sub',
+        time: { created: 1, updated: 2 }, location: { directory: '/wt/one/sub' } },
+    ];
     window.__wtDeletes = [];
     window.__wtMoves = [];
     window.vcsBaseFail = false;
@@ -249,6 +265,10 @@
         if (window.vcsBaseFail) return fail(503, { message: 'Choose a review base' });
         return json({ location: { directory: '/proj/a' }, data: window.vcsBaseData });
       }
+      if (u.indexOf('/api/vcs/status?') === 0) {
+        if (window.__wtStatusFail) return fail(500, { message: 'status boom' });
+        return json({ location: { directory: '/proj/a' }, data: window.__wtStatusFiles });
+      }
       if (u.indexOf('/api/vcs/diff?') === 0) {
         if (window.vcsDiffFail) return fail(500, { message: 'vcs diff boom' });
         return json({ location: { directory: '/proj/a' }, data: window.vcsDiffEmpty ? [] : window.vcsDiffFiles });
@@ -271,6 +291,9 @@
         return json({ data: window.diffEmpty ? [] : DIFF_FILES });
       }
       if (/^\/api\/session\/[^/?]+\/(inbox|message|form|permission)/.test(u)) return json({ data: [] });
+      if (u.indexOf('/api/session?') === 0 && /[?&]project=/.test(u)) {
+        return json({ data: window.__projectSessions, cursor: {} });
+      }
       if (u.indexOf('/api/session?') === 0) {
         if (window.listFailOnce) {
           window.listFailOnce = false;
@@ -1024,6 +1047,7 @@
         window.__wtListFail = false;
         window.__wtMoveFail = false;
         window.__wtDeleteForceOnce = false;
+        window.__wtStatusFail = false;
         window.__wtDeletes = [];
         window.__wtMoves = [];
         window.confirmMsg = null;
@@ -1054,9 +1078,39 @@
         !!q('#pickList .pick-item.current') &&
         q('#pickList .pick-item.current .pi-label').textContent === '/proj/a',
         { title: q('#pickTitle').textContent, cur: q('#pickList .pick-item.current .pi-label') });
-      T('当前根排最前,其余主检出在前、worktree 在后',
-        wtLabels().join('|') === '/proj/a|/wt/one|/wt/two', wtLabels());
+      T('当前根排最前,其余主检出在前、worktree 在后,子目录跟在自己的根后面',
+        wtLabels().join('|') === '/proj/a|/wt/one|/wt/one/sub|/wt/two', wtLabels());
+      T('子目录行标「子目录」',
+        wtItem('/wt/one/sub') && wtItem('/wt/one/sub').sub === '子目录', wtItem('/wt/one/sub'));
 
+      resetWt();
+      store.sessions.get('ses_a').location.directory = '/wt/one/sub';
+      await openWorktrees();
+      T('会话落在子目录时,高亮的是子目录行而不是根',
+        q('#pickList .pick-item.current .pi-label').textContent === '/wt/one/sub' &&
+        wtLabels()[0] === '/wt/one',
+        { cur: q('#pickList .pick-item.current .pi-label').textContent, labels: wtLabels() });
+      pickChoose(wtItem('/wt/one/sub'));
+      T('当前就在子目录:移入与删除都禁用',
+        store.pickItems[0].disabled === true &&
+        store.pickItems[0].sub === '当前就在这个目录' &&
+        store.pickItems[1].disabled === true &&
+        store.pickItems[1].sub === '子目录不能单独删',
+        store.pickItems);
+      closePick();
+
+      resetWt();
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one/sub'));
+      T('不在该子目录时:移入可用,删除项仍禁用并说明不能单独删',
+        store.pickItems[0].disabled === false &&
+        store.pickItems[1].disabled === true &&
+        store.pickItems[1].sub === '子目录不能单独删',
+        store.pickItems);
+      closePick();
+
+      resetWt();
+      await openWorktrees();
       pickChoose(wtItem('/wt/one'));
       T('点工作树打开动作菜单:移入 / 删除 / 刷新',
         q('#pickTitle').textContent.indexOf('/wt/one') >= 0 &&
@@ -1098,13 +1152,52 @@
       window.__wtDeleteForceOnce = true;
       await openWorktrees();
       pickChoose(wtItem('/wt/one'));
-      await pickChoose(store.pickItems[1]);
-      T('有未提交改动:先 confirm,再带 force=true 重试',
+      var wtForceP = pickChoose(store.pickItems[1]);
+      await drain(20);
+      T('有未提交改动:先读 status 并列出文件,不直接弹 confirm',
+        q('#dlgWtDel').open === true &&
+        reqs(/^\/api\/vcs\/status\?/).length === 1 &&
+        qa('#wtDelFiles .wtfile').length === 2 &&
+        q('#wtDelFiles').textContent.indexOf('a.js') >= 0 &&
+        q('#wtDelFiles').textContent.indexOf('tmp.txt') >= 0 &&
+        window.__wtDeletes.length === 1 &&
+        window.__wtDeletes[0].force === false && window.confirmMsg === null,
+        { open: q('#dlgWtDel').open, files: q('#wtDelFiles').textContent,
+          deletes: window.__wtDeletes, confirm: window.confirmMsg });
+      q('#wtDelCancel').click();
+      await wtForceP;
+      T('删除预览点取消:不重试 force,工作树还在',
+        window.__wtDeletes.length === 1 && q('#dlgWtDel').open === false &&
+        window.__worktrees.some(function (w) { return w.directory === '/wt/one'; }),
+        { deletes: window.__wtDeletes, open: q('#dlgWtDel').open, worktrees: window.__worktrees });
+
+      resetWt();
+      window.__wtDeleteForceOnce = true;
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one'));
+      var wtForceP2 = pickChoose(store.pickItems[1]);
+      await drain(20);
+      q('#wtDelOk').click();
+      await wtForceP2;
+      T('删除预览点仍然删除:带 force=true 重试并移除',
         window.__wtDeletes.length === 2 &&
         window.__wtDeletes[0].force === false && window.__wtDeletes[1].force === true &&
-        window.confirmMsg && window.confirmMsg.indexOf('未提交改动') >= 0 &&
+        q('#dlgWtDel').open === false &&
         wtLabels().indexOf('/wt/one') < 0,
-        { deletes: window.__wtDeletes, confirm: window.confirmMsg });
+        { deletes: window.__wtDeletes, open: q('#dlgWtDel').open, labels: wtLabels() });
+
+      resetWt();
+      window.__wtDeleteForceOnce = true;
+      window.__wtStatusFail = true;
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one'));
+      await pickChoose(store.pickItems[1]);
+      T('status 读不到时退回 confirm,仍能带 force=true 删除',
+        window.__wtDeletes.length === 2 &&
+        window.__wtDeletes[1].force === true &&
+        window.confirmMsg && window.confirmMsg.indexOf('未提交改动') >= 0 &&
+        q('#dlgWtDel').open === false,
+        { deletes: window.__wtDeletes, confirm: window.confirmMsg, open: q('#dlgWtDel').open });
 
       resetWt();
       store.sessions.get('ses_a').location.directory = '/wt/one';

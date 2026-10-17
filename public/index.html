@@ -279,6 +279,20 @@
     </div>
   </dialog>
 
+  <dialog id="dlgWtDel" class="dlg">
+    <div class="dlgform">
+      <h3>删除工作树?</h3>
+      <p class="dlghint" id="wtDelMsg"></p>
+      <div class="wtfiles" id="wtDelFiles" role="list" aria-label="未提交的文件改动"></div>
+      <p class="dlghint" id="wtDelEmpty" hidden>服务端说有未提交改动,但没列出文件。</p>
+      <p class="dlghint">删除后这个目录连同里面的改动一起消失;会话本身不会被删除。</p>
+      <div class="dlgacts">
+        <button type="button" class="chip" id="wtDelCancel">取消</button>
+        <button type="button" class="chip danger" id="wtDelOk">仍然删除</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="dlgTui" class="dlg">
     <div class="dlgform">
       <h3>在 TUI 中继续</h3>
