@@ -58,6 +58,8 @@
     var SESSIONS = [
       { id: 'ses_a', title: '附件会话', projectID: 'pj1', time: { created: 1, updated: 5 },
         tokens: { input: 10, output: 5 }, cost: 0, location: { directory: '/proj/a' } },
+      { id: 'ses_b', title: '另一个会话', projectID: 'pj1', time: { created: 2, updated: 4 },
+        tokens: {}, cost: 0, location: { directory: '/proj/b' } },
     ];
     var AGENTS = [{ id: 'build', name: 'Build', mode: 'primary', hidden: false }];
     var MODELS = [{ providerID: 'company', modelID: 'deepseek-v4-flash', name: 'Flash', enabled: true, variants: [] }];
@@ -455,6 +457,34 @@
       T('send:发送成功后清空待发送附件', store.attachments.length === 0 && q('#attach').hidden === true, store.attachments);
       T('send:输入框被清空', inp.value === '');
 
+      /* 只有图片、没有文字:照 TUI 照样发(正文是空串,files 带上图片) */
+      inp.value = '';
+      store.attachments = [{ id: 'att_img', name: 'shot.png', size: 123, mime: 'image/png',
+        path: '/tmp/oc-up/shot.png', uri: 'file:///tmp/oc-up/shot.png', busy: false }];
+      renderAttachments();
+      window.calls.length = 0;
+      await send();
+      var imgCall = window.calls.filter(function (c) { return /\/prompt$/.test(c.url); })[0];
+      var imgBody = imgCall ? JSON.parse(imgCall.body) : null;
+      T('send:只有图片没有文字也能发',
+        !!imgCall && imgBody.text === '' && imgBody.files.length === 1 &&
+        imgBody.files[0].name === 'shot.png', imgBody);
+      T('send:纯图片发送成功后清空附件',
+        store.attachments.length === 0 && q('#attach').hidden === true, store.attachments);
+
+      /* 上传还没完成时先拦住:此时没有 uri,发出去会把图丢掉 */
+      store.attachments = [{ id: 'att_busy', name: 'uploading.png', size: 10, mime: 'image/png',
+        path: '', uri: '', busy: true }];
+      renderAttachments();
+      window.calls.length = 0;
+      await send();
+      T('send:附件上传中先拦住,不发 prompt',
+        window.calls.every(function (c) { return !/\/prompt$/.test(c.url); }) &&
+        q('#toast').textContent.indexOf('还在上传') >= 0,
+        [window.calls.map(function (c) { return c.url; }), q('#toast').textContent]);
+      store.attachments = [];
+      renderAttachments();
+
       /* 发送失败:附件留着,方便重发 */
       await queueFiles([file('keep.txt', 'keep')]);
       var refRange = resolveMentions('看 @Makefile');
@@ -472,9 +502,14 @@
       store.attachments = [];
       await queueFiles([file('z.txt', 'z')]);
       T('切会话前有附件', store.attachments.length === 1);
+      await selectSession('ses_b');
+      T('切到别的会话不带走附件', store.attachments.length === 0, store.attachments);
       await selectSession('ses_a');
-      T('切会话会清空待发送附件(不带到另一个会话)', store.attachments.length === 0, store.attachments);
+      T('切回原会话恢复自己的附件',
+        store.attachments.length === 1 && store.attachments[0].name === 'z.txt', store.attachments);
       T('切会话也关掉补全', q('#mentions').hidden === true);
+      store.attachments = [];
+      renderAttachments();
       store.selected = null;
       updateComposerControls();
       T('没有选中会话时附件按钮是禁用的', q('#btnAttach').disabled === true);

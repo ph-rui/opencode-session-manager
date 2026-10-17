@@ -2414,6 +2414,23 @@ else
   echo "FAIL: §8.73 的置顶存储 / 排序 / 入口 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R30 组:图片单独发送 + 附件按会话保留(§8.74)----
+if has "$APPJS" 'const attachCache = new Map();' &&
+   has "$APPJS" 'function saveCurrentAttachments(sid)' &&
+   has "$APPJS" 'function restoreAttachments(sid)' &&
+   has "$APPJS" 'function dropSessionAttachments(sid)' &&
+   has "$APPJS" 'saveCurrentAttachments(prev);' &&
+   has "$APPJS" 'restoreAttachments(id);' &&
+   has "$APPJS" 'const owner = store.attachments;' &&
+   has "$APPJS" '附件还在上传,稍等一下再发' &&
+   has "$APPJS" 'if (!text && !files.length) return;' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" 'send:只有图片没有文字也能发' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '切回原会话恢复自己的附件'; then
+  echo "PASS: §8.74 图片可单独发送、上传中拦截、附件按会话隔离并在切回时恢复"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.74 的图片单发 / 附件缓存 / 上传归属或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

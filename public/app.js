@@ -2602,6 +2602,7 @@ function clearSelection() {
   if (id) {
     cacheCurrentMessages(); // §8.55 取消选中也先留一份(切回来还能秒开)
     saveCurrentDraft(id); // §8.71:回列表也把没发出去的正文留在那个会话名下
+    saveCurrentAttachments(id); // §8.74:附件也留在那个会话名下
   }
   store.selected = null;
   persistSelected(null, 'replace');
@@ -3191,6 +3192,7 @@ async function selectSession(id) {
   if (prev) {
     saveScrollAnchor();
     saveCurrentDraft(prev); // §8.71:输入框里的草稿按会话隔离,切走先存
+    saveCurrentAttachments(prev); // §8.74:待发送附件也按会话隔离
   }
   // §8.55 切走的这一份先留在内存里,切回来时先用它顶上(再后台对账)
   if (prev && prev !== id) cacheCurrentMessages();
@@ -3212,7 +3214,7 @@ async function selectSession(id) {
   store.pending = false;
   store.forceBottom = !rs;
   store.lastTop = 0; // 滚口要清空,上个会话的 scrollTop 不能拿来跟新会话比(会被当成「用户往上滚」)
-  clearAttachments(); // 待发送附件属于上一个会话,不带过去(H 组 6)
+  restoreAttachments(id); // §8.74:切回来把该会话自己的待发送附件放回输入区(没有就空)
   closeMentions();
   closeCommands();
   // 输入历史是每会话独立的(I 组):切走后不再把游标留在上一条
@@ -6797,6 +6799,29 @@ function resolveMentions(text) {
 
 /* ---- 待发送附件列表(输入框上方那排 chip)---- */
 
+// §8.74 附件跟着会话走:切走时把这个会话的数组原样存进内存,切回来还给它。
+// 存【数组引用】而不是副本 —— 上传是异步的,切走之后 uploadFile() 仍会改 item.uri /
+// busy;如果存副本,上传失败时的 splice 就落不到缓存里,切回来会看到一个永远「上传中」的幽灵。
+const attachCache = new Map();
+
+function saveCurrentAttachments(sid) {
+  if (!sid) return;
+  if (store.attachments.length) attachCache.set(sid, store.attachments);
+  else attachCache.delete(sid);
+}
+
+function restoreAttachments(sid) {
+  store.attachments = (sid && attachCache.get(sid)) || [];
+  renderAttachments();
+}
+
+// 发送成功 / 服务端命令消费附件后:缓存和当前显示一起清掉
+function dropSessionAttachments(sid) {
+  if (sid) attachCache.delete(sid);
+  store.attachments = [];
+  renderAttachments();
+}
+
 function renderAttachments() {
   const box = $('#attach');
   if (!box) return;
@@ -6867,7 +6892,11 @@ async function uploadFile(file) {
 
 async function queueFiles(list) {
   const picked = Array.prototype.slice.call(list || []);
-  if (!picked.length || !store.selected) return;
+  const sid = store.selected;
+  if (!picked.length || !sid) return;
+  // 记住「这批文件属于哪个会话」:上传期间用户可能切走,完成 / 失败都得写回同一个数组,
+  // 不能拿切走后的 store.attachments 开刀。
+  const owner = store.attachments;
   let failed = 0;
   for (const f of picked) {
     if ((f.size || 0) > UPLOAD_MAX) {
@@ -6884,21 +6913,22 @@ async function queueFiles(list) {
       uri: '',
       busy: true,
     };
-    store.attachments.push(item);
-    renderAttachments();
+    owner.push(item);
+    if (store.selected === sid) renderAttachments();
     try {
       const up = await uploadFile(f);
       item.path = up.path;
       item.uri = up.uri;
       item.busy = false;
     } catch (e) {
-      store.attachments = store.attachments.filter((a) => a !== item);
+      const at = owner.indexOf(item);
+      if (at >= 0) owner.splice(at, 1);
       flash('上传「' + item.name + '」失败:' + e.message, 'bad');
       failed++;
     }
-    renderAttachments();
+    if (store.selected === sid) renderAttachments();
   }
-  if (failed) updateComposerControls();
+  if (failed && store.selected === sid) updateComposerControls();
 }
 
 /* ---- @ 文件补全(GET /api/fs/find,与 TUI 同源)---- */
@@ -8001,15 +8031,21 @@ function setupTuiKeys() {
 
 async function send() {
   const text = $('#input').value.trim();
-  if (!text || !store.selected) return;
+  if (!store.selected) return;
   const sid = store.selected;
+  // 附件还在上传时先别发:此时还没有 uri,发出去会把图悄悄丢掉
+  if (store.attachments.some((a) => a.busy)) {
+    flash('附件还在上传,稍等一下再发', 'warn');
+    return;
+  }
   const busy = isRunning(sid) || store.running;
   const willQueue = busy && store.delivery === 'queue';
-  // 附件 = 已上传的文件 + 正文里确认过的 @ 引用
+  // 附件 = 已上传的文件 + 正文里确认过的 @ 引用(§8.74:只有图片、没有文字也能发)
   const files = store.attachments
     .filter((a) => a.uri)
     .map((a) => ({ uri: a.uri, name: a.name }))
     .concat(resolveMentions(text));
+  if (!text && !files.length) return;
   const body = { text };
   if (files.length) body.files = files;
   if (busy) body.delivery = store.delivery;
@@ -8025,7 +8061,7 @@ async function send() {
     if (ok) saveDraft(sid, ''); // §8.71:命令确实执行了,这份草稿就完成了使命
     if (ok && !parsed.cmd.panel) {
       store.mentionHits.clear();
-      clearAttachments(); // 服务端命令确实消费了附件,才清空
+      dropSessionAttachments(sid); // 服务端命令确实消费了附件,才清空
     }
     updateComposerControls();
     setTimeout(() => {
@@ -8052,7 +8088,7 @@ async function send() {
       flash('已排队,当前回合结束后执行', 'ok');
       store.pending = false;
     }
-    clearAttachments(); // 发送成功才清空(失败还能原样重发)
+    dropSessionAttachments(sid); // 发送成功才清空(失败还能原样重发)
     saveDraft(sid, ''); // §8.71:发送成功,草稿功成身退;失败则留着,切回来还能接着改
     store.mentionHits.clear();
   } catch (e) {
