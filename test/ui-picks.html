@@ -111,7 +111,15 @@
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
       if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
-      if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) return json({ data: { id: 'msg_new' } });
+      if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) {
+        var pb = opts && opts.body ? JSON.parse(opts.body) : {};
+        if (pb.text === '故意失败') {
+          return { ok: false, status: 500, text: async function () {
+            return JSON.stringify({ message: '测试失败' });
+          } };
+        }
+        return json({ data: { id: 'msg_new' } });
+      }
       if (/^\/api\/session\/[^/?]+\/fork$/.test(u)) {
         return json({ data: { id: 'ses_fork', title: '分叉会话', projectID: 'pj1',
           time: { created: 5, updated: 950 }, tokens: {}, cost: 0,
@@ -487,6 +495,51 @@
       T('命令面板:有 /timeline 与 /fork',
         PANEL_COMMANDS.some(function (c) { return c.name === 'timeline'; }) &&
         PANEL_COMMANDS.some(function (c) { return c.name === 'fork'; }));
+
+      /* ================= 每会话输入草稿(§8.71) ================= */
+      try { sessionStorage.removeItem('ocs.drafts'); } catch (_) {}
+      store.selected = 'ses_a';
+      q('#input').value = '甲会话没发出去的草稿';
+      await selectSession('ses_b');
+      T('草稿:切走时存进上一个会话',
+        draftText('ses_a') === '甲会话没发出去的草稿' && q('#input').value === '',
+        [draftText('ses_a'), q('#input').value]);
+
+      q('#input').value = '乙会话草稿';
+      await selectSession('ses_a');
+      T('草稿:切回来填回自己的', q('#input').value === '甲会话没发出去的草稿', q('#input').value);
+      T('草稿:两个会话互不串', draftText('ses_b') === '乙会话草稿', draftText('ses_b'));
+
+      q('#input').value = '发出去就清';
+      saveDraft('ses_a', q('#input').value);
+      window.calls.length = 0;
+      await send();
+      await settle(function () { return hadCall(/\/prompt$/); });
+      T('草稿:发送成功后清掉', draftText('ses_a') === '' && q('#input').value === '',
+        [draftText('ses_a'), q('#input').value]);
+
+      q('#input').value = '故意失败';
+      saveDraft('ses_a', q('#input').value);
+      await send();
+      T('草稿:发送失败时保留,切回来还能接着改',
+        draftText('ses_a') === '故意失败', draftText('ses_a'));
+
+      q('#input').value = '清掉这句';
+      saveDraft('ses_a', q('#input').value);
+      clearInput();
+      T('草稿:/clear 把草稿一起清掉', draftText('ses_a') === '', draftText('ses_a'));
+
+      saveDraft('ses_a', '回列表前的草稿');
+      q('#input').value = '回列表前的草稿';
+      clearSelection();
+      T('草稿:回列表时存下并清空输入框',
+        store.selected === null && q('#input').value === '' && draftText('ses_a') === '回列表前的草稿',
+        [store.selected, q('#input').value, draftText('ses_a')]);
+      await selectSession('ses_a');
+      T('草稿:重新打开会话恢复', q('#input').value === '回列表前的草稿', q('#input').value);
+
+      saveDraft('ses_a', '   ');
+      T('草稿:纯空白不算草稿', draftText('ses_a') === '', draftText('ses_a'));
 
       await openModelPick();
       T('/models:标题', q('#pickTitle').textContent === '选择模型');

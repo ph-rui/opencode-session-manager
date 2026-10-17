@@ -2441,7 +2441,10 @@ function persistSelected(id, mode) {
 // 取消选中:回到「未选择会话」的空态。删除会话、以及浏览器后退到面板最初那一格,都走这里。
 function clearSelection() {
   const id = store.selected;
-  if (id) cacheCurrentMessages(); // §8.55 取消选中也先留一份(切回来还能秒开)
+  if (id) {
+    cacheCurrentMessages(); // §8.55 取消选中也先留一份(切回来还能秒开)
+    saveCurrentDraft(id); // §8.71:回列表也把没发出去的正文留在那个会话名下
+  }
   store.selected = null;
   persistSelected(null, 'replace');
   store.messages.clear();
@@ -2461,6 +2464,7 @@ function clearSelection() {
   updateJumpLatest(); // 没选中会话了 → 收起来
   $('#chatTitle').textContent = '未选择会话';
   $('#chatMeta').textContent = '';
+  $('#input').value = ''; // §8.71:草稿已存在那个会话名下,输入框回到空态
   clearAttachments();
   closeMentions();
   closeCommands();
@@ -2573,6 +2577,8 @@ function setupScrollMemory() {
     saveScrollAnchor();
   });
   window.addEventListener('pagehide', saveScrollAnchor); // 关页/刷新前兜一次,避免节流丢掉最后一个位置
+  // 刷新 / 关页也把输入框正文存一次:程序化补全(选命令、选 @ 引用)不走 input 事件
+  window.addEventListener('pagehide', () => saveCurrentDraft(store.selected));
 }
 
 /* ---------------- 窄屏「滚到顶自动拉更旧」 ----------------
@@ -3024,7 +3030,10 @@ async function selectSession(id) {
   const prev = store.selected;
   // 离开上一个会话前,先把它读到哪记下来(H 组 3);重复打开当前会话也先记,
   // 免得下面清空消息区时把用户刚滚到的位置丢掉。
-  if (prev) saveScrollAnchor();
+  if (prev) {
+    saveScrollAnchor();
+    saveCurrentDraft(prev); // §8.71:输入框里的草稿按会话隔离,切走先存
+  }
   // §8.55 切走的这一份先留在内存里,切回来时先用它顶上(再后台对账)
   if (prev && prev !== id) cacheCurrentMessages();
   // 深链恢复可能已经塞了一个显式锚点;其它入口(列表 / 标签 / 前后退)按
@@ -3034,6 +3043,7 @@ async function selectSession(id) {
   store.restoreScroll = rs;
   store.selected = id;
   persistSelected(id);
+  restoreDraft(id); // §8.71:切回来先把这个会话上次没发出去的正文填回去(没有就清空)
   touchTab(id); // §8.59 打开过的会话自动进标签栏
   /* §8.55 从别的会话切回来 → 缓存命中就先画,不空着等请求。
    * prev 为空(首屏 / 刷新恢复 / 取消选中后重选)不走缓存,行为和以前一样。 */
@@ -6870,6 +6880,7 @@ function setupAttachments() {
   }
   if (inp) {
     inp.addEventListener('input', () => {
+      saveDraft(store.selected, inp.value); // §8.71:边打边存,刷新/切走都不会丢
       renderAttachments();
       clearTimeout(mentionTimer);
       // 行首敲 / 走命令面板,否则才看 @ 文件补全
@@ -6960,6 +6971,7 @@ const HELP_KEYS = [
 function clearInput() {
   const el = $('#input');
   if (el) el.value = '';
+  saveDraft(store.selected, ''); // §8.71:/clear 也把草稿一起清掉
   closeCommands();
   closeMentions();
   renderAttachments();
@@ -7500,6 +7512,55 @@ function commandKey(e) {
   return false;
 }
 
+/* ---------------------------- 每会话输入草稿(§8.71) ----------------------------
+ * 照 TUI 的 saveDraft/takeDraft:切走时把输入框正文存到这个会话名下,切回来再填回去。
+ * 存在 sessionStorage(只在本标签页有效,和滚动存档同一档),刷新也能找回来;附件不存
+ * ——待发送附件在切会话时本来就清空,草稿先把正文这一件最容易丢的东西兜住。 */
+const DRAFT_KEY = 'ocs.drafts';
+const DRAFT_MAX = 20;
+
+function readDraftMap() {
+  try {
+    const m = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}');
+    return m && typeof m === 'object' ? m : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function draftText(sid) {
+  if (!sid) return '';
+  const v = readDraftMap()[sid];
+  return typeof v === 'string' ? v : '';
+}
+
+function saveDraft(sid, text) {
+  if (!sid) return;
+  const t = String(text == null ? '' : text);
+  const m = readDraftMap();
+  delete m[sid]; // 先删再插:超额时淘汰的是最久没动过的
+  if (t.trim()) m[sid] = t;
+  const keys = Object.keys(m);
+  for (let i = 0; i < keys.length - DRAFT_MAX; i++) delete m[keys[i]];
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(m));
+  } catch (_) {}
+}
+
+// 当前输入框里的「真草稿」:在历史里翻的时候,显出来的是旧消息,真正的草稿在 histDraft。
+function saveCurrentDraft(sid) {
+  if (!sid) return;
+  const el = $('#input');
+  saveDraft(sid, store.histAt >= 0 ? store.histDraft : (el ? el.value : ''));
+}
+
+function restoreDraft(sid) {
+  const el = $('#input');
+  if (el) el.value = draftText(sid);
+  store.histAt = -1;
+  store.histDraft = '';
+}
+
 /* ---------------------------- 输入历史(↑/↓) ---------------------------- */
 
 function pushHistory(sid, text) {
@@ -7781,6 +7842,7 @@ async function send() {
     closeMentions();
     renderAttachments();
     const ok = await runCommand(parsed, sid, files, busy);
+    if (ok) saveDraft(sid, ''); // §8.71:命令确实执行了,这份草稿就完成了使命
     if (ok && !parsed.cmd.panel) {
       store.mentionHits.clear();
       clearAttachments(); // 服务端命令确实消费了附件,才清空
@@ -7811,6 +7873,7 @@ async function send() {
       store.pending = false;
     }
     clearAttachments(); // 发送成功才清空(失败还能原样重发)
+    saveDraft(sid, ''); // §8.71:发送成功,草稿功成身退;失败则留着,切回来还能接着改
     store.mentionHits.clear();
   } catch (e) {
     alert('发送失败:' + e.message);

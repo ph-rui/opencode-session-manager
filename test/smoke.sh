@@ -2365,6 +2365,22 @@ else
   echo "FAIL: §8.70 的时间线 / 分叉函数、命令或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R27 组:每会话输入草稿(§8.71 / A4)----
+if has "$APPJS" "const DRAFT_KEY = 'ocs.drafts'" &&
+   has "$APPJS" 'function saveDraft(sid, text)' &&
+   has "$APPJS" 'function restoreDraft(sid)' &&
+   has "$APPJS" 'function saveCurrentDraft(sid)' &&
+   has "$APPJS" 'saveCurrentDraft(prev);' &&
+   has "$APPJS" 'restoreDraft(id);' &&
+   has "$APPJS" 'saveDraft(store.selected, inp.value);' &&
+   has "$APPJS" "saveDraft(sid, '');" &&
+   has "$(cat "$SMOKE_PICKS")" '草稿:切回来填回自己的' &&
+   has "$(cat "$SMOKE_PICKS")" '草稿:发送失败时保留,切回来还能接着改'; then
+  echo "PASS: §8.71 草稿按会话存/取,切走保存、切回填回,发送成功清、失败留,/clear 与回列表也处理"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.71 的草稿存取 / 切换接线 / 发送清理或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
