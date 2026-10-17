@@ -21,6 +21,7 @@ const path = require('path');
 const os = require('os');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { Readable, Transform } = require('stream');
 const { StringDecoder } = require('string_decoder');
 
@@ -271,6 +272,38 @@ function allowStatusText() {
 
 const MESSAGE_LIST_RE = /^\/api\/session\/[^/?]+\/message(\?|$)/;
 
+/* §8.54 慢网(VPN)下的传输:静态资源与大块 JSON 一律按客户端能力压一遍。
+ * 之前只发了 ETag/no-cache,body 是原样明文 —— 面板首页 363KB、一条 100 条的消息
+ * 列表 1MB,走 VPN 时「正在加载」就挂在那儿。brotli q5 实测能到 20~30%,
+ * gzip 是兜底;SSE 绝不能压(text/event-stream 不进这条路径)。 */
+const BROTLI_OPTS = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } };
+
+function acceptedEncoding(req) {
+  const ae = String((req.headers && req.headers['accept-encoding']) || '').toLowerCase();
+  if (/(^|[,\s])br(\s*;|,|$)/.test(ae)) return 'br';
+  if (/(^|[,\s])gzip(\s*;|,|$)/.test(ae)) return 'gzip';
+  return '';
+}
+
+function encodeBody(buf, enc) {
+  if (enc === 'br') return zlib.brotliCompressSync(buf, BROTLI_OPTS);
+  if (enc === 'gzip') return zlib.gzipSync(buf, { level: 6 });
+  return buf;
+}
+
+/* 静态文件的压缩结果按「文件 + ETag + 编码」缓存:app.js 286KB 压一次约 10ms,
+ * 没必要每个请求都压。上限很小 —— 面板只有三四个静态文件。 */
+const staticEncoded = new Map();
+function encodeStatic(file, etag, data, enc) {
+  const key = file + '|' + etag + '|' + enc;
+  const hit = staticEncoded.get(key);
+  if (hit) return hit;
+  const out = encodeBody(data, enc);
+  if (staticEncoded.size >= 24) staticEncoded.clear();
+  staticEncoded.set(key, out);
+  return out;
+}
+
 function isMessageListUrl(url, method, status, contentType) {
   return (
     method === 'GET' && status === 200 && MESSAGE_LIST_RE.test(url || '') && /json/i.test(contentType || '')
@@ -449,9 +482,10 @@ async function proxy(req, res, attempt) {
   // API 一律不缓存:会话/消息/状态是活的,别让浏览器(或中间的 http 缓存)拿旧的糊弄。
   outHeaders['cache-control'] = 'no-store';
 
-  /* 消息列表整体过一遍:摘掉面板不显示的 data: 图(见 stripToolUris)。这条响应为了省流量
-   * 要先整个读进来,所以走单独一条路;其余一切(含 SSE)仍然是原样的流式透传。 */
-  if (isMessageListUrl(req.url, req.method, upstream.status, outHeaders['content-type'])) {
+  /* §8.54 GET 的 JSON 响应统一缓冲后压缩:消息列表还要先摘掉面板不显示的 data: 图
+   * (见 stripToolUris)。SSE(text/event-stream)与其它流式响应照旧透传,不碰。 */
+  const isJson = /json/i.test(outHeaders['content-type'] || '');
+  if (req.method === 'GET' && upstream.status === 200 && isJson) {
     const raw = await readAll(upstream.body);
     if (raw == null) {
       try {
@@ -460,11 +494,23 @@ async function proxy(req, res, attempt) {
       return;
     }
     let out = raw;
-    try {
-      const json = JSON.parse(raw.toString('utf8'));
-      if (stripToolUris(json)) out = Buffer.from(JSON.stringify(json));
-    } catch (_) {
-      out = raw; // 不是 JSON / 结构不认识:原样发
+    if (isMessageListUrl(req.url, req.method, upstream.status, outHeaders['content-type'])) {
+      try {
+        const json = JSON.parse(raw.toString('utf8'));
+        if (stripToolUris(json)) out = Buffer.from(JSON.stringify(json));
+      } catch (_) {
+        out = raw; // 不是 JSON / 结构不认识:原样发
+      }
+    }
+    const enc = acceptedEncoding(req);
+    if (enc && out.length >= 1024) {
+      out = encodeBody(out, enc);
+      outHeaders['content-encoding'] = enc;
+      // 上游有时已经带了 Vary(Accept-Encoding),别重复追加
+      const vary = String(outHeaders['vary'] || '');
+      if (!/accept-encoding/i.test(vary)) {
+        outHeaders['vary'] = vary ? vary + ', accept-encoding' : 'accept-encoding';
+      }
     }
     outHeaders['content-length'] = String(out.length);
     res.writeHead(upstream.status, outHeaders);
@@ -546,7 +592,9 @@ function serveStatic(req, res) {
     const etag = '"' + st.size.toString(16) + '-' + Math.floor(st.mtimeMs).toString(16) + '"';
     const lastMod = st.mtime.toUTCString();
     if (req.headers['if-none-match'] === etag) {
-      res.writeHead(304, { etag, 'cache-control': 'no-cache', 'last-modified': lastMod });
+      res.writeHead(304, {
+        etag, 'cache-control': 'no-cache', 'last-modified': lastMod, vary: 'accept-encoding',
+      });
       res.end();
       return;
     }
@@ -556,13 +604,20 @@ function serveStatic(req, res) {
         res.end('not found');
         return;
       }
-      res.writeHead(200, {
+      const enc = acceptedEncoding(req);
+      const headers = {
         'content-type': MIME[path.extname(file)] || 'application/octet-stream',
         etag,
         'last-modified': lastMod,
         'cache-control': 'no-cache',
-      });
-      res.end(data);
+        // 同一份文件按编码各存一份:中间缓存/浏览器协商时才不会把 br 的 body 给 gzip 的客户端
+        vary: 'accept-encoding',
+      };
+      const body = enc ? encodeStatic(file, etag, data, enc) : data;
+      if (enc) headers['content-encoding'] = enc;
+      headers['content-length'] = String(body.length);
+      res.writeHead(200, headers);
+      res.end(body);
     });
   });
 }

@@ -77,7 +77,10 @@
       var method = (opts && opts.method) || 'GET';
       window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
       var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
-      if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (m) {
+        if (window.__msgGate) await window.__msgGate;
+        return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      }
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
@@ -498,7 +501,8 @@
       window.__timeouts.length = 0;
       feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', ordinal: 0, delta: '甲' });
       T('有缓冲的 delta 不排消息重取(150ms)', window.__pending(150) === 0, window.__timeouts);
-      T('有缓冲的 delta 仍排列表刷新(1500ms)', window.__pending(1500) === 1, window.__timeouts);
+      T('有缓冲的 delta 也不排列表刷新(§8.54:纯流事件不动左栏)',
+        window.__pending(1500) === 0, window.__timeouts);
 
       window.__timeouts.length = 0;
       feed('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_none', ordinal: 0, delta: '乙' });
@@ -511,6 +515,64 @@
       window.__timeouts.length = 0;
       feed('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: 'msg_dt', id: 'c9', name: 'read' });
       T('工具事件排一次对账重取', window.__pending(150) === 1, window.__timeouts);
+
+      /* ---------------- §8.54 慢网对账的分流 ----------------
+         原来的规则是「每条 SSE 都排 150ms 消息重取 + 1500ms 列表刷新」。LAN 上无感,
+         VPN 上 provider.updated 这种事件也能让一条 MB 级消息列表反复下载。 */
+      store.selected = 'ses_a';
+      window.__timeouts.length = 0;
+      feed('provider.updated', {});
+      T('全局 provider/model 事件不排消息重取、也不排列表刷新',
+        window.__pending(150) === 0 && window.__pending(1500) === 0, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.tool.success', { sessionID: 'ses_b', assistantMessageID: 'msg_x', id: 'cc', content: [], metadata: {} });
+      T('别的会话的工具事件不排消息重取', window.__pending(150) === 0, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.tool.success', { sessionID: 'ses_a', assistantMessageID: 'msg_x', id: 'cc', content: [], metadata: {} });
+      T('当前会话的工具成功事件排一次对账重取', window.__pending(150) === 1, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: 'msg_x', id: 'cc', metadata: {} });
+      T('高频 tool.progress 不排对账重取(本地已按事件重绘)', window.__pending(150) === 0, window.__timeouts);
+
+      window.__timeouts.length = 0;
+      feed('session.updated', { sessionID: 'ses_a', info: { id: 'ses_a', title: '改个名', time: { updated: 2 } } });
+      T('会话行事件只排列表刷新、不排消息重取',
+        window.__pending(150) === 0 && window.__pending(1500) === 1, window.__timeouts);
+
+      /* ---------------- §8.54 后台对账:不闪加载行 / 飞行中合并 ---------------- */
+      store.selected = 'ses_a';
+      store.msgLoading = false;
+      msgLastDone = 0;
+      msgLoadBusy = false;
+      msgAutoQueued = false;
+      window.__timeouts.length = 0;
+      await loadMessages({ older: false, auto: true });
+      T('后台对账成功不排 250ms 的「正在加载消息…」(当前画面不闪状态行)',
+        store.msgLoading === false && window.__pending(250) === 0, window.__timeouts);
+
+      var releaseMsg = null;
+      window.__msgGate = new Promise(function (r) { releaseMsg = r; });
+      msgLastDone = 0;
+      msgLoadBusy = false;
+      window.calls.length = 0;
+      var pa = loadMessages({ older: false, auto: true });
+      var pb = loadMessages({ older: false, auto: true });
+      T('飞行中的自动对账被合并:只发一条消息请求',
+        window.calls.filter(function (c) { return c.url.indexOf('/message') >= 0; }).length === 1,
+        window.calls.map(function (c) { return c.url; }));
+      releaseMsg();
+      window.__msgGate = null;
+      await pa;
+      await pb;
+      T('合并下来的那次会隔 MSG_AUTO_GAP_MS 再排一次', window.__pending(MSG_AUTO_GAP_MS) >= 1,
+        window.__timeouts);
+
+      window.__timeouts.length = 0;
+      await loadMessages({ older: false });
+      T('前台加载照旧会排 250ms 的「正在加载消息…」', window.__pending(250) === 1, window.__timeouts);
 
       /* ---------------- 压缩上下文:状态条也得亮,消息流里画成一块 ---------------- */
       // 实测(真面板 + 真压缩):压缩期 /api/session/active 会空一拍 —— 压缩跑到一半
@@ -640,8 +702,8 @@
         JSON.stringify(store.compactText.get('ses_a')));
       T('三条 delta 只画一次正文(节流到 ~8 次/秒,不是一条一次)',
         rmCalls === 1, rmCalls);
-      T('delta 不排那两种对账拉取(150/1500 都不多不少各一次,和别的非流事件一样)',
-        window.__pending(150) === 3 && window.__pending(1500) === 3, window.__timeouts);
+      T('compaction.delta 不排任何一种对账拉取(§8.54:本地缓冲已经画了)',
+        window.__pending(150) === 0 && window.__pending(1500) === 0, window.__timeouts);
 
       renderMessages();
       cpEl = q('#messages .msg.compaction');

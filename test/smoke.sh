@@ -77,6 +77,49 @@ else
   echo "FAIL: 首页缺少 #asks"; fail=$((fail + 1))
 fi
 
+# §8.54 慢网(VPN):静态资源与大块 JSON 要能压,SSE 绝不能压(vary 也要报对)
+enc=$(curl -s -D - -o /dev/null -H 'Accept-Encoding: br' "${AUTH[@]}" "$PROXY/app.js" \
+  | tr -d '\r' | awk 'tolower($1)=="content-encoding:"{print $2}')
+br_size=$(curl -s -o /dev/null -w '%{size_download}' -H 'Accept-Encoding: br' "${AUTH[@]}" "$PROXY/app.js")
+raw_size=$(curl -s -o /dev/null -w '%{size_download}' "${AUTH[@]}" "$PROXY/app.js")
+if [ "$enc" = "br" ] && [ "${br_size:-0}" -gt 0 ] && [ "${br_size:-0}" -lt "${raw_size:-0}" ]; then
+  echo "PASS: 静态资源支持 brotli(${raw_size}B → ${br_size}B)"; pass=$((pass + 1))
+else
+  echo "FAIL: 静态资源没有按 Accept-Encoding: br 压缩(got enc='$enc' ${raw_size}B → ${br_size}B)"; fail=$((fail + 1))
+fi
+
+enc=$(curl -s -D - -o /dev/null -H 'Accept-Encoding: gzip' "${AUTH[@]}" "$PROXY/api/session?limit=5" \
+  | tr -d '\r' | awk 'tolower($1)=="content-encoding:"{print $2}')
+gz_size=$(curl -s -o /dev/null -w '%{size_download}' -H 'Accept-Encoding: gzip' "${AUTH[@]}" "$PROXY/api/session?limit=5")
+raw_size=$(curl -s -o /dev/null -w '%{size_download}' "${AUTH[@]}" "$PROXY/api/session?limit=5")
+if [ "$enc" = "gzip" ] && [ "${gz_size:-0}" -gt 0 ] && [ "${gz_size:-0}" -lt "${raw_size:-0}" ]; then
+  echo "PASS: 会话列表 JSON 支持 gzip(${raw_size}B → ${gz_size}B)"; pass=$((pass + 1))
+else
+  echo "FAIL: 会话列表 JSON 没有压缩(got enc='$enc' ${raw_size}B → ${gz_size}B)"; fail=$((fail + 1))
+fi
+
+if [ -n "$SID" ]; then
+  enc=$(curl -s -D - -o /dev/null -H 'Accept-Encoding: br' "${AUTH[@]}" "$PROXY/api/session/$SID/message?limit=50&order=desc" \
+    | tr -d '\r' | awk 'tolower($1)=="content-encoding:"{print $2}')
+  br_size=$(curl -s -o /dev/null -w '%{size_download}' -H 'Accept-Encoding: br' "${AUTH[@]}" "$PROXY/api/session/$SID/message?limit=50&order=desc")
+  raw_size=$(curl -s -o /dev/null -w '%{size_download}' "${AUTH[@]}" "$PROXY/api/session/$SID/message?limit=50&order=desc")
+  if [ "$enc" = "br" ] && [ "${br_size:-0}" -gt 0 ] && [ "${br_size:-0}" -lt "${raw_size:-0}" ]; then
+    echo "PASS: 消息列表支持 brotli(${raw_size}B → ${br_size}B)"; pass=$((pass + 1))
+  else
+    echo "FAIL: 消息列表没有压缩(got enc='$enc' ${raw_size}B → ${br_size}B)"; fail=$((fail + 1))
+  fi
+else
+  echo "SKIP: 没有会话,跳过消息列表压缩断言"; pass=$((pass + 1))
+fi
+
+enc=$(timeout 2 curl -s -D - -o /dev/null -H 'Accept-Encoding: br' "${AUTH[@]}" "$PROXY/api/event" \
+  | tr -d '\r' | awk 'tolower($1)=="content-encoding:"{print $2}')
+if [ -z "$enc" ]; then
+  echo "PASS: SSE 事件流不压缩(压了就拿不到逐帧)"; pass=$((pass + 1))
+else
+  echo "FAIL: SSE 被压成了 '$enc'"; fail=$((fail + 1))
+fi
+
 # 会话控制端点(只读)与前端控件
 code=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$PROXY/api/session/active")
 ck "$code" 200 "经代理 GET /api/session/active 返回 200"

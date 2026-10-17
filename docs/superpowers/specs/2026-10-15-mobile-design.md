@@ -2631,6 +2631,78 @@ TUI 记 `cli.json`,面板记 `localStorage`;语义照着 TUI,但账不是同一�
 偏好写进 localStorage、两张卡片一起切换、面板变窄/变宽时 auto 翻面);`ui-stream` 249 不变
 (那套老断言的 diff 是统一视图,开头把偏好钉成 `unified`);其余 17 套与 6 个 `e2e-*` 全 0 失败。
 
+### 8.54 慢网(VPN)下「正在加载消息…」一直挂着:压缩 + 对账只认当前会话 + 后台静默
+
+**起因**:用户从 `192.0.2.x` 网段经 VPN 访问面板,「一直显示正在加载信息」,要求像手机端那样优化。
+
+**先复现,再动手**(`/tmp/ocsm-probe/pw/slow-load.js`,Chromium CDP 限速,桌面 1366×900,深链到
+`ses_demo…`,该会话 100 条消息原文 1.03MB):
+
+```
+2 Mbps / 150ms RTT
+  msgs≥3 可见        30 500 ms
+  /message 请求      7 条(每条都是完整 1.03MB)
+  总传输             6 639 511 B
+  「正在加载消息…」   从头挂到尾
+```
+
+**根因有两层,缺一不可**:
+
+1. **每条 SSE 事件都重拉一次**.`handleEvent` 原来无条件排
+   `setTimeout(loadMessages, 150)` + `setTimeout(loadSessions, 1500)`,连 `provider.updated` /
+   `model.updated` 这种与消息无关的全局事件也算。实测一次首屏里来了 11 条 SSE,于是 7 条消息请求
+   同时排队 —— 面板没有 AbortController,旧的那条只靠 `store.msgSeq` 在回来时丢弃,**带宽已经花掉了**。
+   每次重拉又都 `setMsgLoading(true)`,所以状态行永远撤不掉。
+2. **响应完全不压**.代理一直用 `accept-encoding: identity` 去上游,给浏览器也是明文:
+   `app.js` 286KB、`styles.css` 61KB、首页 15KB、会话列表 27KB、消息列表 0.5~1MB。
+   VPN 上这些体积直接把 RTT 之外的时间拉满。
+
+**改法**:
+
+| 位置 | 行为 |
+|---|---|
+| `server.js` `acceptedEncoding()` / `encodeBody()` | 认 `br`(优先,q5)与 `gzip`(兜底);只看客户端 `Accept-Encoding`,不猜 |
+| 静态资源 | `encodeStatic()` 按「文件 + ETag + 编码」缓存压缩结果,发 `Content-Encoding` / `Content-Length` / `Vary: accept-encoding`;304 也带 `Vary` |
+| API 的 GET JSON | 统一先缓冲再压(≥1KB 才压);消息列表仍然先摘 `data:` 图;SSE(`text/event-stream`)一步都不碰 |
+| `app.js` 事件分流 | 消息对账 = `mine`(事件里的 `sessionID` / `info.id` 等于当前选中;没带 id 才按「可能是」放行)且类型属于 `session.*` / `message.*`,并排除 `session.updated/created/deleted/…` 与高频的 `tool.progress`、`tool.input.delta`、`compaction.delta` |
+| 列表刷新 | 只认 `session.created/updated/deleted/renamed/moved/agent.selected/model.selected` 与 shell 三类;`server.connected` 只在**重连**时补一次 |
+| 单飞 + 合并 | `MSG_AUTO_GAP_MS = 4000` / `SESSION_AUTO_GAP_MS = 2500`:同一时刻只飞一条;飞着时再来的只记一个 `queued`,落地后再隔一个间隔补一次 |
+| 后台静默 | `loadMessages({auto:true})` 不点 `#msgState`、失败不画错误页(只进控制台);`loadSessions({auto:true})` 同理 |
+| 前台优先 | 切会话 / 点重试走非 auto:`AbortController` 直接掐掉在飞的自动对账,`msgLoadGen` 保证被取代那一代的 `finally` 不回写状态 |
+| 轮询兜底 | `loadActive` 的 8s 轮询只在「最近 12s 没有对过账」时才拉消息,避免盯着一个运行中的会话时每 8s 白拉一次 |
+| 页大小 | 桌面 100 / 手机 30 **都不动**;这轮只省「无谓的重复」和「传输体积」,不牺牲一次能回看的历史 |
+
+**实测(同一套探针,同一会话)**:
+
+```
+2 Mbps / 150ms RTT
+  msgs≥3 可见        30 500 → 2 535 ms
+  /message 请求      7 → 1
+  总传输             6 639 511 → 345 101 B
+  「正在加载消息…」   全程 → 只有首屏那一下(2485ms 时撤)
+
+1 Mbps / 300ms RTT,ses_demo…(734KB)
+  msgs≥3 可见        4 147 ms,总传输 295 922 B,消息请求 1 条
+
+后台行为(slow-events.js,真页面):
+  连发 20 条 provider.updated/model.updated → 新增消息请求 0
+  手动切到另一个会话(正在运行)                → 新增消息请求 1
+  强制一次 auto 对账                          → #msgState 全程未露面
+```
+
+**取舍**:
+
+- 后台对账最多晚 4s 才把「权威版本」拉回来;这期间 SSE 的本地渲染照常逐帧更新,所以看内容不卡,
+  只是最终对账慢一点。LAN 上本来也看不见这个差别。
+- 压缩在代理的事件循环里同步做:1MB JSON 的 br q5 约 14ms、gzip 约 9ms;静态文件压过一次就缓存。
+  选 q5 不选 q9,是因为 q9 只再小 3%,耗时却从 14ms 涨到 44ms。
+- 没有做消息缓存 / 分页改版:切到一个 1MB 的会话仍要下一次(现在约 224KB);真要再快得动存储与协议。
+- 没有把「后台对账」彻底删掉:SSE 丢帧、断线重连、工具最终 metadata 这些还得靠它兜底。
+
+**回归**:`smoke.sh` 316 → **320**(静态 br、会话列表 gzip、消息列表 br 的体积对比,SSE 不被压);
+`ui-stream` 249 → **258**(事件分流 5 项 + 后台对账 4 项:不闪 250ms 状态行、飞行中合并成一条、
+落地后隔 `MSG_AUTO_GAP_MS` 再排、前台照旧会闪);`ui-tools` 305 不变;其余 17 套与 6 个 `e2e-*` 全 0 失败。
+
 ---
 
 ---

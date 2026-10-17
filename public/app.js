@@ -327,9 +327,10 @@ async function loadActive() {
   }
   updateComposerControls();
   const sel = store.selected;
-  if (sel && isRunning(sel)) {
-    // 运行中可能正产生新消息,轻量刷新
-    loadMessages({ older: false });
+  // §8.54:SSE 一直在推,这个 8s 轮询只当「SSE 哑了」的兜底 —— 最近 12s 内已经对过账
+  // 就跳过(否则在看一个正在跑的会话时,它会每 8s 再白拉一次 MB 级消息列表)。
+  if (sel && isRunning(sel) && Date.now() - msgLastDone > 12000) {
+    loadMessages({ older: false, auto: true });
   }
 }
 
@@ -1136,6 +1137,12 @@ async function copyTui() {
 
 async function loadSessions(opts) {
   opts = opts || {};
+  const quiet = !!opts.auto;
+  if (quiet) {
+    if (sessionLoadBusy) { sessionAutoQueued = true; return; }
+    const wait = sessionLastDone ? SESSION_AUTO_GAP_MS - (Date.now() - sessionLastDone) : 0;
+    if (wait > 0) { scheduleAutoSessions(wait); return; }
+  }
   if (opts.reset) {
     store.sessions.clear();
     store.subs.clear();
@@ -1148,7 +1155,9 @@ async function loadSessions(opts) {
     if (!store.sessionCursor) return;
     q.set('cursor', store.sessionCursor);
   }
-  setListLoading(true);
+  if (!quiet) setListLoading(true);
+  const gen = ++sessionLoadGen;
+  sessionLoadBusy = true;
   try {
     const j = await api('/api/session?' + q.toString());
     (j.data || []).forEach((s) => {
@@ -1160,13 +1169,23 @@ async function loadSessions(opts) {
     store.sessionCursor = (j.cursor && j.cursor.next) || null;
     store.listError = '';
     renderSessions();
+    if (quiet) paintListState(); // 后台成功:把上一次的失败话撤掉(不新开状态行)
   } catch (e) {
-    /* §8.45:失败不许只进控制台 —— 左栏会安静地停在旧数据 /「共 0 个会话」上。
-     * 原因记下来交给 #listState 画(原因 + 重试),控制台那条照旧留着。 */
-    store.listError = String((e && (e.message || e.status)) || e || '未知错误');
     console.error('loadSessions', e);
+    /* §8.45:失败不许只进控制台 —— 左栏会安静地停在旧数据 /「共 0 个会话」上。
+     * 原因记下来交给 #listState 画(原因 + 重试),控制台那条照旧留着。
+     * 后台(auto)刷新失败不抢占画面:当前列表还能用,下一次事件再试。 */
+    if (!quiet) store.listError = String((e && (e.message || e.status)) || e || '未知错误');
   } finally {
-    setListLoading(false);
+    if (!quiet) setListLoading(false); // 成功 / 失败都收尾(文案由 store.listError 决定)
+    if (gen === sessionLoadGen) {
+      sessionLoadBusy = false;
+      sessionLastDone = Date.now();
+      if (sessionAutoQueued) {
+        sessionAutoQueued = false;
+        scheduleAutoSessions(SESSION_AUTO_GAP_MS);
+      }
+    }
   }
 }
 
@@ -1951,6 +1970,15 @@ async function loadMessages(opts) {
   opts = opts || {};
   const id = store.selected;
   if (!id) return;
+  const quiet = !!opts.auto; // 后台对账:不点亮状态行、失败不盖界面
+  if (quiet) {
+    if (msgLoadBusy) { msgAutoQueued = true; return; } // 已有一条在飞:合并成一次
+    const wait = msgLastDone ? MSG_AUTO_GAP_MS - (Date.now() - msgLastDone) : 0;
+    if (wait > 0) { scheduleAutoMsg(wait); return; } // 刚拉过:隔一会儿再来,别把 VPN 打满
+  } else if (msgAbort) {
+    // 前台请求(切会话/点重试)优先:上一轮自动对账就地作废,别让它继续占带宽
+    try { msgAbort.abort(); } catch (_) {}
+  }
   // 带游标时【不能】再带 order:服务端会 400(实测 `Cursor cannot be combined with order`)
   // —— 方向本来就编在游标里(游标是个 base64 的 {id, order, direction})。
   // 原来两样一起发,「加载更旧消息」每次都被打回,点了像没反应(api() 抛出 → 静默 catch)。
@@ -1960,39 +1988,56 @@ async function loadMessages(opts) {
     q.set('cursor', store.msgOlderCursor);
   } else {
     q.set('order', 'desc');
-    store.msgError = '';
+    if (!quiet) store.msgError = '';
     autoOlderArmed = true; // 新的一页(切会话/重拉首屏)重新上膛:下一回到顶又能自动拉
   }
-  setMsgLoading(true);
+  if (!quiet) setMsgLoading(true);
   const url = '/api/session/' + encodeURIComponent(id) + '/message?' + q.toString();
   const seq = ++store.msgSeq; // 这一代请求;再有别的请求进来,这一代(含它的重试)就地作废
-  for (let attempt = 0; attempt < MSG_TRIES; attempt++) {
-    if (attempt) {
-      await sleep(MSG_RETRY_MS[attempt - 1] || 2500);
-      if (seq !== store.msgSeq || store.selected !== id) return;
+  const gen = ++msgLoadGen;
+  const ac = new AbortController();
+  msgAbort = ac;
+  msgLoadBusy = true;
+  try {
+    for (let attempt = 0; attempt < MSG_TRIES; attempt++) {
+      if (attempt) {
+        await sleep(MSG_RETRY_MS[attempt - 1] || 2500);
+        if (seq !== store.msgSeq || store.selected !== id || gen !== msgLoadGen) return;
+      }
+      try {
+        const j = await api(url, { signal: ac.signal });
+        /* 等待期间可能已经切走了(SSE 事件驱动的防抖对账正好压在一次切换上):这份响应属于
+         * 上一个会话,写进去就会让新会话显示别人的消息,连头部那枚上下文用量也跟着错。
+         * store.messages 只有当前会话一份,所以这里按 id 复查一次再写。 */
+        if (seq !== store.msgSeq || store.selected !== id) return;
+        // 「空数组」和「没拿到」必须分得开:响应不成形就当失败去重试,别画成「这个会话没有消息」
+        if (!j || !Array.isArray(j.data)) throw new Error('响应里没有消息数组');
+        j.data.forEach((m) => store.messages.set(m.id, m));
+        store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
+        pruneLive();
+        store.msgError = '';
+        setMsgLoading(false);
+        renderMessages();
+        return;
+      } catch (e) {
+        if (e && (e.name === 'AbortError' || ac.signal.aborted)) return; // 被新一轮取代,静默收工
+        console.error('loadMessages', e);
+        if (seq !== store.msgSeq || store.selected !== id || gen !== msgLoadGen) return;
+        if (attempt < MSG_TRIES - 1) continue;
+        if (quiet) return; // 后台对账失败不打扰画面:下一次事件/轮询会再试
+        store.msgError = (e && e.message) || String(e);
+        setMsgLoading(false);
+        paintMsgState(); // 空着也要把话说清楚:加载失败:<原因> + 一个「重试」
+      }
     }
-    try {
-      const j = await api(url);
-      /* 等待期间可能已经切走了(SSE 事件驱动的防抖对账正好压在一次切换上):这份响应属于
-       * 上一个会话,写进去就会让新会话显示别人的消息,连头部那枚上下文用量也跟着错。
-       * store.messages 只有当前会话一份,所以这里按 id 复查一次再写。 */
-      if (seq !== store.msgSeq || store.selected !== id) return;
-      // 「空数组」和「没拿到」必须分得开:响应不成形就当失败去重试,别画成「这个会话没有消息」
-      if (!j || !Array.isArray(j.data)) throw new Error('响应里没有消息数组');
-      j.data.forEach((m) => store.messages.set(m.id, m));
-      store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
-      pruneLive();
-      store.msgError = '';
-      setMsgLoading(false);
-      renderMessages();
-      return;
-    } catch (e) {
-      console.error('loadMessages', e);
-      if (seq !== store.msgSeq || store.selected !== id) return;
-      if (attempt < MSG_TRIES - 1) continue;
-      store.msgError = (e && e.message) || String(e);
-      setMsgLoading(false);
-      paintMsgState(); // 空着也要把话说清楚:加载失败:<原因> + 一个「重试」
+  } finally {
+    if (gen === msgLoadGen) {
+      msgLoadBusy = false;
+      msgLastDone = Date.now();
+      if (msgAutoQueued) {
+        msgAutoQueued = false;
+        scheduleAutoMsg(MSG_AUTO_GAP_MS);
+      }
     }
   }
 }
@@ -6494,6 +6539,46 @@ let msgTimer = null;
 let listTimer = null;
 let activeTimer = null;
 
+/* §8.54 慢网(VPN)下的对账节流:SSE 每来一条事件就重拉一次消息列表是 LAN 上的习惯
+ * (本机 37ms 回来,用户看不见),但一条 100 条的消息列表在 VPN 上是几百 KB 到 1MB,
+ * 事件密一点就会七八条请求一起排队 —— 「正在加载」于是永远挂在那儿。
+ * 现在:
+ *   · 只对「当前会话 + 真会改消息」的事件排重取(provider/model 与别的会话一律不排);
+ *   · 同一时刻只飞一条,飞着的时候再来的合并成一次,落地后隔 MSG_AUTO_GAP_MS 再跑;
+ *   · 后台重取不点亮「正在加载消息…」,失败也不把界面盖成错误页(留给下一次);
+ *   · 列表刷新同理(SESSION_AUTO_GAP_MS 间隔 + 只认会话行相关事件)。 */
+const MSG_AUTO_GAP_MS = 4000;
+const SESSION_AUTO_GAP_MS = 2500;
+let msgLoadBusy = false;
+let msgLoadGen = 0;
+let msgAbort = null;
+let msgAutoQueued = false;
+let msgLastDone = 0;
+let msgAutoTimer = null;
+let sessionLoadBusy = false;
+let sessionLoadGen = 0;
+let sessionAutoQueued = false;
+let sessionLastDone = 0;
+let sessionAutoTimer = null;
+let sseConnectedOnce = false;
+
+function scheduleAutoMsg(delay) {
+  clearTimeout(msgAutoTimer);
+  msgAutoTimer = setTimeout(() => {
+    msgAutoTimer = null;
+    if (!store.selected) return;
+    loadMessages({ older: false, auto: true });
+  }, delay);
+}
+
+function scheduleAutoSessions(delay) {
+  clearTimeout(sessionAutoTimer);
+  sessionAutoTimer = setTimeout(() => {
+    sessionAutoTimer = null;
+    loadSessions({ auto: true });
+  }, delay);
+}
+
 // 把局部变更合并进会话对象。事件里的 info 可能是扁平 directory(V1 形状),统一补出 location。
 function patchSession(id, patch) {
   if (!id) return null;
@@ -6673,15 +6758,36 @@ function handleEvent(e) {
   // 结构变化(新 part / 工具状态 / 元数据)立刻重绘;纯文本变化只刷局部节点
   if (repaint && liveForSid(store.selected)) renderMessages();
   else if (local) paintLiveDelta();
-  // 纯文本增量本地已经渲染,不需要再拉一次消息;*.ended 与其它事件保持防抖对账
-  if (!(local && isStreamDelta(e.type))) {
+
+  const t = e.type || '';
+  const evSid = d.sessionID || (d.info && d.info.id) || '';
+  const mine = !evSid || evSid === store.selected; // 没带会话 id 的按「可能是」处理,宁可多拉一次
+  // §8.54 消息对账:只认当前会话 + 真会改消息的事件。
+  // provider/model 之类的全局事件、别的会话的流事件、tools 的高频增量,都不值得拉。
+  const msgWorthy =
+    mine && /^(session\.|message\.)/.test(t) &&
+    !/^session\.(created|updated|deleted|renamed|moved|agent\.selected|model\.selected|inbox\.)/.test(t) &&
+    t !== 'session.tool.progress' &&
+    t !== 'session.tool.input.delta' &&
+    t !== 'session.compaction.delta';
+  // 断线重连后补一次(第一次连上不算,首屏的 loadMessages 已经在跑)
+  const reconnect = t === 'server.connected' && sseConnectedOnce;
+  if (t === 'server.connected') sseConnectedOnce = true;
+  if ((msgWorthy && !(local && isStreamDelta(t))) || reconnect) {
     clearTimeout(msgTimer);
     msgTimer = setTimeout(() => {
-      if (store.selected) loadMessages({ older: false });
+      if (store.selected) loadMessages({ older: false, auto: true });
     }, 150);
   }
-  clearTimeout(listTimer);
-  listTimer = setTimeout(() => loadSessions({}), 1500);
+  // §8.54 列表刷新:只认会改左栏行的那几类事件。原来每条 SSE 都排一次 1500ms
+  // (provider.updated 也算),VPN 下等于每 1.5s 白拉一次会话列表。
+  const listWorthy =
+    /^session\.(created|updated|deleted|renamed|moved|agent\.selected|model\.selected)$/.test(t) ||
+    t === 'shell.created' || t === 'shell.exited' || t === 'shell.deleted' || reconnect;
+  if (listWorthy) {
+    clearTimeout(listTimer);
+    listTimer = setTimeout(() => loadSessions({ auto: true }), 1500);
+  }
 }
 
 function setupEvents() {
