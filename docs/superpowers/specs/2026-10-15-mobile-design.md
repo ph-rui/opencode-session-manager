@@ -491,7 +491,7 @@ html.narrow #list td { display: block; border: none; }
 
 往上翻历史翻过头之后要一路搓回底部，这在手机上格外难受（一次滑动只有小半屏）。
 
-**TUI 的事实**（反编译 `/home/user/.opencode/bin/opencode` 取得）：消息区**下面常驻一行**
+**TUI 的事实**（反编译 `~/.opencode/bin/opencode` 取得）：消息区**下面常驻一行**
 （`height: 1`、右对齐），元素 id `session-jump-to-latest`，文案 `Jump to latest ↓`，
 悬停换色，点击回底；键盘动作是 `session.last`（`ctrl+alt+g`，以及 `end`）。
 
@@ -1176,7 +1176,7 @@ ctrl+p commands」。
 - 1366×900：`chatDir = /work/example-repo:main`、`ctxFull = 151.8K (76%)`、
   `agentHint = ⇧tab agents`（`display:block`，§8.21 起改成 `tab agents`）、`ctrl+p commands` —— 顺序与 TUI 一致。
 - 393×894（`html.narrow`）：`agentHint` `display:none`；`chatDir` 同上级带分支；用量走 compact 档、命令提示走 `/ 命令`。
-- `/home/user`（home 下）的会话：`chatDir = ~`（`abbrevHome` 生效；该会话不在列表首页，顺带验证了深链补拉）。
+- `~`（home 下）的会话：`chatDir = ~`（`abbrevHome` 生效；该会话不在列表首页，顺带验证了深链补拉）。
 
 **回归**：`smoke.sh` 212 → **218**（顺序四格、费用、`:分支`、`~/`（含 `/__health` 的 `home`）、
 `⇧tab agents`、深链补拉与空数组守卫、`paintContextUsage` 调用点 3 → 6）；`ui-stream` 210 → **219**
