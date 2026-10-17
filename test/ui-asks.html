@@ -193,10 +193,10 @@
     q0W.querySelector('input[value="Board B"]').checked = true;
     T('question 单选作答 → 字符串(不是数组)', collectFormAnswer(qc).q0 === 'Board B', collectFormAnswer(qc).q0);
     var q0c = q0W.querySelector('input.custom');
-    q0c.value = '改成 19x19 A 版';
+    q0c.value = '改成 B 版';
     q0c.dispatchEvent(new Event('input', { bubbles: true }));
     T('question 单选自填 → radio 被清空', q0W.querySelectorAll('input[type=radio]:checked').length === 0);
-    T('question 单选自填 → 字符串答案', collectFormAnswer(qc).q0 === '改成 19x19 A 版', collectFormAnswer(qc).q0);
+    T('question 单选自填 → 字符串答案', collectFormAnswer(qc).q0 === '改成 B 版', collectFormAnswer(qc).q0);
 
     document.getElementById('results').textContent = out.join('\n');
     document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

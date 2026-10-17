@@ -315,7 +315,7 @@ html.narrow #list td { display: block; border: none; }
 - 白名单由 `OCS_ALLOW` 配置，逗号分隔，支持四种写法：
   单个 IPv4、IPv4 CIDR、单个 IPv6、IPv6 CIDR；
   `::ffff:198.51.100.9` 这种 v4-mapped 会先还原成 `198.51.100.9` 再比对
-- **代码里的默认值是 `127.0.0.0/8,::1`**（回环 + VPN）
+- **代码里的默认值是 `127.0.0.0/8,::1,192.0.2.0/24`**（回环 + VPN）
 - Basic 鉴权**保留** —— 白名单是收窄可达面，不替代鉴权；校验发生在鉴权**之前**
   （来源不对的话连 401 都不必给）
 
@@ -336,7 +336,7 @@ html.narrow #list td { display: block; border: none; }
 ```
 来源地址不允许 / source address not allowed
 来源: 198.51.100.48
-白名单: 127.0.0.0/8,::1
+白名单: 127.0.0.0/8,::1,192.0.2.0/24
 ```
 
 服务端同时打一行 `拒绝来源地址: 198.51.100.48(白名单: …)`。
@@ -347,7 +347,7 @@ html.narrow #list td { display: block; border: none; }
 > `~/.config/opencode-session-manager/env` 里显式写：
 >
 > ```
-> OCS_ALLOW=127.0.0.0/8,::1,198.51.100.0/24
+> OCS_ALLOW=127.0.0.0/8,::1,192.0.2.0/24,198.51.100.0/24
 > ```
 >
 > 这也正是「默认值 + 显式配置」分开的意义：默认值保守，实际网段由部署处声明。
@@ -652,12 +652,12 @@ CSS 上是个顺序活：`list-hidden`（用户记下来的选择）与 `list-pe
      `2,4,6,5,2,0,1,4,6,4,1,0,3,6,5,2,0,1,4,6,4,1,0,1,5,6,2,0,…`（升到 6 → 掉到 0 → 再升，正是
      「正走 / 空 / 倒走」那套，14 帧的旧表不会这样来回）；
    - 桌面 1366×900：条 `top=874`，输入框 `top=794 h=80` → 条紧贴输入框**下面**（874 = 794 + 80）；
-   - **真压缩一回合**（对 `ses_demo` 发 `/compact`，SSE `started 6.08s → ended 13.54s`）：
+   - **真压缩一回合**（对 `ses_demo_compact_a` 发 `/compact`，SSE `started 6.08s → ended 13.54s`）：
      面板从 `3889ms` 起画 `msg compaction live:⠋上下文压缩进行中`，行首 spinner 一路
      `⠋⠸⠴⠇⠹⠧⠏⠙⠼⠦` 在转，`bar` 全程不是 `hidden`（含空拍）；`11163ms` 那一拍 `activeSel=None`
      （就是上面那个「空一拍」）而条仍然亮着；`11364ms` 收工 → `空闲` + 条收起 + 块变成
      `⏺上下文压缩 4,454 tokens 摘要…`；
-   - 真载荷渲染：`ses_demo` 里那条真 compaction（摘要 4883 字、
+   - 真载荷渲染：`ses_demo_compact_b` 里那条真 compaction（摘要 4883 字、
      `tokens = 1255 + 2472`）直接喂给真 `renderMessage` → `⏺上下文压缩 3,727 tokens 摘要…`、`details=folded`；
      真面板上同一块也核对过。
 2. 静态目检（`/tmp/ocsm-probe/pbar2/shot.js`：真 `index.html` + 真 `app.js`/`styles.css`，挡住 `init()` 只渲染）：
@@ -976,7 +976,7 @@ zN = (e) => e >= 1e6 ? (e / 1e6).toFixed(1) + "M" : e >= 1000 ? (e / 1000).toFix
 
 **验证**（真面板 + 真服务，`/tmp/ocsm-probe/perf/live-ctxusage.js`，视口 393×894 → `html.narrow`）：
 探针自己拉 `/api/session/:id/message` 与 `/api/model` 用**独立的 TUI 算法实现**复算期望值，再和面板 DOM 比
-（`ses_demo… 47%`、`ses_demo… 45%`、`ses_demo… 60%+`、目录已删的那个只印 token 数；
+（`ses_demo_a… 47%`、`ses_demo_b… 45%`、`ses_demo_c… 60%+`、目录已删的那个只印 token 数；
 至少一个被测会话带「已完成压缩」，压缩分支真跑到了）。另外 4 条：两档文案的 CSS 切换（含临时摘掉
 `html.narrow` 验桌面档）、空会话整块收起。截图 `live-ctxusage.png` 里头部能看到 `65% ctx`。
 
@@ -1157,7 +1157,7 @@ ctrl+p commands」。
 | 一行顺序是 `[agent·model] [location] [usage · cost] [tab agents] [ctrl+p commands]` | `Zc` 里先渲染 `c().join(' · ')`（usage），**再**两个 `We`：`agent.cycle`+`agents`、`command.palette.show`+`commands` |
 | 用量后面接花费（>0 才印） | `c = [usage?d4(tokens,percent):void 0, cost>0?currency.format(cost):void 0].filter(Boolean)` |
 | 路径是 `location:branch` | `Co()`：`cm(Qe.directory, S.home)` 之后 `vcs.info(Qe)?.branch.current ? \`${lt}:${rt}\` : lt` |
-| 路径在 home 下缩成 `~/…`，正好是 home 缩成 `~` | `cm(e,r)`：`relative(r,e)` 为空 → `~`，在下面 → `~/…`，否则原样（本例 `/media/...` 不在 home 下，所以照旧绝对路径）|
+| 路径在 home 下缩成 `~/…`，正好是 home 缩成 `~` | `cm(e,r)`：`relative(r,e)` 为空 → `~`，在下面 → `~/…`，否则原样（本例 `/work/...` 不在 home 下，所以照旧绝对路径）|
 | 多一个 `tab agents` 提示 | `Zc` 里 `m("agent.cycle")` + `agents`，与 `ctrl+p commands` 同级 |
 
 **做法**：
@@ -1253,8 +1253,8 @@ ctrl+p commands」。
 
 **验证**：探针 `tools-shot.js`（`node tools-shot.js <sid> <宽> <高>`；代理真面板 + 注入探针 dump
 `#messages` 里每行 `.tmark/.tname/.tdesc/.tstate` 与 `.dfile/.dline`，并截图）。在
-`ses_demo`（393×894，46 行）读到：`→ Skill "brainstorming"`、
-`→ Read /media/.../default.xml`、`$ ls -la ...`、`# Questions`、`← Edit /media/.../local.xml`、
+`ses_demo_long_a`（393×894，46 行）读到：`→ Skill "brainstorming"`、
+`→ Read /work/.../default.xml`、`$ ls -la ...`、`# Questions`、`← Edit /work/.../local.xml`、
 `.dfile` = `← Patched` + 路径 + `+10-10`；第一行 skill 的空 `""` 已修掉。
 
 **回归**：`smoke.sh` 220 → **226**（N3 组六项：图标表 / `TOOL_ALIAS` / `toolLine` 的工具词 / 块标题 /
@@ -1295,7 +1295,7 @@ diff 徽标 / 诊断行）；`ui-tools` 110 → **134**（`toolIcon` 6 例、`to
 - 往上滚 400px：`nearBottom true → false`（栈落在滚动事件那条线上），内容继续变长但**不把人拽回底部**。
 - 滚回底部：`nearBottom false → true`，按钮收起、跟随恢复。
 - 长会话深链（`NO_JUMP=1 NO_PROMPT=1`，全新 profile，sessionStorage 里没有存档）：
-  `ses_demo`（101 条、25007px）打开即 `d = 0`、按钮收起（改前会停在最上面）。
+  `ses_demo_long_b`（101 条、25007px）打开即 `d = 0`、按钮收起（改前会停在最上面）。
 
 **回归**：`ui-jump` 47 → **56**（容器变矮不关跟随 / `scrollTop` 往回走才关 / 当场贴底 / 让路期间不拽人，
 另加 `pinBottom` 记 `lastTop`）；`ui-layout` 162 → **164**（没有存档的长会话深链到底且处于跟随中）；
@@ -1321,7 +1321,7 @@ diff 徽标 / 诊断行）；`ui-tools` 110 → **134**（`toolIcon` 6 例、`to
 | 时长格式 `1s` / `1.2s` / `1m 5s` / `1h 5m` / `1d 5h` | `Locale.duration`（`util/locale.ts`）|
 
 **实测真实数据的形态**（`GET /api/experimental/session/:id/export` 的两条真会话全量：只读长会话
-`ses_demo` 2480 条助手消息 + 探针会话 `ses_demo` 51 条，
+`ses_demo_long_b` 2480 条助手消息 + 探针会话 `ses_demo_long_a` 51 条，
 合计 2531 条）：
 
 | 事实 | 数据 |
@@ -1346,7 +1346,7 @@ diff 徽标 / 诊断行）；`ui-tools` 110 → **134**（`toolIcon` 6 例、`to
 **验证**：新探针 `narrow-audit.js`（`node narrow-audit.js <sid> [宽] [高]`，代理真面板 + 注入探针，
 dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / 越界的元素，并截图；`BEFORE=1` 还能把窄屏
 提示栏的旧规则临时装回去量一组对照、`SCROLL_TO=explore` 滚到第一组上）。在
-`ses_demo` 的 393×894 与 1366×900 两个视口上读到：两条探索组都是
+`ses_demo_long_a` 的 393×894 与 1366×900 两个视口上读到：两条探索组都是
 `→ Explored: 1 read`、`open: false`、`.gbody` 里 1 行；思考头 `思考 · 4.7s` / `思考 · 946ms` / `思考 · 400ms`；
 没有元素比视口宽（`pre` 里那些 492px 的 `code` 有 `overflow-x: auto` 兜着，`#messages` 本身不横滚）。
 
@@ -1363,7 +1363,7 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 **起因**：两个都是手机竖屏上看出来的：① 用户报「加载更旧消息，这个项应该跟导出这些处于同一水平线」；
 ② 提示栏第一格 `智能体 · 模型 · 变体` 挤掉工程路径。
 
-**实测**（`narrow-audit.js`，393×894，`ses_demo`）：
+**实测**（`narrow-audit.js`，393×894，`ses_demo_long_a`）：
 
 - 改前：`#chatAgent` 宽 **119px**（把 `max-width: 32%` 用满）、`#chatDir` 只剩 **145px**，
   路径可见部分到 `/work/example-repo/…` 就截了（`scrollWidth 311`）。
@@ -1398,7 +1398,7 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 **起因**：量助手脚注（§8.27）时顺手用真会话点了一下「加载更旧消息」，发现它**从来没成功过**。
 
-**实测**（只读长会话 `ses_demo`，2480 条）：
+**实测**（只读长会话 `ses_demo_long_b`，2480 条）：
 
 | 请求 | 服务端 |
 |---|---|
@@ -1663,7 +1663,7 @@ dump 头部那一行 / 提示栏两格宽度 / `.explore` 的文案与开合 / �
 
 - 探针会话：`idleN: 0`（原来 2）、`msg minor swrow` 两行 —— `Switched agent from Sisyphus - Ultraworker to Build` 与
   `Switched model to DeepSeek V4 Flash`（签名修好后不再是退回形态）。
-- `ses_demo…`：`◈ Continuing after restart`（`synthetic` 有描述）、`◈ Instructions updated: core/codemode`（`system`）、
+- `ses_demo_d…`：`◈ Continuing after restart`（`synthetic` 有描述）、`◈ Instructions updated: core/codemode`（`system`）、
   两行 `↳ Shell finished · <命令>`（`synthetic` source=shell）。
 - 393×894 截图里收工行是一行、行头 info 蓝、命令省略号收住（`/tmp/ocsm-probe/perf/footer-audit-393x894.png`）。
 
@@ -1862,7 +1862,7 @@ ui-jump 反向断言）；`ui-jump` 90 → **95**（5 项：桌面 100 / 窄屏 
 **起因**：用户上手回话——「正在加载消息…然后确实可以显示最新一条，只不过加载的时间有点久」。
 功能对了，剩下的就是**体量**。
 
-**量出来的事实**（`curl` 那条会话 `ses_demo`）：
+**量出来的事实**（`curl` 那条会话 `ses_demo_long_c`）：
 
 | | 总字节 | 其中 `data:` 图 |
 |---|---|---|
@@ -2097,7 +2097,7 @@ F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interr
 带到下一个会话(`store.msgOlderCursor` 也是那时候换的)。
 
 **验证**(真 Chromium 393×894 收起态,`/tmp/ocsm-probe/pw/autoolder.js`,只读长会话
-`ses_demo`):
+`ses_demo_long_b`):
 
 ```
 #chatHeader 129 → 81      ← 那一行 40 + 它自己的 8px margin 一起还给消息区
@@ -2143,7 +2143,7 @@ README 计数与「会话操作那一行」那一段同步。
 ```
 真 Chromium 393×894,底板展开:
   #composer     227 @638-864   ← 工具栏 121 + 输入行
-  #promptFooter  30 @864-894   ← 「Build · DeepSeek V4 Flash /media/…:main 143.6K (72%)
+  #promptFooter  30 @864-894   ← 「Build · DeepSeek V4 Flash /work/…:main 143.6K (72%)
                                     tab agents  ctrl+p commands」
 ```
 
@@ -2315,7 +2315,7 @@ README 的 `ui-stream-run.js` 那句与「路径与 title」一段各补一句�
 长高,那不是「迟到的东西」;刚点过 400ms 内不抢着贴(以前的时间预算天然躲开了这一类,
 改成盯高度之后必须显式挡住)。
 
-**验证**(真 Chromium,`/tmp/ocsm-probe/pw/repin.js`;只读长会话 `ses_demo…`):
+**验证**(真 Chromium,`/tmp/ocsm-probe/pw/repin.js`;只读长会话 `ses_demo_f…`):
 
 ```
 手机 393×894:观察名单 31/31(== #messages 子元素)、cvmany=true、在底(0px)
@@ -2602,7 +2602,7 @@ phone-393       narrow=true  split=false btn=true  btnShown=none  pairs=0
 TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 只当首屏缓存与
 服务端不可达时的退路;§8.60 有完整取舍。
 
-**实测**(真会话 `ses_demo…`,探针跑两趟抓到 24~34 张 diff 卡片 —— 流式会话里
+**实测**(真会话 `ses_demo_e…`,探针跑两趟抓到 24~34 张 diff 卡片 —— 流式会话里
 渲染窗口内的卡片数会变;探针 `/tmp/ocsm-probe/pw/pref-split.js`):
 
 ```
@@ -2639,7 +2639,7 @@ TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 
 **起因**:用户从 `192.0.2.x` 网段经 VPN 访问面板,「一直显示正在加载信息」,要求像手机端那样优化。
 
 **先复现,再动手**(`/tmp/ocsm-probe/pw/slow-load.js`,Chromium CDP 限速,桌面 1366×900,深链到
-`ses_demo…`,该会话 100 条消息原文 1.03MB):
+`ses_demo_c…`,该会话 100 条消息原文 1.03MB):
 
 ```
 2 Mbps / 150ms RTT
@@ -2684,7 +2684,7 @@ TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 
   总传输             6 639 511 → 345 101 B
   「正在加载消息…」   全程 → 只有首屏那一下(2485ms 时撤)
 
-1 Mbps / 300ms RTT,ses_demo…(734KB)
+1 Mbps / 300ms RTT,ses_demo_e…(734KB)
   msgs≥3 可见        4 147 ms,总传输 295 922 B,消息请求 1 条
 
 后台行为(slow-events.js,真页面):
@@ -2842,7 +2842,7 @@ LAN
 | 空态 | 没有变更 → 「最近一轮没有文件变更。」;会话在跑且空 → 「最近一轮还在跑;这轮改了文件的话,结束后点「刷新」。」 |
 | 失败 | `#diffErr` 显示「加载变更失败: <服务端原话>」,正文清空;「刷新」重试 |
 
-**实测**(真会话 `ses_demo…`,最近一轮新增 1 个 131 行的 YAML;只读选中,没发消息 / 改文件):
+**实测**(真会话 `ses_demo_f…`,最近一轮新增 1 个 131 行的 YAML;只读选中,没发消息 / 改文件):
 
 ```
 桌面 1366×900   框 980×650,正文 942×558,scrollHeight 2677;状态 1 个文件 · +131 -0
@@ -2888,7 +2888,7 @@ LAN
 行号列(`.ln.o` / `.ln.n`)与符号列都是 `flex: none` 的固定宽,折行后留在第一行;
 续行从源码列起始位置排,跟代码缩进对齐。
 
-**实测**(真会话 `ses_demo…`,同一个 131 行 YAML,393×894 的变更总览框):
+**实测**(真会话 `ses_demo_f…`,同一个 131 行 YAML,393×894 的变更总览框):
 
 ```
 折行前  正文 client/scroll 337/337,scrollHeight 2677
@@ -3039,7 +3039,7 @@ tab 栏放在**聊天区顶部**,**左列表保留**,手机竖屏也显示。其
 - `localStorage` 仍写,但降级为缓存 / 退路;隐私模式写不进去时用内存 cache,功能照常。
 
 **实测**(临时代理 `49451` + 临时 `OPENCODE_CONFIG_DIR` + 临时 `cli.json`,不碰用户自己的配置;
-真会话 `ses_demo…`,22 张 diff 卡片):
+真会话 `ses_demo_e…`,22 张 diff 卡片):
 
 ```
 init cli=unified                  pref=unified split=0

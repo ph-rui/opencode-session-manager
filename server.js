@@ -46,8 +46,9 @@ const UPLOAD_PRUNE_EVERY_MS = 60 * 60 * 1000; // 最多每小时清一次
 
 // 面板绑的是 0.0.0.0(否则本机 127.0.0.1 也连不上),于是局域网里谁都能摸到它。
 // 这里在应用层再收一道:只放行回环与指定网段,其余 403。逗号分隔,支持单个 IP 与 CIDR。
-// 之所以不改成「只绑 192.0.2.5」:那样本机 http://127.0.0.1:49450 会一起断掉,
-// 而且服务启动时 VPN 网卡未必已经就绪(listen 会 EADDRNOTAVAIL)。
+// 之所以不改成「只绑某个局域网地址」:那样本机 http://127.0.0.1:49450 会一起断掉,
+// 而且服务启动时网卡未必已经就绪(listen 会 EADDRNOTAVAIL)。默认只放行回环,
+// 局域网 / VPN 地址必须由部署处通过 OCS_ALLOW 显式列出。
 const DEFAULT_ALLOW = '127.0.0.0/8,::1';
 const ALLOW_SPEC = process.env.OCS_ALLOW == null ? DEFAULT_ALLOW : process.env.OCS_ALLOW;
 
@@ -357,7 +358,7 @@ function allowStatusText() {
 /* --------------------------- 挤掉白传的大块字节 ---------------------------
  * 「会话消息列表」里塞着面板【一个字都不显示】的字节:MCP 工具返回的图,藏在
  * state.content[].uri 的 data: URL 里(base64)。实测那条 PPT 会话
- * (ses_demo):
+ * (ses_demo_long_c):
  *     手机一页 30 条   2.12 MB 里 1.89 MB 是这个(89%,3 张图,平均一张 630 KB)
  *     桌面一页 100 条 12.90 MB 里 11.87 MB 是这个(92%)
  * 而 public/app.js 的 toolOutputHtml() 只取 content[].text(连文件名都不显示),
