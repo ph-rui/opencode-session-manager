@@ -1438,6 +1438,50 @@
       window.diffWide = realWide;
       diffWideSeen = diffCanSplit();
 
+      /* ================= 复制转录(§8.72) ================= */
+      store.selected = 'ses_a';
+      var txMsgs = [
+        { type: 'user', text: '第一问' },
+        { type: 'idle' },
+        { type: 'assistant', content: [
+          { type: 'reasoning', text: '这段思考不该复制' },
+          { type: 'text', text: '好的,先读文件。' },
+          { type: 'tool', name: 'read', state: { status: 'completed',
+            input: { path: 'src/a.js' }, metadata: {} } },
+          { type: 'tool', name: 'bash', state: { status: 'error',
+            input: { command: 'npm test' }, metadata: {} } },
+        ] },
+        { type: 'shell', command: 'ls', output: { output: 'a.js' } },
+      ];
+      var tx = transcriptText(
+        { id: 'ses_a', title: '转录会话', time: { created: 1700000000000, updated: 1700000001000 } },
+        txMsgs
+      );
+      T('转录:标题 / ID / 时间头',
+        tx.indexOf('# 转录会话') === 0 && tx.indexOf('**Session ID:** ses_a') >= 0 &&
+        tx.indexOf('**Created:**') >= 0 && tx.indexOf('**Updated:**') >= 0, tx.slice(0, 120));
+      T('转录:用户与助手段落',
+        tx.indexOf('## User\n\n第一问') >= 0 && tx.indexOf('## Assistant\n\n好的,先读文件。') >= 0);
+      T('转录:工具摘要带名字与入参',
+        tx.indexOf('**read**') >= 0 && tx.indexOf('src/a.js') >= 0 &&
+        tx.indexOf('**bash**') >= 0 && tx.indexOf('npm test') >= 0);
+      T('转录:错误工具标 error', tx.indexOf('(error)') >= 0);
+      T('转录:默认不复制思考', tx.indexOf('这段思考不该复制') < 0);
+      T('转录:跳过 idle', tx.indexOf('idle') < 0);
+      T('转录:shell 段落', tx.indexOf('## Shell') >= 0 && tx.indexOf('$ ls') >= 0 &&
+        tx.indexOf('a.js') >= 0);
+      T('转录:没有正文时返回空串', transcriptText({ id: 'ses_a' }, []) === '');
+
+      /* 复制 ID 的入口:写剪贴板的动作被替身接住,确认传进去的就是整串 id */
+      var realCopyText = copyText;
+      var copiedText = '';
+      copyText = async function (t) { copiedText = String(t); return true; };
+      await copySessionId('ses_a');
+      T('复制 ID:复制整串会话 ID 并提示', copiedText === 'ses_a' &&
+        q('#toast').textContent.indexOf('会话 ID 已复制') >= 0,
+        [copiedText, q('#toast').textContent]);
+      copyText = realCopyText;
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

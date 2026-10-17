@@ -486,7 +486,7 @@ MISSING=$(printf '%s' "$APPJS" | python3 -c "
 import re, sys
 src = sys.stdin.read()
 want = ['new', 'compact', 'interrupt', 'undo', 'redo', 'rename', 'delete', 'export',
-        'archive', 'tui', 'copy', 'sessions', 'models', 'agents', 'clear', 'help']
+        'archive', 'tui', 'copy', 'copyid', 'sessions', 'models', 'agents', 'clear', 'help']
 got = set(re.findall(r\"\{ name: '([a-z/]+)',\", src))
 print(','.join([w for w in want if w not in got]))
 ")
@@ -2379,6 +2379,23 @@ if has "$APPJS" "const DRAFT_KEY = 'ocs.drafts'" &&
   echo "PASS: §8.71 草稿按会话存/取,切走保存、切回填回,发送成功清、失败留,/clear 与回列表也处理"; pass=$((pass + 1))
 else
   echo "FAIL: §8.71 的草稿存取 / 切换接线 / 发送清理或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R28 组:复制会话 ID / 转录(§8.72 / A5)----
+if has "$APPJS" 'async function copyText(text)' &&
+   has "$APPJS" 'async function copySessionId(sid)' &&
+   has "$APPJS" 'function transcriptText(info, messages)' &&
+   has "$APPJS" 'async function copyTranscript(sid)' &&
+   has "$APPJS" "description: '复制当前会话转录(纯文本)'" &&
+   has "$APPJS" "name: 'copyid'" &&
+   has "$APPJS" "/export?sanitize=false" &&
+   has "$APPJS" "{ key: 'copyid', label: '复制会话 ID'" &&
+   has "$APPJS" "{ key: 'transcript', label: '复制转录'" &&
+   has "$(cat "$SMOKE_PICKS")" '/copy 复制转录、/copyid 复制 ID' &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '转录:默认不复制思考'; then
+  echo "PASS: §8.72 复制 ID / 转录、剪贴板回退、export 取全量、命令与更多操作入口都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.72 的复制函数 / 命令 / 更多操作或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
 echo

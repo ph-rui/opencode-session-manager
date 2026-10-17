@@ -1669,23 +1669,137 @@ function openTui() {
   if (inp.select) inp.select();
 }
 
-async function copyTui() {
-  const inp = $('#tuiCmd');
-  const val = inp.value;
-  let ok = false;
+/* 剪贴板只有一个写入口(§8.72):局域网 http 不是 secure context,navigator.clipboard 通常
+ * 不可用,回落到「临时 textarea + execCommand('copy')」。临时节点而不是借某个现有输入框,
+ * 是因为复制会话 ID / 转录时页面上根本没有现成的可选中文本。 */
+async function copyText(text) {
+  const val = String(text == null ? '' : text);
   try {
-    // 局域网 http 访问不是 secure context,navigator.clipboard 通常不可用,回落到 execCommand。
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(val);
-      ok = true;
-    } else {
-      if (inp.select) inp.select();
-      ok = document.execCommand('copy');
+      return true;
     }
   } catch (_) {
-    ok = false;
+    // 权限被拒 / 非安全上下文:继续走下面的 execCommand 回退
   }
+  let ta = null;
+  try {
+    ta = document.createElement('textarea');
+    ta.value = val;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    if (ta.select) ta.select();
+    const ok = document.execCommand('copy');
+    return !!ok;
+  } catch (_) {
+    return false;
+  } finally {
+    if (ta && ta.parentElement) ta.remove();
+  }
+}
+
+async function copyTui() {
+  const inp = $('#tuiCmd');
+  const ok = await copyText(inp.value);
+  if (!ok && inp.select) inp.select(); // 复制失败时至少把命令选中,方便 Ctrl+C
   flash(ok ? '命令已复制' : '已选中命令,请按 Ctrl+C 复制', ok ? 'ok' : 'warn');
+}
+
+// 会话 ID 很小,但 TUI 里它是单独一个动作(session.copy.id);面板从「更多操作」和
+// /copyid 都能拿到,不必先打开 TUI。
+async function copySessionId(sid) {
+  sid = sid || store.selected;
+  if (!sid) return;
+  const ok = await copyText(sid);
+  flash(ok ? '会话 ID 已复制' : '复制会话 ID 失败', ok ? 'ok' : 'warn');
+}
+
+// 复制 transcript 照 TUI 的 session.copy:取服务端 export 的完整会话(不只当前这一页),
+// 再按「用户消息 + 助手段落 + 工具摘要」压成纯文本。思考块默认不复制(与 TUI 的
+// formatSessionTranscript(..., true) 之外的 thinking 开关一致;面板没有设置项,先取关)。
+const TRANSCRIPT_SEP = '\n\n---\n\n';
+
+function transcriptText(info, messages) {
+  const title = String((info && (info.title || info.id)) || '会话');
+  const head = ['# ' + title, ''];
+  if (info && info.id) head.push('**Session ID:** ' + info.id);
+  try {
+    if (info && info.time && info.time.created)
+      head.push('**Created:** ' + new Date(info.time.created).toLocaleString());
+    if (info && info.time && info.time.updated)
+      head.push('**Updated:** ' + new Date(info.time.updated).toLocaleString());
+  } catch (_) {}
+  head.push('', '---', '');
+
+  const blocks = [];
+  for (const m of messages || []) {
+    if (!m || msgHidden(m)) continue;
+    if (m.type === 'user') {
+      const t = String(m.text || '').trim();
+      if (t) blocks.push('## User\n\n' + t);
+      continue;
+    }
+    if (m.type === 'shell') {
+      const cmd = String(m.command || '').trim();
+      const out = String((m.output && m.output.output) || '').replace(/\s+$/, '');
+      if (cmd || out) blocks.push('## Shell\n\n```\n$ ' + cmd + '\n' + out + '\n```');
+      continue;
+    }
+    if (m.type !== 'assistant') continue;
+    const parts = [];
+    for (const p of m.content || []) {
+      if (!p) continue;
+      if (p.type === 'text') {
+        const t = String(p.text || '').trim();
+        if (t) parts.push(t);
+        continue;
+      }
+      if (p.type !== 'tool') continue;
+      const line = toolLine(p);
+      const detail = [line.head, line.tail].filter(Boolean).join(' ');
+      const name = String(p.name || toolKind(p) || 'tool');
+      parts.push('- **' + name + '**' + (detail ? ' — ' + detail : '') +
+        (p.state && p.state.status === 'error' ? ' (error)' : ''));
+    }
+    if (parts.length) blocks.push('## Assistant\n\n' + parts.join('\n\n'));
+  }
+  if (!blocks.length) return '';
+  return head.join('\n') + '\n' + blocks.join(TRANSCRIPT_SEP) + '\n';
+}
+
+async function copyTranscript(sid) {
+  sid = sid || store.selected;
+  if (!sid) return;
+  let info = store.sessions.get(sid) || null;
+  let messages = null;
+  try {
+    const j = await api('/api/experimental/session/' + enc(sid) + '/export?sanitize=false');
+    const d = j && j.data;
+    if (d && Array.isArray(d.messages)) {
+      info = d.info || info;
+      messages = d.messages;
+    }
+  } catch (e) {
+    // 导出失败时不假装成功:能退回当前页就退回,并明确说这是已加载部分
+    flash('读取完整会话失败,改为复制已加载部分:' + e.message, 'warn');
+  }
+  if (!messages) {
+    if (store.selected !== sid) {
+      flash('复制转录需要先打开该会话(或等导出接口恢复)', 'warn');
+      return;
+    }
+    messages = currentMessages();
+  }
+  const text = transcriptText(info, messages);
+  if (!text) {
+    flash('这个会话还没有可复制的正文', 'warn');
+    return;
+  }
+  const ok = await copyText(text);
+  flash(ok ? '会话转录已复制' : '复制失败,可改用「导出」保存 JSON', ok ? 'ok' : 'warn');
 }
 
 /* ----------------------- 变更总览(照 TUI 的 /diff) ----------------------- */
@@ -6468,6 +6582,8 @@ async function onAction(act, id) {
         { key: 'rename', label: '改名' },
         { key: 'move', label: '移动' },
         { key: 'fork', label: '分叉' },
+        { key: 'copyid', label: '复制会话 ID', group: '复制' },
+        { key: 'transcript', label: '复制转录', group: '复制' },
         { key: 'archive', label: arch ? '取消归档' : '归档' },
         { key: 'del', label: '删除' },
       ],
@@ -6517,6 +6633,16 @@ async function onAction(act, id) {
     if (s) s.location = { directory: d };
     store.seenDirs.add(d);
     renderSessions();
+    return;
+  }
+
+  if (act === 'copyid') {
+    await copySessionId(id);
+    return;
+  }
+
+  if (act === 'transcript') {
+    await copyTranscript(id);
     return;
   }
 
@@ -6937,7 +7063,8 @@ const PANEL_COMMANDS = [
   { name: 'export', description: '导出当前会话为 JSON', run: () => openExport() },
   { name: 'archive', description: '归档 / 取消归档当前会话', run: (sid) => toggleArchive(sid) },
   { name: 'tui', description: '在 TUI 中打开当前会话', run: () => openTui() },
-  { name: 'copy', description: '复制「在 TUI 打开」的命令', run: () => copyTui() },
+  { name: 'copy', description: '复制当前会话转录(纯文本)', run: (sid) => copyTranscript(sid) },
+  { name: 'copyid', description: '复制当前会话 ID', run: (sid) => copySessionId(sid) },
   { name: 'sessions', description: '切换会话(列表选择)', run: () => openSessionPick() },
   { name: 'timeline', description: '跳到某条用户消息(时间线)', run: () => openTimeline() },
   { name: 'fork', description: '从完整会话或某条用户消息分叉', run: (sid) => openForkPick(sid) },
@@ -6958,6 +7085,8 @@ const HELP_KEYS = [
   { k: '/worktrees', d: '列出 / 删除工作树,或把当前会话移进去' },
   { k: '/timeline', d: '跳到某条用户消息' },
   { k: '/fork', d: '从完整会话或某条用户消息分叉' },
+  { k: '/copy', d: '复制当前会话转录(纯文本,不含思考)' },
+  { k: '/copyid', d: '复制当前会话 ID' },
   { k: '/subagents', d: '选择并打开当前会话的子会话' },
   { k: '/parent', d: '回到父会话' },
   { sec: '会话' },

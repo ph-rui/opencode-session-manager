@@ -541,6 +541,19 @@
       saveDraft('ses_a', '   ');
       T('草稿:纯空白不算草稿', draftText('ses_a') === '', draftText('ses_a'));
 
+      var copyCmd = PANEL_COMMANDS.filter(function (c) { return c.name === 'copy'; })[0];
+      var copyIdCmd = PANEL_COMMANDS.filter(function (c) { return c.name === 'copyid'; })[0];
+      T('命令面板:/copy 复制转录、/copyid 复制 ID',
+        !!copyCmd && copyCmd.description.indexOf('转录') >= 0 && !!copyIdCmd &&
+        copyIdCmd.description.indexOf('ID') >= 0,
+        [copyCmd && copyCmd.description, copyIdCmd && copyIdCmd.description]);
+      await onAction('more', 'ses_a');
+      T('更多操作:有复制 ID / 复制转录',
+        items().some(function (i) { return i.key === 'copyid'; }) &&
+        items().some(function (i) { return i.key === 'transcript'; }),
+        items().map(function (i) { return i.key; }));
+      closePick();
+
       await openModelPick();
       T('/models:标题', q('#pickTitle').textContent === '选择模型');
       T('/models:开着过滤框', q('#pickFilter').hidden === false);

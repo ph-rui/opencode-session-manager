@@ -3612,6 +3612,53 @@ status 读不到就退回原来的 `confirm`,不把删除卡死。
 **回归**：`smoke.sh` 358 → **359**，`ui-picks` 129 → **138**；其余套件计数不变；
 全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-871.log`。
 
+### 8.72 复制会话 ID 与转录
+
+**起因**：审计 A5。TUI 有 `session.copy.id` 与 `session.copy`（`routes/session/index.tsx:1189` /
+`:1201`，后者 export 后格式化成 transcript 写剪贴板）；面板的 `/copy` 复制的却是「在 TUI
+打开」的启动命令，导出也只有 JSON。
+
+**结论**：把 `/copy` 改成复制转录（与 TUI 同名命令对齐），另加 `/copyid`；会话的「更多操作」
+里也放这两项。转录取服务端 export 的完整会话（不只当前加载页），格式是「用户消息 +
+助手文本 + 工具摘要」的纯文本；剪贴板统一走 `copyText()`，局域网 http 回落到临时 textarea
+加 `execCommand('copy')`。启动命令的复制仍在 `/tui` 对话框里（原「复制」按钮）。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 剪贴板 | `copyText(text)`：安全上下文优先 `navigator.clipboard.writeText()`；失败或不可用时建一个临时 textarea 选中后 `execCommand('copy')`，最后移除节点。`copyTui()` 也改走它 |
+| 复制 ID | `copySessionId(sid)`：整串 `ses_...` 写剪贴板，toast「会话 ID 已复制」/「复制会话 ID 失败」 |
+| 转录格式 | `transcriptText(info, messages)`：标题、Session ID、Created / Updated、`## User`、`## Assistant`、`## Shell`；助手只取 text 与 tool part，工具写成 `- **name** — 摘要`，出错补 ` (error)`；`reasoning` 与 `idle` 不出现在转录里 |
+| 复制转录 | `copyTranscript(sid)`：先 `GET /api/experimental/session/:id/export?sanitize=false` 取全量；失败时若该会话正开着就退回当前已加载消息并提示「改为复制已加载部分」，没开着则明说需要先打开 |
+| 命令 | `/copy` → 复制转录（纯文本）；新增 `/copyid`；`HELP_KEYS` 同步两条 |
+| 列表 | 「更多操作」加「复制会话 ID」「复制转录」两项（分组「复制」），桌面的 ⋯ 与窄屏共用；`onAction` 接到上面两个函数 |
+
+**取舍**：
+
+- **转录是摘要，不是 TUI 那种带工具完整输入 / 输出的长文**。按审计的建议先做「用户消息 +
+  助手文本 + 工具摘要」；完整工具入参 / 输出、思考块开关、按消息选择复制都留到以后。
+- **`/copy` 的行为改了**：原来复制启动命令，现在与 TUI 一样复制转录。启动命令仍能从
+  `/tui` 对话框的「复制」按钮拿到，没有丢能力，只是不再占用 `/copy` 这个名字。
+- **导出失败才退回当前页**。正常情况下用 export 保证「复制的是整条会话」，不受消息分页
+  影响；失败时也不假装成功，toast 里明说复制的是已加载部分。
+- **复制 ID 不依赖当前会话是否打开**：列表行「更多操作」里可以直接复制别的会话 ID；
+  转录则优先走 export，所以也一样不需要先打开。
+
+**验证**：
+
+- `ui-tools.html` 新增 9 项：转录头（标题 / ID / 时间）、User / Assistant 段落、工具摘要
+  （read 路径 / bash 命令）、错误工具标 error、默认不含思考、跳过 idle、Shell 段落、空消息
+  返回空串，以及复制 ID 时传入整串 id 并提示。
+- `ui-picks.html` 新增 2 项：命令面板里 `/copy` 的描述是转录、`/copyid` 存在；「更多操作」
+  里两个复制项都在。
+- `smoke.sh` 新增 1 项静态锁：`copyText` / `copySessionId` / `transcriptText` /
+  `copyTranscript`、`/copy` 与 `/copyid`、更多操作里的两项，以及两个测试文件的关键断言都在。
+- `node --check public/app.js` 通过。
+
+**回归**：`smoke.sh` 359 → **360**，`ui-picks` 138 → **140**，`ui-tools` 339 → **348**；
+其余套件计数不变；全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-872.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -3626,6 +3673,7 @@ status 读不到就退回原来的 `confirm`,不把删除卡死。
 | **主列表只显示顶层会话，子会话用单独的入口**（§8.69）| 和 TUI 的 `!parentID` 一致，现场 29/108 个子会话不再混进左栏；只在显示层过滤，保留 `store.subs` 给标签栏、收工行与深链用 | 列表页仍会返回子会话，主列表实际可能不到 50 个；只列直接子会话、不做 TUI 的整棵家族树；窄屏头部入口被 `#chatOps` 一并收掉，只能走 `/subagents` / `/parent` |
 | **时间线 / 分叉复用选择框，只列已加载消息**（§8.70）| 与 TUI 的 `DialogTimeline` / `DialogFork` 同一套交互（用户消息最新在前、完整会话第一项、`{before:id}`）；不新增对话框，也不为打开选择框翻完所有历史页 | 消息不在当前页时跳不过去；只滚动不弹 TUI 的 `DialogMessage` 预览；列表行的「分叉」仍是末尾分叉且只刷新 |
 | **草稿按会话存正文，放 `sessionStorage`**（§8.71）| 与 TUI 的 `saveDraft` / `takeDraft` 同一语义；刷新也能恢复，且不跨标签页串味 | 不存附件；发送失败后输入框仍是空的（草稿在会话名下，切回来才看到）；最多 20 个会话 |
+| **`/copy` 复制转录，另开 `/copyid`**（§8.72）| 与 TUI 的 slash 命令对齐；转录走 export 取全量，不受面板消息分页影响；复制 ID / 转录都不要求先打开该会话 | 转录只是摘要（工具入参 / 输出、思考块开关、按消息选段都没做）；`/copy` 不再复制启动命令，那条改从 `/tui` 对话框的复制按钮拿 |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
