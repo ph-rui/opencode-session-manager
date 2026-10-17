@@ -373,6 +373,11 @@
       T('C8j 窄屏会话:用量那格搬到标题行末尾,露着',
         vis(q('#ctxInfo')) && q('#ctxInfo').parentElement === q('#chatHeader .chline'),
         q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.getAttribute('class'));
+      /* §8.48(用户「改」):标题行那枚「空闲 / ● 运行中 / ◌ 重试中」徽章也收掉 ——
+         窄屏上它只占宽度,运行中看底部进度条(收起时细边上还有「■ 中断」),重试看进度条。 */
+      q('#chatState').textContent = '空闲';
+      T('C8k 窄屏会话:「空闲 / 运行中」那枚徽章收掉了', !vis(q('#chatState')));
+      T('C8k2 窄屏会话:标题照旧露着(只收了徽章)', vis(q('#chatTitle')));
 
       /* 对话框:基础样式 min-width:420px,在 393px 的屏上必然溢出 */
       openPick({ title: '宽度检查', items: [{ key: 'a', label: '甲' }] });
@@ -418,6 +423,10 @@
       T('D3f 桌面:用量那格回到提示栏里(#ctxInfo 的家跟着窄屏走)',
         q('#ctxInfo').parentElement === q('#promptFooter') && qa('#ctxInfo').length === 1,
         q('#ctxInfo').parentElement && q('#ctxInfo').parentElement.id);
+      /* §8.48 的反面:那枚状态徽章只在窄屏收,桌面照旧留着(它跟着状态条一起画) */
+      q('#chatState').textContent = '空闲';
+      T('D3g 桌面:标题行那枚状态徽章还在', vis(q('#chatState')) && q('#chatState').textContent === '空闲',
+        q('#chatState').textContent);
       T('D4 桌面:原来那六个按钮回来了', vis(rowA().querySelector('.actions button[data-act="open"]')) &&
         vis(rowA().querySelector('.actions button[data-act="del"]')));
       T('D5 桌面:表头回来了', vis(q('#list thead')));

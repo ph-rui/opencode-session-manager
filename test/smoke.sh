@@ -1495,6 +1495,13 @@ if has "$CSS" 'html.narrow #chatMeta { display: none; }'; then
 else
   echo "FAIL: 手机上 #chatMeta 还占着那 17px(§8.43)"; fail=$((fail + 1))
 fi
+# §8.48(用户「改」):标题行那枚「空闲 / 运行中 / 重试中」徽章手机上收掉 ——
+# 运行中看底部进度条(收起时细边上还有「■ 中断」)、重试看进度条的重试态,「空闲」是噪音。
+if has "$CSS" 'html.narrow #chatState { display: none; }' && has "$HOME_HTML" 'id="chatState"'; then
+  echo "PASS: 手机上标题行那枚状态徽章收掉(桌面照旧,§8.48)"; pass=$((pass + 1))
+else
+  echo "FAIL: 手机上 #chatState 还占着标题行的宽度(§8.48)"; fail=$((fail + 1))
+fi
 if has "$CSS" 'html.narrow .chline #ctxInfo' &&
    has "$APPJS" 'function syncCtxInfoHome()' &&
    has "$APPJS" "document.documentElement.classList.contains('narrow')" &&
