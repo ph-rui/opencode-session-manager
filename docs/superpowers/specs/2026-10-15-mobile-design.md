@@ -4074,6 +4074,45 @@ B6 先做只读的 `/status`，不碰调试日志和写操作。
 **回归**：`smoke.sh` 368 → **369**，`ui-capabilities` 190 → **200**；其余套件计数不变；
 全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-881.log`。
 
+### 8.82 流式增量按帧合并 + 光标原地追加
+
+**起因**：高频 token 流里每个 `session.text.delta` 都会同步跑一遍 `md()`、`innerHTML`
+和贴底；另外 `paintLiveText()` 为了把光标放进最后一个块，会先 `cursorInto()` 建临时节点
+解析整段 HTML，再序列化，最后 `innerHTML` 又解析一次。两件事都不是 GPU 问题，先把主线程
+上重复的同步工作压掉。
+
+**结论**：事件入口只把文本增量排进 `requestAnimationFrame`，同一帧多个 delta 合成一次
+`paintLiveDelta()`；光标改成在已经渲染好的节点里原地追加，不再二次解析整段 HTML。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 调度 | 新增 `scheduleLivePaint()` / `cancelScheduledLivePaint()`；`livePaintRaf` 保证一帧最多排一次，事件入口 `else if (local) scheduleLivePaint()` |
+| 收口 | `renderMessages()` 开头取消待执行的帧；手动调用 `paintLiveDelta()`（测试 / 收尾）也会先取消排队帧，避免重复绘制 |
+| 光标 | 抽出 `appendCursor(host)`，在现有 DOM 里找最后一个 `p` / `li` / `pre` / 标题 / 单元格并追加；`paintLiveText()` 先 `innerHTML = body`，再原地追加 |
+| 初始渲染 | `cursorInto(html)` 继续复用 `appendCursor()`，行为和原来一致 |
+
+**取舍**：
+
+- **最多晚一帧**：delta 不再逐 token 立刻上屏，正常 60fps 下用户感知不到；隐藏标签页里
+  `requestAnimationFrame` 会暂停，内容留在本地缓冲，回到前台或切会话时由整表重绘补齐。
+- **只合并文本增量**：结构变化（新 part、工具状态、`*.ended` 等）仍走原来的整条重绘路径，
+  不把结构事件塞进这一帧队列。
+- **不改 Markdown 解析器**：`md()` 仍按整块重解析；这次只去掉每帧重复调度和光标那次多余
+  的 HTML 往返。真正要把解析移出主线程，得另做 Worker，属于下一阶段。
+
+**验证**：
+
+- `ui-stream.html` 新增 1 项：同一帧连续两个 delta 时，绘制函数在帧回调前调用 0 次、
+  回调后只调用 1 次，且文本已合并进 DOM；`feed()` 仍同步 flush，原有 259 项语义不变。
+- `smoke.sh` 新增 2 项静态锁：事件入口接 `scheduleLivePaint()` / `paintLiveDelta()` 会收掉
+  排队帧；`paintLiveText()` 走 `appendCursor(node)` 而不走 `cursorInto(body)`。
+- `node --check public/app.js` 通过；全量回归 **0 失败，1 跳过**，日志
+  `/tmp/ocsm-probe/perf/regress-882.log`。
+
+**回归**：`smoke.sh` 369 → **371**，`ui-stream` 259 → **260**；其余套件计数不变。
+
 ---
 
 ## 9. 取舍与理由
@@ -4098,6 +4137,7 @@ B6 先做只读的 `/status`，不碰调试日志和写操作。
 | **`/mcps` 只读列服务器状态**（§8.79）| 与 TUI 的 `mcp.list` 同入口；先交代有哪些服务器、连没连上、为什么失败，不碰运行时写操作 | 不接 connect / disconnect / add / remove；`/api/mcp` 没有工具数，不编假计数；列表是快照，不跟 SSE 自动刷新 |
 | **导出默认 Markdown，JSON 保留脱敏**（§8.80）| 与 TUI 的 `DialogExportOptions` 同一默认；Markdown 复用 `transcriptText`，不另造一套；JSON 行为不动 | thinking / tools 两个开关还没做；Markdown 工具只留摘要；不写临时文件（浏览器直接下载）；空转录只报错不下载 |
 | **`/status` 只读摘要，不露秘密**（§8.81）| 把 health、配置层级和 MCP 运行数摆在一张表里；三个请求各自容错；密码只报「已启用」 | 版本是面板代理的版本；列表是快照不自动刷新；不显示 provider 设置 / key；不做 `opencode.debug` 的日志与内部状态 |
+| **流式增量按帧合并，光标原地追加**（§8.82）| 同一帧多个 delta 只跑一次 `md()` / DOM 写入 / 贴底；光标不再二次解析整段 HTML | 文本最多晚一帧；隐藏标签页暂停绘制，回前台或切会话时补齐；Markdown 解析仍在主线程 |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|

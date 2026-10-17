@@ -1182,6 +1182,7 @@ else
 fi
 RENDER_FN_O=$(printf '%s' "$APPJS" | awk '/^function renderMessages\(\)/{f=1} f{print} f&&/^\}$/{exit}')
 DELTA_FN_O=$(printf '%s' "$APPJS" | awk '/^function paintLiveDelta\(/{f=1} f{print} f&&/^\}$/{exit}')
+LIVETEXT_FN_O=$(printf '%s' "$APPJS" | awk '/^function paintLiveText\(/{f=1} f{print} f&&/^\}$/{exit}')
 UPD_FN_O=$(printf '%s' "$APPJS" | awk '/^function updateJumpLatest\(/{f=1} f{print} f&&/^\}$/{exit}')
 # 整表 renderMessages() 与增量重绘都汇到 updateJumpLatest() 里量一次;增量重绘
 # (paintLiveDelta/paintCompactBody)只读 store.nearBottom —— 文档刚改完就去读
@@ -1191,6 +1192,22 @@ if has "$UPD_FN_O" 'atBottom(box)' && has "$DELTA_FN_O" 'store.nearBottom'; then
   echo "PASS: 自动跟随与按钮共用 atBottom()(增量重绘只读缓存,不再各写一个 80)"; pass=$((pass + 1))
 else
   echo "FAIL: 自动跟随或按钮没走 atBottom()"; fail=$((fail + 1))
+fi
+# delta 按帧合并:事件入口只排队,真正绘制在 requestAnimationFrame 里;手动调用仍能同步收掉
+if has "$APPJS" 'function scheduleLivePaint()' &&
+   has "$APPJS" 'requestAnimationFrame(run)' &&
+   has "$APPJS" 'else if (local) scheduleLivePaint();' &&
+   has "$APPJS" 'function cancelScheduledLivePaint()' &&
+   has "$DELTA_FN_O" 'cancelScheduledLivePaint()'; then
+  echo "PASS: 流式 delta 按帧合并,整表重绘/手动绘制会收掉排队帧"; pass=$((pass + 1))
+else
+  echo "FAIL: 流式 delta 还没按帧合并,或排队帧没有收口"; fail=$((fail + 1))
+fi
+# 光标原地追加,别为了放光标把整段 Markdown HTML 再解析/序列化一遍
+if has "$LIVETEXT_FN_O" 'appendCursor(node)' && ! has "$LIVETEXT_FN_O" 'cursorInto(body)'; then
+  echo "PASS: 增量光标原地追加(不再二次解析整段 HTML)"; pass=$((pass + 1))
+else
+  echo "FAIL: 增量光标还在走 cursorInto() 的二次解析"; fail=$((fail + 1))
 fi
 # 「贴不贴底」= 用户意图,不是一次几何读数:容器变矮(状态条 / 底板展开 / #asks / 软键盘)
 # 与内容变长都会把「离底还有多远」撑大,直接采信那一次读数就会把跟随关掉 —— 表现就是

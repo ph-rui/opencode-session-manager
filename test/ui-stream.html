@@ -116,7 +116,7 @@
     var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
     var AID = 'msg_a1';
     var ev = function (type, data) { return { id: 'evt_x', type: type, data: data }; };
-    var feed = function (type, data) { handleEvent(ev(type, data)); };
+    var feed = function (type, data) { handleEvent(ev(type, data)); paintLiveDelta(); };
     var view = function (id) { return liveView(id); };
     var el = function (id) { var r = msgEls.get(id); return r && r.el; };
     var lkNode = function (t, o) { var e = el(AID); return e && e.querySelector('[data-lk="' + t + ':' + o + '"]'); };
@@ -1079,6 +1079,29 @@
         q('#ctxInfo .ctxFull').textContent === '200.0K (100%)', q('#ctxInfo .ctxFull').textContent);
       T('窄屏那档是「100% ctx」', q('#ctxInfo .ctxCompact').textContent === '100% ctx',
         q('#ctxInfo .ctxCompact').textContent);
+
+      /* delta 按帧合并:同一帧内多个 text.delta 只跑一次 paintLiveDelta()
+       * (每个 token 都同步 md() + innerHTML + 贴底,高频流会把主线程切成一串长任务) */
+      T('同一帧多个 delta 只触发一次局部绘制', await (async function () {
+        store.selected = 'ses_a';
+        store.live.clear();
+        msgEls.clear();
+        q('#messages').innerHTML = '';
+        handleEvent(ev('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_raf', started: 1 }));
+        handleEvent(ev('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_raf', ordinal: 0 }));
+        var realPaint = paintLiveDelta;
+        var paints = 0;
+        paintLiveDelta = function () { paints++; return realPaint.apply(this, arguments); };
+        handleEvent(ev('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_raf', ordinal: 0, delta: 'A' }));
+        handleEvent(ev('session.text.delta', { sessionID: 'ses_a', assistantMessageID: 'msg_raf', ordinal: 0, delta: 'B' }));
+        var immediate = paints;
+        await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); });
+        var after = paints;
+        paintLiveDelta = realPaint;
+        var rafNode = q('#messages [data-lk="text:0"]');
+        return immediate === 0 && after === 1 &&
+          !!rafNode && rafNode.textContent.indexOf('AB') >= 0;
+      })());
 
       /* 取消选中 → 收起 */
       store.live.clear();

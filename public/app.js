@@ -5524,6 +5524,7 @@ const CV_MIN_MSGS = 30;
 
 function renderMessages() {
   const box = $('#messages');
+  cancelScheduledLivePaint(); // 整表重绘会覆盖这一帧的增量内容,排队的那一帧别再白跑
   const msgs = currentMessages();
   repinSeq++; // 这一轮渲染一来,上一轮「贴完底再跟几帧」就地作废(免得它去动新会话说位置)
   // 够长才让离屏消息跳过渲染(CV_MIN_MSGS);短会话维持原样,滚动行为一个字节都不变
@@ -8810,15 +8811,20 @@ function liveSig(L) {
 
 // 把流式光标放进「最后一段内容」的行内末尾。
 // 直接拼在 md() 结果后面会落在块级元素之外(如 </ol> 之后),于是单独占一行。
-function cursorInto(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  const blocks = tmp.querySelectorAll('p, li, pre, blockquote, h1, h2, h3, h4, h5, h6, td, th');
-  const host = blocks.length ? blocks[blocks.length - 1] : tmp;
+function appendCursor(host) {
+  const blocks = host.querySelectorAll('p, li, pre, blockquote, h1, h2, h3, h4, h5, h6, td, th');
+  const target = blocks.length ? blocks[blocks.length - 1] : host;
   const c = document.createElement('span');
   c.className = 'cursor';
   c.textContent = '▌';
-  host.appendChild(c);
+  target.appendChild(c);
+  return c;
+}
+
+function cursorInto(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  appendCursor(tmp);
   return tmp.innerHTML;
 }
 
@@ -8832,14 +8838,38 @@ function paintLiveText(el, L) {
     const key = p.text.length + ':' + (p.final ? 1 : 0);
     if (node.dataset.lkKey === key) continue;
     const body = md(p.text);
-    node.innerHTML = node.dataset.lkLast === '1' ? cursorInto(body) : body;
+    node.innerHTML = body;
+    if (node.dataset.lkLast === '1') appendCursor(node);
     node.dataset.lkKey = key;
     changed = true;
   }
   return changed;
 }
 
+// 同一帧里的多个 text/reasoning delta 合成一次绘制。每个 token 都跑一遍 md() +
+// innerHTML + 贴底,在 100+ delta/s 时会把主线程切成一串长任务;rAF 只保证每帧最多一次。
+let livePaintRaf = 0;
+
+function scheduleLivePaint() {
+  if (livePaintRaf) return;
+  const run = () => {
+    livePaintRaf = 0;
+    paintLiveDelta();
+  };
+  livePaintRaf = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(run)
+    : setTimeout(run, 16);
+}
+
+function cancelScheduledLivePaint() {
+  if (!livePaintRaf) return;
+  if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(livePaintRaf);
+  else clearTimeout(livePaintRaf);
+  livePaintRaf = 0;
+}
+
 function paintLiveDelta() {
+  cancelScheduledLivePaint(); // 手动调用(测试/收尾)时把排队的那一帧收掉,避免重复绘制
   const sid = store.selected;
   if (!sid) return;
   const box = $('#messages');
@@ -9101,7 +9131,7 @@ function handleEvent(e) {
   const repaint = structural || (!!L && !!rec && rec.fp !== liveSig(L));
   // 结构变化(新 part / 工具状态 / 元数据)立刻重绘;纯文本变化只刷局部节点
   if (repaint && liveForSid(store.selected)) renderMessages();
-  else if (local) paintLiveDelta();
+  else if (local) scheduleLivePaint();
 
   const t = e.type || '';
   const evSid = d.sessionID || (d.info && d.info.id) || '';
