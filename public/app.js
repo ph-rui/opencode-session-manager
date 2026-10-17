@@ -2577,28 +2577,128 @@ function diffCounts(files) {
 }
 
 // 多文件 diff:每文件一块「状态徽标 + 路径 + 增删统计」,下面接统一视图正文。
-function diffHtml(files) {
+const diffViews = new Map(); // §8.52 并排视图的选择:key = partID#文件序号,value = 'split'
+
+function splitCellHtml(r, lang, side) {
+  if (!r) return '<div class="side empty"></div>';
+  const no = side === 'old' ? r.oldNo : r.newNo;
+  const sign = r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' ';
+  return '<div class="side ' + side + '">' +
+    '<span class="ln">' + (no == null ? '' : no) + '</span>' +
+    '<span class="sign">' + sign + '</span>' +
+    '<span class="src">' + paintHtml(r.text, r.hl, syntaxSpans(r.text, lang)) + '</span></div>';
+}
+
+// 并排视图:同一 hunk 里的删段与增段按位置左右对齐;上下文 / hunk / meta 行整行跨两栏。
+// 一侧落单就给对面留一个空单元格(照 GitHub 的 split view)。
+function splitRowsHtml(rows, lang) {
   let html = '';
+  let i = 0;
+  while (i < rows.length) {
+    const r = rows[i];
+    if (r.k === 'del') {
+      let j = i;
+      while (j < rows.length && rows[j].k === 'del') j++;
+      let k = j;
+      while (k < rows.length && rows[k].k === 'add') k++;
+      const n = Math.max(j - i, k - j);
+      for (let x = 0; x < n; x++) {
+        html += '<div class="dl pair">' + splitCellHtml(rows[i + x], lang, 'old') +
+          splitCellHtml(rows[j + x], lang, 'new') + '</div>';
+      }
+      i = k;
+      continue;
+    }
+    if (r.k === 'add') {
+      html += '<div class="dl pair"><div class="side empty"></div>' +
+        splitCellHtml(r, lang, 'new') + '</div>';
+      i++;
+      continue;
+    }
+    html += diffRowHtml(r, lang);
+    i++;
+  }
+  return html;
+}
+
+function diffHtml(files, opts) {
+  let html = '';
+  const pid = (opts && opts.pid) || '';
+  const narrow = document.documentElement.classList.contains('narrow');
+  let fi = 0;
   for (const f of files || []) {
     const b = diffBadge(f && f.status);
     const lang = langOf(f && f.file);
     const rows = pairDiffRows(parsePatch(f && f.patch));
     const adds = typeof (f && f.additions) === 'number' ? f.additions : rows.filter((r) => r.k === 'add').length;
     const dels = typeof (f && f.deletions) === 'number' ? f.deletions : rows.filter((r) => r.k === 'del').length;
+    // §8.52 并排视图:只有桌面、只有给了 part id(否则纯函数照旧出统一视图)
+    const split = !!pid && !narrow && diffViews.get(pid + '#' + fi) === 'split';
     html +=
       '<div class="dfile">' +
       '<span class="dbadge ' + b.cls + '">' + b.label + '</span>' +
       '<span class="dpath">' + esc(abbrevPath((f && f.file) || '')) + '</span>' +
       (adds ? '<span class="tadd">+' + adds + '</span>' : '') +
       (dels ? '<span class="tdel">-' + dels + '</span>' : '') +
+      (rows.length && pid
+        ? '<button type="button" class="dswap' + (split ? ' on' : '') + '" data-pid="' + esc(pid) +
+          '" data-fi="' + fi + '" title="切换并排 / 统一视图(仅桌面)">⇆ 并排</button>'
+        : '') +
       '</div>';
     if (!rows.length) {
       html += '<div class="dnote">' + (dels ? '-' + dels + ' line' + (dels !== 1 ? 's' : '') : '(no content)') + '</div>';
+      fi++;
       continue;
     }
-    html += '<div class="diff">' + rows.map((r) => diffRowHtml(r, lang)).join('') + '</div>';
+    html += split
+      ? '<div class="diff split">' + splitRowsHtml(rows, lang) + '</div>'
+      : '<div class="diff">' + rows.map((r) => diffRowHtml(r, lang)).join('') + '</div>';
+    fi++;
   }
   return html;
+}
+
+// §8.52 并排 / 统一视图的开关(桌面专属;窄屏不出现按钮,渲染时也强制统一视图)
+function findToolPart(pid) {
+  for (const m of store.messages.values()) {
+    const L = liveView(m.id);
+    const list = (L && L.parts) || (m && m.content) || [];
+    for (const p of list) if (p && p.id === pid) return p;
+  }
+  return null;
+}
+
+function toggleDiffView(btn) {
+  const pid = btn && btn.getAttribute ? btn.getAttribute('data-pid') : '';
+  if (!pid) return false;
+  const key = pid + '#' + ((btn.getAttribute('data-fi') || '0'));
+  if (diffViews.get(key) === 'split') diffViews.delete(key);
+  else diffViews.set(key, 'split');
+  const card = btn.closest ? btn.closest('details.tool') : null;
+  const p = findToolPart(pid);
+  if (card && p) {
+    // 只重画这一张卡片(整表重绘会把别处摊开的 details 一起搬一遍)
+    const tmp = document.createElement('div');
+    tmp.innerHTML = toolHtml(p);
+    const fresh = tmp.firstElementChild;
+    if (fresh) card.replaceWith(fresh);
+    else renderMessages();
+  } else {
+    renderMessages();
+  }
+  return true;
+}
+
+function setupDiffView() {
+  const box = $('#messages');
+  if (!box) return;
+  box.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('.dswap');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation(); // 卡片头在 summary 外面,但别让冒泡再触发别的点击处理
+    toggleDiffView(btn);
+  });
 }
 
 // write 工具的正文:按行号显示,不做增删着色(服务端没给 diff)。
@@ -2805,7 +2905,7 @@ function toolHtml(p) {
   // edit / patch:服务端算好的多文件 unified diff(TUI 的 BlockTool:edit 是「← Edit <路径>」)
   if (kind === 'edit' || kind === 'patch') {
     if (files.length) {
-      return toolCard(p, line, diffCounts(files), diffHtml(files) + diagHtml(md, path), true);
+      return toolCard(p, line, diffCounts(files), diffHtml(files, { pid: p.id }) + diagHtml(md, path), true);
     }
     // 还在跑:服务端尚未给出 files,只显示目标(与服务端 TUI 的「← Edit <path>」一致)
     return '<div class="toolrow">' + toolHead(p, line) + '</div>';
@@ -6937,6 +7037,7 @@ function init() {
   setupMsgState(); // 拉消息的状态行(正在加载 / 加载失败 + 重试)
   setupListState(); // 拉会话列表的状态行(同上,挂在左栏里,§8.45)
   setupRepinWatch(); // 盯内容高度的补贴底(§8.46)
+  setupDiffView(); // diff 卡片的并排 / 统一视图切换(§8.52,仅桌面)
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)

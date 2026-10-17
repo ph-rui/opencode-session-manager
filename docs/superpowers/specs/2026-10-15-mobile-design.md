@@ -2518,6 +2518,54 @@ markdown、html、两套高亮叠加的嵌套顺序、hunk 不上色、`write` �
 
 ---
 
+### 8.52 并排视图(只做桌面,按卡片切换)
+
+**起因**:同一批的第 4 项;用户批的范围是「1-4;并排只做桌面,看看效果如何」。
+
+**做法**:
+
+| 位置 | 内容 |
+|---|---|
+| `splitRowsHtml(rows, lang)` | 同一 hunk 里连续的删段与紧随的增段按位置左右对齐;上下文 / hunk / meta 行整行跨两栏;一侧落单就给对面留一个空单元格 |
+| `splitCellHtml(r, lang, side)` | 单个半栏:自己的行号 + 符号 + 源码(行内高亮与语法色照旧) |
+| `diffViews` | `Map`,key = `partID#文件序号`,value = `'split'`;**只记在当前页面**,刷新回统一视图(没有持久化,和 TUI 的 `config.diffs.view` 不同) |
+| `.dfile` 里的 `.dswap` | 「⇆ 并排」按钮,`data-pid` / `data-fi` 指向那张卡;激活时加 `.on` |
+| `#messages` 上的点击委托 | `setupDiffView()` → `toggleDiffView(btn)`:翻转状态,然后用 `toolHtml(p)` **只重画这一张卡片**(不整表重绘,别处摊开的 `<details>` 不会被搬一遍) |
+
+CSS 用 `grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)`,中间一条竖线;每侧
+`overflow-x: auto` 各自横向滚动(与统一视图「不折行、横向滚动」同一条原则)。
+
+**为什么只桌面**:393px 竖屏切成两栏是两条 ~190px,长路径与缩进都看不全,比统一视图更差。
+判定源仍然只有 `<html>.narrow` 一处:
+
+- 渲染时 `!narrow` 才出两栏(窄屏直接按统一视图生成,不是靠 CSS 藏);
+- `html.narrow .dswap { display: none; }` —— 按钮在窄屏根本不露;
+- 窗口从桌面缩到窄屏档时,`html.narrow .diff.split .dl.pair { display: block; }`
+  让遗留的两栏退回上下两段(空单元格直接隐藏),不至于把页面挤坏。
+
+**实测**(真 Chromium,1366×900 与 393×894):
+
+```
+desktop-split   narrow=false split=true  btn=true  btnShown=block pairs=2
+desktop-unified narrow=false split=false btn=true  btnShown=block pairs=0
+phone-393       narrow=true  split=false btn=true  btnShown=none  pairs=0
+```
+
+真会话里点按钮(part `call_00_ET_nmz…`):点击前 `split=false`、18 行统一视图;点击后
+`split=true`、4 对左右对齐、按钮文字「⇆ 并排」;再点回来恢复统一视图。行号两栏各是各的
+(197-/197+、198-/198+),上下文行与 `@@` 行整行跨两栏。
+
+**回归**:`smoke.sh` 312 → **314**(样式:`.dl.pair` 两栏骨架 + 窄屏收掉 `.dswap`;
+代码:`splitRowsHtml` / `setupDiffView` / `diffHtml(files, { pid })` / init 接线);
+`ui-tools` 282 → **297**(15 项:两栏结构、左右行号、落单空单元格、纯新增左空右新、
+上下文整行跨栏、高亮与语法色进两栏、按钮与 `.on`、无 pid 仍是统一视图、窄屏强制统一、
+真点击换形态再点回来);其余 18 套与 6 个 `e2e-*` 全 0 失败。
+
+**已知**:每侧独立横向滚动,长行会在分栏处截断(横向能滚,但不是折行);
+切换状态不持久化 —— 要跟 TUI 那样记住,需要定一个键名与作用域,留给下一轮。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |

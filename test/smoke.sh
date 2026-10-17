@@ -207,6 +207,13 @@ if has "$CSS" '--syn-kw' && has "$CSS" '--syn-str' && has "$CSS" '--syn-num' && 
 else
   echo "FAIL: styles.css 缺语法着色(§8.50 的 .tk 上不了色)"; fail=$((fail + 1))
 fi
+# §8.52 并排视图:两栏骨架 + 桌面才有的切换按钮(窄屏必须收掉)
+if has "$CSS" '.dl.pair' && has "$CSS" 'grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)' &&
+   has "$CSS" 'html.narrow .dswap { display: none; }'; then
+  echo "PASS: styles.css 有并排视图(§8.52 的 .dl.pair 两栏 + 窄屏收掉 .dswap)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺并排视图骨架,或窄屏没把切换按钮收掉"; fail=$((fail + 1))
+fi
 # H 组 1:会话区字号由一个变量统管,区内字号一律相对 em(整块等比缩放,不是只有正文变大)
 if has "$CSS" '--chat-fs: 14px' && has "$CSS" 'font-size: var(--chat-fs)' &&
    has "$CSS" 'font-size: 0.92em' && has "$CSS" 'font-size: 0.88em'; then
@@ -259,6 +266,13 @@ if has "$APPJS" 'function syntaxSpans(' && has "$APPJS" 'function langOf(' &&
   echo "PASS: app.js 有语法着色(§8.50:syntaxSpans 同时接在 diff 与 write 正文上)"; pass=$((pass + 1))
 else
   echo "FAIL: app.js 缺语法着色(§8.50 的 langOf/syntaxSpans 没接上)"; fail=$((fail + 1))
+fi
+# §8.52 并排视图:配对渲染、点击 delegate、init 里真的接上了
+if has "$APPJS" 'function splitRowsHtml(' && has "$APPJS" 'function setupDiffView(' &&
+   has "$APPJS" 'diffHtml(files, { pid: p.id })' && has "$APPJS" 'setupDiffView(); // diff 卡片'; then
+  echo "PASS: app.js 有并排视图(§8.52:配对渲染 + 卡片上的切换 + init 接线)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺并排视图(§8.52 的 splitRowsHtml / setupDiffView 没接上)"; fail=$((fail + 1))
 fi
 if has "$APPJS" "const LIST_KEY = 'ocs.listHiddenTab';" && has "$APPJS" 'function listCollapsed()' &&
    has "$APPJS" 'paint(listCollapsed());' && has "$APPJS" 'sessionStorage.getItem(LIST_KEY)' &&

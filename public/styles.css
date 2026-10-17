@@ -605,6 +605,23 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   font-family: var(--mono);
 }
 .dnote { padding: 3px 6px; font-size: 0.88em; color: var(--diff-del-fg); }
+/* §8.52 并排 / 统一视图的切换按钮(只在桌面出现;窄屏由 html.narrow 收掉) */
+.dswap {
+  flex: none;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid var(--diff-rule);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.9em;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.dswap:hover { color: var(--fg); border-color: var(--muted); }
+.dswap.on { color: var(--accent); border-color: var(--accent); }
+html.narrow .dswap { display: none; }
 
 /* 统一视图正文:行号列 + 符号列 + 源码列,不折行、横向滚动 */
 .diff {
@@ -649,6 +666,21 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .src .tk.kw { color: var(--syn-kw); }
 /* write 的正文只有一列行号 */
 .diff.code .dl .ln.o { display: none; }
+/* §8.52 并排视图:左右两栏、中间一条竖线;上下文 / hunk 行整行跨两栏 */
+.diff.split { overflow-x: hidden; }
+.dl.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.dl.pair > .side { display: flex; min-width: 0; overflow-x: auto; white-space: pre; }
+.dl.pair > .side + .side { border-left: 1px solid var(--diff-rule); }
+.dl.pair > .side.old { background: var(--diff-del-bg); }
+.dl.pair > .side.new { background: var(--diff-add-bg); }
+.dl.pair > .side.empty { background: var(--diff-ln-bg); }
+.dl.pair > .side .src { flex: 1 1 auto; padding-right: 10px; color: var(--fg); }
+.dl.pair > .side.old .ln, .dl.pair > .side.old .sign { background: var(--diff-del-ln); color: var(--diff-del-fg); }
+.dl.pair > .side.new .ln, .dl.pair > .side.new .sign { background: var(--diff-add-ln); color: var(--diff-add-fg); }
+/* 转成窄屏档(或窗口缩到窄屏)时并排退回上下两段,别把 393px 切成两条 190px */
+html.narrow .diff.split .dl.pair { display: block; }
+html.narrow .diff.split .dl.pair > .side + .side { border-left: 0; border-top: 1px solid var(--diff-rule); }
+html.narrow .diff.split .dl.pair > .side.empty { display: none; }
 
 /* 诊断(服务端按文件路径给出,这里只挑出本文件的) */
 .ddiag { margin-top: 4px; }
