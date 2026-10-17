@@ -2466,6 +2466,23 @@ else
   echo "FAIL: §8.76 的 bottom 标记 / 贴底分支或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R33 组:技能选择 /skills,按 prompt.skills 发送(§8.77)----
+if has "$APPJS" 'function openSkillPick()' &&
+   has "$APPJS" '/api/skill?' &&
+   has "$APPJS" 'function insertSkill(id, name)' &&
+   has "$APPJS" 'store.skillHits.set(id, name || id);' &&
+   has "$APPJS" 'const skills = resolveSkills(text);' &&
+   has "$APPJS" 'if (skills.length) body.skills = skills;' &&
+   has "$APPJS" 'if (store.skillHits.has(k)) continue;' &&
+   has "$APPJS" "name: 'skills', description: '插入技能(@skill,按 TUI 的 prompt.skills)'" &&
+   has "$CSS" '.achip.skill { border-color: var(--accent); }' &&
+   has "$(cat "$(dirname "$0")/ui-picks.html")" '请求体走 skills[] 而不是 files[]' &&
+   has "$(cat "$(dirname "$0")/ui-picks.html")" '切走再切回,技能选择和草稿一起回来'; then
+  echo "PASS: §8.77 /skills 列表、@skill 插入、skills[] 请求体与按会话保留都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.77 的技能列表 / 插入 / 请求体 / 与 files[] 分流或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

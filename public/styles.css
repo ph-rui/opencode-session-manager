@@ -1141,6 +1141,8 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
   border-radius: 999px;
 }
 .achip.busy { opacity: 0.6; }
+.achip.skill { border-color: var(--accent); }
+.achip.skill .achip-size { color: var(--accent); }
 .achip-img { flex: none; width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }
 .achip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .achip-size { flex: none; color: var(--muted); }

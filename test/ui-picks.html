@@ -88,6 +88,12 @@
       { id: 'compaction', name: 'Compaction', mode: 'primary', hidden: true },
     ];
 
+    /* 真实 GET /api/skill:技能列表(id / name / description) */
+    var SKILLS = [
+      { id: 'review', name: 'Review', description: '代码审查' },
+      { id: 'write-docs', name: 'Write Docs', description: '写文档' },
+    ];
+
     /* 真实 GET /api/model:两个 provider、一个 disabled、两个带 variants */
     var MODELS = [
       { providerID: 'company', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true,
@@ -110,6 +116,7 @@
       if (u === '/__health') return json({ ok: true, base: 'http://127.0.0.1:1', uploadDir: '/tmp/oc-up' });
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
+      if (u.indexOf('/api/skill') === 0) return json({ location: { directory: '/proj/alpha' }, data: SKILLS });
       if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
       if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) {
         var pb = opts && opts.body ? JSON.parse(opts.body) : {};
@@ -681,6 +688,65 @@
       store.sessions.get('ses_a').agent = 'build';
       closePick();
 
+      /* ================= /skills(§8.77) ================= */
+      clearInput();
+      window.calls.length = 0;
+      await openSkillPick();
+      T('/skills:标题', q('#pickTitle').textContent === '选择技能');
+      T('/skills:开着过滤框', q('#pickFilter').hidden === false);
+      T('/skills:向服务端要技能列表', hadCall(/^\/api\/skill\?/) &&
+        lastCall(/^\/api\/skill\?/).url.indexOf('location%5Bdirectory%5D=%2Fproj%2Falpha') >= 0,
+        lastCall(/^\/api\/skill\?/));
+      T('/skills:label 用名字、sub 用描述',
+        items()[0].label === 'Review' && items()[0].sub === '代码审查',
+        [items()[0].label, items()[0].sub]);
+      pickChoose(items()[0]);
+      T('/skills:选中后把 @skill 插到光标处', q('#input').value === '@review ', q('#input').value);
+      T('/skills:记下技能,发送时不再当文件', store.skillHits.has('review'), Array.from(store.skillHits.keys()));
+      T('/skills:输入框上方出现技能 chip',
+        q('#attach .achip.skill') && q('#attach .achip.skill .achip-size').textContent === '技能',
+        q('#attach').innerHTML);
+
+      /* 技能和草稿一样按会话留内存:切走再切回,正文里的 @review 仍按技能发 */
+      await selectSession('ses_b');
+      await selectSession('ses_a');
+      T('/skills:切走再切回,技能选择和草稿一起回来',
+        q('#input').value === '@review ' && store.skillHits.has('review'),
+        [q('#input').value, Array.from(store.skillHits.keys())]);
+
+      /* 同名文件引用不能把技能抢走:files[] 里不能出现 review */
+      store.mentionHits.set('review', '/proj/alpha/review');
+      window.calls.length = 0;
+      await send();
+      var sent = bodyOf(lastCall(/\/prompt$/));
+      T('/skills:请求体走 skills[] 而不是 files[]',
+        !!sent && sent.skills && sent.skills.length === 1 &&
+        sent.skills[0].id === 'review' &&
+        sent.skills[0].mention.text === '@review' &&
+        sent.skills[0].mention.start === 0 && sent.skills[0].mention.end === 7 &&
+        sent.files === undefined,
+        sent);
+      T('/skills:发送成功后技能选择清掉', store.skillHits.size === 0, Array.from(store.skillHits.keys()));
+
+      /* 正文里把 @review 删了 → 即使还记着这个技能,也不该发 skills[] */
+      clearInput();
+      await openSkillPick();
+      pickChoose(items()[0]);
+      q('#input').value = '只是普通消息';
+      window.calls.length = 0;
+      await send();
+      T('/skills:正文里删掉 @skill 后不再带 skills[]',
+        bodyOf(lastCall(/\/prompt$/)).skills === undefined, bodyOf(lastCall(/\/prompt$/)));
+
+      /* 没有技能时只提示,不开一个空选择框 */
+      var savedSkills = SKILLS;
+      SKILLS = [];
+      closePick();
+      await openSkillPick();
+      T('/skills:没有可用技能时不开空框', picksOpen() === false, picksOpen());
+      SKILLS = savedSkills;
+      closePick();
+
       /* ================= 没选中会话时不开 ================= */
       closePick();
       store.selected = '';
@@ -688,19 +754,26 @@
       T('/models:没选中会话就不开', picksOpen() === false);
       await openAgentPick();
       T('/agents:没选中会话就不开', picksOpen() === false);
+      await openSkillPick();
+      T('/skills:没选中会话就不开', picksOpen() === false);
       store.selected = 'ses_a';
 
       /* ================= 三条命令确实接到了选择框 ================= */
       var found = {};
       mergedCommands('/proj/alpha').forEach(function (c) {
-        if (c.name === 'sessions' || c.name === 'models' || c.name === 'agents') found[c.name] = c;
+        if (c.name === 'sessions' || c.name === 'models' || c.name === 'agents' ||
+          c.name === 'skills') found[c.name] = c;
       });
-      T('面板命令仍是三条且都有说明',
-        !!(found.sessions && found.models && found.agents) &&
-        !!(found.sessions.description && found.models.description && found.agents.description));
-      T('三条说明不再写「跳到…」',
-        [found.sessions, found.models, found.agents].every(function (c) { return c.description.indexOf('跳到') < 0; }),
-        [found.sessions.description, found.models.description, found.agents.description]);
+      T('面板命令含 sessions / models / agents / skills 且都有说明',
+        !!(found.sessions && found.models && found.agents && found.skills) &&
+        !!(found.sessions.description && found.models.description && found.agents.description &&
+          found.skills.description));
+      T('这些说明不再写「跳到…」',
+        [found.sessions, found.models, found.agents, found.skills].every(function (c) {
+          return c.description.indexOf('跳到') < 0;
+        }),
+        [found.sessions.description, found.models.description, found.agents.description,
+          found.skills.description]);
       T('已没有 focusEl 这个只会聚焦的旧做法',
         typeof window.focusEl === 'undefined');
 

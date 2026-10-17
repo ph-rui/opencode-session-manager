@@ -65,6 +65,7 @@ const store = {
   home: '', // 机器 home 目录(来自 /__health),提示栏拿它把路径缩成 ~/...(照 TUI 的 cm)
   attachments: [], // 待发送的附件:[{ id, name, size, mime, path, uri }]
   mentionHits: new Map(), // @ 补全里确认过的条目:'相对路径' -> 绝对路径(H 组 6 A)
+  skillHits: new Map(), // /skills 里确认过的技能:id -> 显示名(§8.77,与文件 @ 引用区分)
   mentionItems: [], // 当前补全列表
   mentionAt: -1, // 补全列表当前高亮项
   mentionRange: null, // 正在补全的 @token 在输入框里的 [start, end)
@@ -2660,6 +2661,7 @@ function clearSelection() {
     cacheCurrentMessages(); // §8.55 取消选中也先留一份(切回来还能秒开)
     saveCurrentDraft(id); // §8.71:回列表也把没发出去的正文留在那个会话名下
     saveCurrentAttachments(id); // §8.74:附件也留在那个会话名下
+    saveCurrentSkills(id); // §8.77:技能选择也留在那个会话名下
   }
   store.selected = null;
   persistSelected(null, 'replace');
@@ -2687,6 +2689,7 @@ function clearSelection() {
   store.histAt = -1;
   store.histDraft = '';
   store.mentionHits.clear();
+  restoreSkills(null); // §8.77:输入框已清空,当前不再挂任何技能(缓存里那个会话的还留着)
   renderAsks();
   renderInbox();
   renderChatOps();
@@ -3255,6 +3258,7 @@ async function selectSession(id) {
     saveScrollAnchor();
     saveCurrentDraft(prev); // §8.71:输入框里的草稿按会话隔离,切走先存
     saveCurrentAttachments(prev); // §8.74:待发送附件也按会话隔离
+    saveCurrentSkills(prev); // §8.77:选过的技能也跟着草稿按会话留一份
   }
   // §8.55 切走的这一份先留在内存里,切回来时先用它顶上(再后台对账)
   if (prev && prev !== id) cacheCurrentMessages();
@@ -3276,6 +3280,7 @@ async function selectSession(id) {
   store.pending = false;
   store.forceBottom = !rs;
   store.lastTop = 0; // 滚口要清空,上个会话的 scrollTop 不能拿来跟新会话比(会被当成「用户往上滚」)
+  restoreSkills(id); // §8.77:先认回技能,renderAttachments() 才不会把它画成文件引用
   restoreAttachments(id); // §8.74:切回来把该会话自己的待发送附件放回输入区(没有就空)
   closeMentions();
   closeCommands();
@@ -6839,6 +6844,26 @@ function sessionDir(sid) {
   return (s && s.location && s.location.directory) || '';
 }
 
+/* §8.77 技能选择和附件一样按会话留在内存里:切走再切回,草稿里的 @skill 仍按技能发,
+ * 不会被 resolveMentions() 误当成工程文件。刷新后草稿文字还在,但选择记录不持久 ——
+ * 和 @ 文件引用现在的行为一致(要跨刷新保留,得连草稿一起设计)。 */
+const skillCache = new Map();
+
+function saveCurrentSkills(sid) {
+  if (!sid) return;
+  if (store.skillHits.size) skillCache.set(sid, new Map(store.skillHits));
+  else skillCache.delete(sid);
+}
+
+function restoreSkills(sid) {
+  store.skillHits = new Map((sid && skillCache.get(sid)) || []);
+}
+
+function dropSessionSkills(sid) {
+  if (sid) skillCache.delete(sid);
+  store.skillHits = new Map();
+}
+
 /* 发送前解析正文里的 @ 引用。只认「补全里确认过」的条目:
  * 好处是永远不会发出一个不存在的文件(那会让 prompt 直接 400 整条失败);
  * 代价是手打一个没走过补全的 @路径 不会变成附件 —— 与 TUI 里「@ 是补全入口」是一致的。
@@ -6854,11 +6879,34 @@ function resolveMentions(text) {
     if (text[i] !== '@') continue;
     for (const k of keys) {
       if (!text.startsWith(k, i + 1)) continue;
+      if (store.skillHits.has(k)) continue; // 同名时技能优先,别再当文件发一次
       const after = text[i + 1 + k.length];
       if (after !== undefined && !MENTION_TAIL.test(after)) continue;
       out.push({
         uri: fileURI(store.mentionHits.get(k)),
         name: baseName(k),
+        mention: { start: i, end: i + 1 + k.length, text: '@' + k },
+      });
+      break;
+    }
+  }
+  return out;
+}
+
+/* /skills 选过的技能,只认还在正文里的那些(§8.77)。请求体形状照 TUI 的
+ * PromptInfo.skills:[{ id, mention:{ start, end, text } }],而不是 files[]。 */
+function resolveSkills(text) {
+  const out = [];
+  if (!text || !store.skillHits.size) return out;
+  const keys = Array.from(store.skillHits.keys()).sort((a, b) => b.length - a.length);
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '@') continue;
+    for (const k of keys) {
+      if (!text.startsWith(k, i + 1)) continue;
+      const after = text[i + 1 + k.length];
+      if (after !== undefined && !MENTION_TAIL.test(after)) continue;
+      out.push({
+        id: k,
         mention: { start: i, end: i + 1 + k.length, text: '@' + k },
       });
       break;
@@ -6897,14 +6945,21 @@ function renderAttachments() {
   if (!box) return;
   const inp = $('#input');
   const refs = resolveMentions(inp ? inp.value : '');
+  const skills = resolveSkills(inp ? inp.value : '');
   const files = store.attachments;
-  box.hidden = !refs.length && !files.length;
+  box.hidden = !refs.length && !skills.length && !files.length;
   if (box.hidden) {
     box.innerHTML = '';
     syncComposerMeta(); // 收起时细边左侧那两句提示跟着一起变
     return;
   }
   let html = '';
+  for (const s of skills) {
+    html +=
+      '<span class="achip ref skill" title="正文里的 @ 技能,发送时会作为 prompt.skills 带上(删掉正文里的那个 @ 即取消)">' +
+      '<span class="achip-name">' + esc(store.skillHits.get(s.id) || s.id) + '</span>' +
+      '<span class="achip-size">技能</span></span>';
+  }
   for (const r of refs) {
     html +=
       '<span class="achip ref" title="正文里的 @ 引用,发送时会作为文件一起带上(删掉正文里的那个 @ 即取消)">' +
@@ -7224,6 +7279,7 @@ const PANEL_COMMANDS = [
   { name: 'parent', description: '回到父会话', run: (sid) => goParent(sid) },
   { name: 'models', description: '选择模型(含推理档位)', run: () => openModelPick() },
   { name: 'agents', description: '选择智能体', run: () => openAgentPick() },
+  { name: 'skills', description: '插入技能(@skill,按 TUI 的 prompt.skills)', run: () => openSkillPick() },
   { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
   { name: 'help', description: '命令与快捷键', run: () => openHelp() },
 ];
@@ -7254,6 +7310,7 @@ function clearInput() {
   const el = $('#input');
   if (el) el.value = '';
   saveDraft(store.selected, ''); // §8.71:/clear 也把草稿一起清掉
+  dropSessionSkills(store.selected); // §8.77:草稿没了,技能选择也一起撤掉
   closeCommands();
   closeMentions();
   renderAttachments();
@@ -7617,6 +7674,62 @@ async function openAgentPick() {
     items,
     onPick: (it) => switchAgent(it.key),
   });
+}
+
+/* /skills:照 TUI 的 prompt.skills / DialogSkill,选中把 @<id> 插到光标处。
+ * 这里刻意不把技能塞进 files[] —— 服务端要知道它是 skills:[{id,mention}],
+ * 当成文件发会 400(或更糟:悄悄变成一个不存在的路径)。 */
+async function openSkillPick() {
+  const sid = store.selected;
+  if (!sid) return;
+  let skills = [];
+  try {
+    const j = await api(
+      '/api/skill?' + new URLSearchParams({ 'location[directory]': sessionDir(sid) }).toString()
+    );
+    skills = j && Array.isArray(j.data) ? j.data : [];
+  } catch (e) {
+    flash('加载技能失败:' + e.message, 'bad');
+    return;
+  }
+  if (!skills.length) {
+    flash('这个工程没有可用技能', 'warn');
+    return;
+  }
+  openPick({
+    title: '选择技能',
+    filter: true,
+    filterHint: '按名称或描述过滤…',
+    items: skills.map((s) => ({
+      key: s.id,
+      label: s.name || s.id,
+      sub: s.description || s.id,
+    })),
+    onPick: (it) => insertSkill(it.key, it.label),
+  });
+}
+
+// 把选中的技能插到输入框光标处。同一个技能已经在正文里就不重复插。
+function insertSkill(id, name) {
+  const el = $('#input');
+  if (!el || !id) return;
+  if (resolveSkills(el.value).some((s) => s.id === id)) {
+    flash('技能已在正文里:' + (name || id), 'warn');
+    return;
+  }
+  const caret = el.selectionStart == null ? el.value.length : el.selectionStart;
+  const end = el.selectionEnd == null ? caret : el.selectionEnd;
+  const before = el.value.slice(0, caret);
+  const pad = before && !/\s$/.test(before) ? ' ' : '';
+  const inserted = pad + '@' + id + ' ';
+  el.value = before + inserted + el.value.slice(end);
+  const pos = caret + inserted.length;
+  if (el.setSelectionRange) el.setSelectionRange(pos, pos);
+  store.skillHits.set(id, name || id);
+  saveDraft(store.selected, el.value);
+  renderAttachments();
+  el.focus();
+  updateComposerControls();
 }
 
 // 光标前最后一个 /token(必须在行首)→ 它在输入框里的 [start, end) 与查询词。
@@ -8117,9 +8230,11 @@ async function send() {
     .filter((a) => a.uri)
     .map((a) => ({ uri: a.uri, name: a.name }))
     .concat(resolveMentions(text));
+  const skills = resolveSkills(text); // §8.77:技能走 prompt.skills,不能混进 files[]
   if (!text && !files.length) return;
   const body = { text };
   if (files.length) body.files = files;
+  if (skills.length) body.skills = skills;
   if (busy) body.delivery = store.delivery;
 
   // I 组:以 / 开头且命中命令表 → 走命令通道,不当作普通消息
@@ -8131,6 +8246,7 @@ async function send() {
     renderAttachments();
     const ok = await runCommand(parsed, sid, files, busy);
     if (ok) saveDraft(sid, ''); // §8.71:命令确实执行了,这份草稿就完成了使命
+    if (ok) dropSessionSkills(sid); // §8.77:正文已经清空,技能选择也作废(面板命令同样)
     if (ok && !parsed.cmd.panel) {
       store.mentionHits.clear();
       dropSessionAttachments(sid); // 服务端命令确实消费了附件,才清空
@@ -8161,6 +8277,7 @@ async function send() {
       store.pending = false;
     }
     dropSessionAttachments(sid); // 发送成功才清空(失败还能原样重发)
+    dropSessionSkills(sid); // §8.77:技能也随正文一起消费掉
     saveDraft(sid, ''); // §8.71:发送成功,草稿功成身退;失败则留着,切回来还能接着改
     store.mentionHits.clear();
   } catch (e) {
