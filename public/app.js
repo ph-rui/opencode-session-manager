@@ -3595,14 +3595,19 @@ function paintFooterAgent() {
  * 显示照 TUI:`目录`(按 home 缩成 ~/...) + 有分支时 `:分支`(太长由 CSS 截断,
  * title 里给全路径)。整条只在选中会话时露出来(没会话时它整个收着)。用量那格
  * (#ctxInfo)由下面的 paintContextUsage() 管。 */
-function paintPromptFooter(show, dir) {
+function paintPromptFooter(show, dir, known) {
   const foot = $('#promptFooter');
   if (!foot) return; // 测试页可能没这条
   foot.hidden = !show;
   const d = $('#chatDir');
   if (!d) return;
-  const branch = show ? cachedBranch(dir) : '';
-  const text = dir ? abbrevHome(dir) + (branch ? ':' + branch : '') : '(未指定工程目录)';
+  const branch = show && dir ? cachedBranch(dir) : '';
+  /* 【还没到手】与【真没目录】是两回事(§8.44):前者留空,后者才印占位。
+   * 深链进来 / 列表那一页还没装这个会话时,store.sessions 里根本查不到它 ——
+   * 以前这里印「(未指定工程目录)」,把「还不知道」说成了「这会话没目录」。 */
+  const text = dir
+    ? abbrevHome(dir) + (branch ? ':' + branch : '')
+    : known === false ? '' : '(未指定工程目录)';
   if (d.textContent !== text) d.textContent = text;
   if (d.title !== dir) d.title = dir;
 }
@@ -3636,7 +3641,7 @@ function paintContextUsage() {
   const s = sid ? store.sessions.get(sid) : null;
   const dir = (s && s.location && s.location.directory) || '';
   paintFooterAgent();
-  paintPromptFooter(!!sid, dir);
+  paintPromptFooter(!!sid, dir, !!s);
   const el = $('#ctxInfo');
   if (!el) return; // 测试页可能没这个元素
   const costStr = fmtCost(s && s.cost);

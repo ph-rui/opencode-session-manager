@@ -951,6 +951,19 @@
         q('#chatDir').textContent === '/proj/a:main', q('#chatDir').textContent);
       T('title 仍是纯目录(悬浮看全路径)',
         q('#chatDir').title === '/proj/a', q('#chatDir').title);
+
+      /* §8.44:「还不知道」不是「没目录」。深链进来、或者列表那一页还没装这个会话时,
+       * store.sessions 里查不到它 —— 那格该空着,等 session.updated 到了再印。 */
+      const sesASaved = store.sessions.get('ses_a');
+      store.sessions.delete('ses_a');
+      paintContextUsage();
+      T('会话信息还没到手时工程路径那格留空(不再印「(未指定工程目录)」)',
+        q('#chatDir').textContent === '' && q('#chatDir').title === '',
+        JSON.stringify(q('#chatDir').textContent));
+      store.sessions.set('ses_a', sesASaved);
+      paintContextUsage();
+      T('(复原)会话信息到手后路径照印',
+        q('#chatDir').textContent === '/proj/a:main', q('#chatDir').textContent);
       branchCache.delete('/proj/a');
 
       /* 路径按 home 缩写(照 TUI 的 cm(path, home)) */

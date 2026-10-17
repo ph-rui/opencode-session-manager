@@ -1348,11 +1348,17 @@ else
   echo "FAIL: 缺少深链会话的补拉 / 没挡住空数组响应"; fail=$((fail + 1))
 fi
 # 提示栏由 paintContextUsage 那一个同步点一起画(路径 + 整条显隐),点 «ctrl+p commands» 也开命令面板。
-if has "$APPJS" 'function paintPromptFooter(' && has "$APPJS" 'paintPromptFooter(!!sid, dir)' &&
+if has "$APPJS" 'function paintPromptFooter(show, dir, known)' && has "$APPJS" 'paintPromptFooter(!!sid, dir, !!s)' &&
    has "$APPJS" 'hint.addEventListener' && has "$APPJS" 'openCommands({ force: true })'; then
   echo "PASS: 提示栏随 paintContextUsage 一起画,点提示就是开命令面板"; pass=$((pass + 1))
 else
   echo "FAIL: 提示栏的接线不对(缺 paintPromptFooter / #cmdHint 点击)"; fail=$((fail + 1))
+fi
+# §8.44:「会话信息还没到手」不许印成「(未指定工程目录)」—— 那格留空。
+if has "$APPJS" "known === false ? '' : '(未指定工程目录)'"; then
+  echo "PASS: 工程路径未知时留空,只有真拿到会话但没目录才印占位(§8.44)"; pass=$((pass + 1))
+else
+  echo "FAIL: paintPromptFooter 还把「还不知道」印成「(未指定工程目录)」"; fail=$((fail + 1))
 fi
 # 离屏消息跳过渲染(content-visibility:auto):只对长会话开,而且必须挂 .cvmany 这个开关
 if has "$CSS" '#messages.cvmany > .msg' && has "$CSS" 'content-visibility: auto' &&

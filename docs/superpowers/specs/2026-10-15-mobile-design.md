@@ -1986,7 +1986,7 @@ PASS 窄屏列表照旧可见(不会被那份记忆压住)
 
 **刻意没做**（留着看用户要不要）：补拉一直拿不到时，提示栏那格会先印
 `(未指定工程目录)`（照 `paintPromptFooter` 的既有语义），而真值其实「还不知道」；
-要改成「空着不印」得给 `paintPromptFooter` 加第三个参数，等真报上再动。
+要改成「空着不印」得给 `paintPromptFooter` 加第三个参数 —— **已做，见 §8.44**。
 
 **验证**（真 Chromium，`/tmp/ocsm-probe/pw/deeplink.js`）：E 组（只掐列表）与
 F 组（列表 + 会话信息都掐）改后 `#chatOps` / `#ctoolbar` / `#interrupt` / 提示栏全在，
@@ -2216,6 +2216,32 @@ html.narrow #promptFooter { display: none; }
 顶栏照旧、`C8g` 改写 + `C8h`/`C8i`/`C8j` 会话里三样、`D3d`/`D3e`/`D3f` 桌面三样都在且用量回到提示栏,
 两个视口各跑一遍);其余 19 套与 6 个 `e2e-*` 全 0 失败。README 计数与那几段说明同步;§8.15 / §8.42
 各加一句指过来。
+
+---
+
+### 8.44 「还不知道工程目录」不许印成「(未指定工程目录)」
+
+**起因**:用户——「都行」(问的是 §10 里记录在案的四条,这条是 §8.39 末尾那个
+「刻意没做」)。深链直接进会话、或列表那一页还没装这个会话时,`store.sessions` 里
+查不到它 → `paintContextUsage()` 拿到的 `dir` 是空串 → 提示栏那格印
+`(未指定工程目录)`。可那会儿真值是「还不知道」,不是「这会话没有目录」。
+
+**做法**:`paintPromptFooter(show, dir, known)` 加第三个参数,两个语义分开:
+
+| 情形 | `known` | 那格 |
+|---|---|---|
+| 会话信息还没到手(`store.sessions` 里没有它) | `false` | 留空(连 `title` 也空着,不留一个会误导的悬浮提示) |
+| 真拿到了会话,但它确实没有 `location.directory` | `true` | `(未指定工程目录)`(老语义,照旧) |
+
+调用点只有 `paintContextUsage()` 一处:`paintPromptFooter(!!sid, dir, !!s)` —— 判据仍然
+是「会话信息在不在手上」,不另设判定源;`s` 一到(`session.updated` / 补拉成功)下一次
+`paintContextUsage()` 就把路径印上去。`known` 省略时按 `true` 走,老调用点不用改。
+
+**回归**:`smoke.sh` 296 → **297**(新增一条:`known === false ? '' : '(未指定工程目录)'`
+这句必须在,锁「两种语义没被并回一种」;原有的接线锁一并收紧成
+`paintPromptFooter(!!sid, dir, !!s)`);`ui-stream` 247 → **249**(「会话信息还没到手时
+那格留空」+「(复原)到手后路径照印」,后者保证没把正常路径一起弄丢);其余套件全 0 失败。
+README 的 `ui-stream-run.js` 那句与「路径与 title」一段各补一句。
 
 ---
 
