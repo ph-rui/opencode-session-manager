@@ -2741,9 +2741,14 @@ function scrollAnchor() {
     const id = owner.get(el);
     if (!id) continue; // 不是消息节点的跳过
     const d = el.getBoundingClientRect().top - boxTop;
-    if (d + el.offsetHeight > 0) return { id: id, off: Math.round(d), top: Math.round(box.scrollTop) };
+    if (d + el.offsetHeight > 0) {
+      /* §8.76:除了「顶部是哪条」,还记下当时是不是贴着底。切回来时如果 saved.bottom,
+       * 就直接重新贴底 —— 不能拿中间那条消息的锚点硬还原,否则离开期间来了新消息,
+       * 用户明明一直看最新,回来却停在中间,还得点一次「跳到最新」。 */
+      return { id: id, off: Math.round(d), top: Math.round(box.scrollTop), bottom: atBottom(box) };
+    }
   }
-  return { id: null, off: 0, top: Math.round(box.scrollTop) };
+  return { id: null, off: 0, top: Math.round(box.scrollTop), bottom: atBottom(box) };
 }
 
 function saveScrollAnchor() {
@@ -5531,8 +5536,16 @@ function renderMessages() {
   let pinned = false;
   if (pending && msgs.length) {
     store.restoreScroll = null; // 消费掉:只在这次渲染还原一次
-    applyScrollAnchor(pending);
-    atB = atBottom(box);
+    if (pending.bottom) {
+      // §8.76:离开时就在最新 → 回来直接贴底,别按中间那条消息的锚点还原。
+      // 离开期间新到的消息会继续把底往下推,这里贴住的就是最新的底。
+      pinBottom(box);
+      atB = true;
+      pinned = true;
+    } else {
+      applyScrollAnchor(pending);
+      atB = atBottom(box);
+    }
   } else if (nearBottom) {
     pinBottom(box);
     atB = true;

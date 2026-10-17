@@ -2126,8 +2126,9 @@ NAV_POS=$(printf '%s' "$HOME_HTML" | grep -bo 'id="sessionTabs"' 2>/dev/null | h
 HEAD_POS=$(printf '%s' "$HOME_HTML" | grep -bo 'id="chatHeader"' 2>/dev/null | head -1 | cut -d: -f1)
 if [ -n "$NAV_POS" ] && [ -n "$HEAD_POS" ] && [ "$NAV_POS" -lt "$HEAD_POS" ] &&
    has "$HOME_HTML" 'id="tabStrip"' && has "$HOME_HTML" 'id="tabNew"' &&
+   has "$HOME_HTML" 'id="tabReopen"' &&
    has "$HOME_HTML" '<span class="tnFull">+ 新建</span>'; then
-  echo "PASS: 标签栏挂在 #chatpane 顶部、#chatHeader 之前(左列表保留),含 tabStrip 与 + 新建"; pass=$((pass + 1))
+  echo "PASS: 标签栏挂在 #chatpane 顶部、#chatHeader 之前(左列表保留),含 tabStrip、+ 新建与 ↺ 重开"; pass=$((pass + 1))
 else
   echo "FAIL: 标签栏节点缺失 / 顺序不对 / 没有 + 新建"; fail=$((fail + 1))
 fi
@@ -2429,6 +2430,40 @@ if has "$APPJS" 'const attachCache = new Map();' &&
   echo "PASS: §8.74 图片可单独发送、上传中拦截、附件按会话隔离并在切回时恢复"; pass=$((pass + 1))
 else
   echo "FAIL: §8.74 的图片单发 / 附件缓存 / 上传归属或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R31 组:重开最近关闭的标签(§8.75)----
+if has "$APPJS" 'const CLOSED_MAX = 8;' &&
+   has "$APPJS" 'const closedTabs = [];' &&
+   has "$APPJS" 'function rememberClosedTab(id, title)' &&
+   has "$APPJS" 'function renderTabReopen()' &&
+   has "$APPJS" 'async function reopenTab()' &&
+   has "$APPJS" 'rememberClosedTab(id, store.tabs[i] && store.tabs[i].title);' &&
+   has "$APPJS" 'const ci = closedTabs.findIndex((t) => t.id === id);' &&
+   has "$APPJS" 'nav.hidden = store.tabs.length === 0 && closedTabs.length === 0;' &&
+   has "$APPJS" "name: 'tab-reopen', description: '重开最近关闭的标签'" &&
+   has "$APPJS" "e.target.closest('#tabReopen')" &&
+   has "$HOME_HTML" 'id="tabReopen"' && has "$HOME_HTML" 'aria-label="重开刚关闭的标签"' &&
+   has "$CSS" '#tabReopen[hidden] { display: none; }' &&
+   has "$CSS" 'html.narrow #tabReopen {' &&
+   has "$(cat "$(dirname "$0")/ui-capabilities.html")" '重开最近关闭的标签并切过去' &&
+   has "$(cat "$(dirname "$0")/ui-capabilities.html")" '关掉最后一个标签:回到未选择,但重开入口还在'; then
+  echo "PASS: §8.75 最近关闭栈 / ↺ 按钮 / 空栏仍可重开 / 命令面板入口与窄屏样式都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.75 的关闭栈 / 重开入口 / 空栏可见性或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R32 组:切走前贴着底,切回来仍贴底(§8.76)----
+if has "$APPJS" 'bottom: atBottom(box)' &&
+   has "$APPJS" 'if (pending.bottom)' &&
+   has "$APPJS" 'pinBottom(box);' &&
+   has "$APPJS" 'atB = true;' &&
+   has "$APPJS" 'pinned = true;' &&
+   has "$(cat "$(dirname "$0")/ui-layout.html")" '贴底时锚点记下 bottom=true' &&
+   has "$(cat "$(dirname "$0")/ui-layout.html")" '切走前在底部 → 切回来仍贴底(新消息也顶不掉)'; then
+  echo "PASS: §8.76 滚动锚点带 bottom 标记,切回底部的会话直接重新贴底(新消息也顶不掉)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.76 的 bottom 标记 / 贴底分支或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
 echo

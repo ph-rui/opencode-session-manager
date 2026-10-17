@@ -546,6 +546,23 @@
       T('切回来后确实不在底部', box.scrollTop + box.clientHeight < box.scrollHeight - 2,
         box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight);
 
+      /* §8.76 切走前就在最新 → 切回来还得在最新(离开期间来了新消息也不能停在中间) */
+      box.scrollTop = box.scrollHeight;
+      saveScrollAnchor();
+      var bottomSaved = JSON.parse(sessionStorage.getItem('ocs.scroll') || '{}')['ses_long'];
+      T('贴底时锚点记下 bottom=true', !!(bottomSaved && bottomSaved.bottom === true), bottomSaved);
+      T('中间那条的锚点 bottom=false', A.bottom === false, A.bottom);
+      await selectSession('ses_a');
+      window.SERVER['ses_long'].push({
+        id: 'msg_l_after', type: 'assistant', time: { created: 5000, completed: 5001 },
+        model: { id: 'deepseek-v4-flash', providerID: 'company' },
+        content: [{ type: 'text', text: '切走期间的新消息。'.repeat(20) }],
+      });
+      await selectSession('ses_long');
+      T('切走前在底部 → 切回来仍贴底(新消息也顶不掉)',
+        box.scrollTop + box.clientHeight >= box.scrollHeight - 2 && store.nearBottom === true,
+        box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight + ' / nearBottom=' + store.nearBottom);
+
       /* 锚点消息已不在(被删/掉出这一页):退回像素值,不白屏不报错 */
       box.scrollTop = want;
       saveScrollAnchor();
