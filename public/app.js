@@ -146,7 +146,9 @@ async function api(path, opts) {
     j = JSON.parse(txt);
   } catch (_) {}
   if (!r.ok) {
-    const msg = (j && (j.message || j.error)) || 'HTTP ' + r.status;
+    /* 服务端的 tagged error 常把话藏在 data.message 里(worktree / location 这批都是),
+     * 只看顶层 message 会退化成「HTTP 400」,对话框里就只剩一句编号。 */
+    const msg = (j && (j.message || j.error || (j.data && j.data.message))) || 'HTTP ' + r.status;
     const err = new Error(msg);
     err.status = r.status;
     throw err;
@@ -933,10 +935,67 @@ async function fillNewSelectors() {
   paintVariant($('#newVariantWrap'), $('#newVariant'), mSel.value);
 }
 
+/* §8.56 worktree:照 TUI 的 DialogWorktreeName 那三步 —— 起名、生成、确认。
+ * 名字规则也一样(全小写、非字母数字变 -、掐掉首尾 -);留空就随机 adjective-noun。
+ * 面板只做「在 + 新建里顺手新建一个 worktree」;列出/删除 worktree 是 TUI 那个
+ * Worktrees 对话框的事,这里不造半套。 */
+const WT_ADJ = [
+  'brave', 'calm', 'clever', 'cosmic', 'crisp', 'curious', 'eager', 'gentle', 'glowing',
+  'happy', 'hidden', 'jolly', 'kind', 'lucky', 'mighty', 'misty', 'neon', 'nimble',
+  'playful', 'proud', 'quick', 'quiet', 'shiny', 'silent', 'stellar', 'sunny', 'swift',
+  'tidy', 'witty',
+];
+const WT_NOUN = [
+  'cabin', 'cactus', 'canyon', 'circuit', 'comet', 'eagle', 'engine', 'falcon', 'forest',
+  'garden', 'harbor', 'island', 'knight', 'lagoon', 'meadow', 'moon', 'mountain', 'nebula',
+  'orchid', 'otter', 'panda', 'pixel', 'planet', 'river', 'rocket', 'sailor', 'squid',
+  'star', 'tiger', 'wizard', 'wolf',
+];
+
+function wtSlug() {
+  return (
+    WT_ADJ[Math.floor(Math.random() * WT_ADJ.length)] +
+    '-' +
+    WT_NOUN[Math.floor(Math.random() * WT_NOUN.length)]
+  );
+}
+
+function wtSlugify(v) {
+  return String(v || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+}
+
+function paintNewWorktree() {
+  const box = $('#newWt');
+  if (!box) return;
+  const on = box.checked;
+  const row = $('#newWtRow');
+  const hint = $('#newWtHint');
+  if (row) row.hidden = !on;
+  if (hint) hint.hidden = !on;
+  // 勾上就先给一个名字(手机上少打几个字);清空留白则由提交时再随机。
+  const name = $('#newWtName');
+  if (on && name && !wtSlugify(name.value)) name.value = wtSlug();
+}
+
 function openNew() {
   $('#newErr').hidden = true;
   $('#newTitle').value = '';
   if (!$('#newDir').value) $('#newDir').value = store.directory || '';
+  if ($('#newWt')) $('#newWt').checked = false;
+  if ($('#newWtName')) $('#newWtName').value = '';
+  // 上一次「worktree 建好、会话没建成」的重试凭据也清掉(§8.56)
+  const dlg = $('#dlgNew');
+  if (dlg) {
+    delete dlg.dataset.wtDir;
+    delete dlg.dataset.wtSrc;
+    delete dlg.dataset.wtName;
+  }
+  paintNewWorktree();
   openDlg($('#dlgNew'));
   fillNewSelectors();
 }
@@ -944,21 +1003,59 @@ function openNew() {
 async function submitNew() {
   const err = $('#newErr');
   err.hidden = true;
-  const dir = ($('#newDir').value || '').trim();
+  let dir = ($('#newDir').value || '').trim();
   if (!dir) return showDlgErr(err, '请填写工程目录');
   if (dir[0] !== '/') return showDlgErr(err, '工程目录需要是绝对路径');
 
-  const body = { location: { directory: dir } };
-  const title = ($('#newTitle').value || '').trim();
-  if (title) body.title = title;
-  const agent = $('#newAgent').value;
-  if (agent) body.agent = agent;
-  const ref = modelRefOf($('#newModel').value, $('#newVariant').value);
-  if (ref) body.model = ref;
-
+  const wtOn = !!($('#newWt') && $('#newWt').checked);
   const btn = $('#newOk');
-  setBusy(btn, true, '创建中…');
+  const dlg = $('#dlgNew');
+  let phase = '会话';
+  setBusy(btn, true, wtOn ? '创建 worktree…' : '创建中…');
   try {
+    if (wtOn) {
+      phase = 'worktree';
+      const src = dir;
+      const name = wtSlugify($('#newWtName').value) || wtSlug();
+      $('#newWtName').value = name;
+      /* worktree 已经建好、但会话 POST 失败(手机断一下很常见)时,再点「创建」不能又建一棵。
+       * 凭据挂在对话框上:源目录 + 名字都没变就复用上次那个目录;关掉/换名字/换源目录就作废。 */
+      const reuse = dlg && dlg.dataset.wtDir && dlg.dataset.wtSrc === src && dlg.dataset.wtName === name;
+      if (reuse) {
+        dir = dlg.dataset.wtDir;
+      } else {
+        // 目录 → 工程:worktree 接口只认 projectID,先问 /api/location 要。
+        const loc = await api(
+          '/api/location?' + new URLSearchParams({ 'location[directory]': src }).toString()
+        );
+        const projectID = loc && loc.project && loc.project.id;
+        if (!projectID) throw new Error('这个目录不属于任何工程(worktree 只支持 git 仓库)');
+        const wt = await api('/api/worktree', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ projectID, name }),
+        });
+        if (!wt || !wt.directory) throw new Error('服务端没有返回 worktree 目录');
+        store.seenDirs.add(src); // 源目录也留在目录下拉里
+        dir = wt.directory;
+        if (dlg) {
+          dlg.dataset.wtSrc = src;
+          dlg.dataset.wtName = name;
+          dlg.dataset.wtDir = dir;
+        }
+      }
+      phase = '会话';
+      setBusy(btn, true, '创建中…');
+    }
+
+    const body = { location: { directory: dir } };
+    const title = ($('#newTitle').value || '').trim();
+    if (title) body.title = title;
+    const agent = $('#newAgent').value;
+    if (agent) body.agent = agent;
+    const ref = modelRefOf($('#newModel').value, $('#newVariant').value);
+    if (ref) body.model = ref;
+
     const j = await api('/api/session', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -973,7 +1070,7 @@ async function submitNew() {
     await selectSession(s.id);
     flash('已创建会话:' + (s.title || s.id), 'ok');
   } catch (e) {
-    showDlgErr(err, '创建失败:' + e.message);
+    showDlgErr(err, (phase === 'worktree' ? 'worktree ' : '') + '创建失败:' + e.message);
   }
   setBusy(btn, false);
 }
@@ -7330,6 +7427,10 @@ function init() {
   $('#opArchive').addEventListener('click', () => toggleArchive(store.selected));
   $('#newOk').addEventListener('click', submitNew);
   $('#newDir').addEventListener('change', fillNewSelectors);
+  $('#newWt').addEventListener('change', paintNewWorktree);
+  $('#newWtGen').addEventListener('click', () => {
+    $('#newWtName').value = wtSlug();
+  });
   $('#newModel').addEventListener('change', () =>
     paintVariant($('#newVariantWrap'), $('#newVariant'), $('#newModel').value)
   );

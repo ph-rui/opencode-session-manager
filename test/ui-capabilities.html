@@ -49,6 +49,9 @@
 
   <dialog id="dlgNew" class="dlg"><div class="dlgform"><h3>新建会话</h3>
     <input id="newDir" list="dirList"><input id="newTitle">
+    <label class="chkfld"><input type="checkbox" id="newWt"><span>在 worktree 中新建</span></label>
+    <div class="fldrow" id="newWtRow" hidden><input id="newWtName"><button type="button" id="newWtGen">生成</button></div>
+    <p id="newWtHint" hidden></p>
     <select id="newAgent"><option value="">默认</option></select>
     <select id="newModel"><option value="">默认</option></select>
     <span id="newVariantWrap" hidden><select id="newVariant"></select></span>
@@ -119,10 +122,24 @@
       var method = (opts && opts.method) || 'GET';
       window.calls.push({ url: u, method: method, body: (opts && opts.body) || null });
       if (method === 'POST' && u === '/api/session') {
+        if (window.sessionFailOnce) {
+          window.sessionFailOnce = false;
+          return fail(500, { message: 'network down' });
+        }
         var b = JSON.parse(opts.body);
         return json({ data: { id: 'ses_new01', title: b.title || null, agent: b.agent || null,
           model: b.model || null, projectID: 'pjN', time: { created: 9, updated: 9 },
           tokens: { input: 0, output: 0 }, cost: 0, location: b.location, metadata: b.metadata } });
+      }
+      if (u.indexOf('/api/location?') === 0) {
+        var ldir = new URL(u, 'http://x').searchParams.get('location[directory]');
+        return json({ directory: ldir, project: { id: 'pjWT', directory: ldir, canonical: ldir } });
+      }
+      if (method === 'POST' && u === '/api/worktree') {
+        if (window.wtFail) {
+          return fail(400, { _tag: 'WorktreeError', name: 'WorktreeError', data: { message: 'not a git project' } });
+        }
+        return json({ directory: '/wt/' + JSON.parse(opts.body).name });
       }
       if (u.indexOf('/api/experimental/session/import') === 0) {
         window.__importSeen++;
@@ -320,6 +337,91 @@
       q('#newDir').value = 'relative/path';
       await submitNew();
       T('相对路径:报错且不发请求', q('#newErr').hidden === false && reqs(/^\/api\/session$/).length === 0, q('#newErr').textContent);
+
+      /* ---------------- 新建 worktree(§8.56) ---------------- */
+      T('worktree:默认不勾、名字行与提示收着',
+        q('#newWt').checked === false && q('#newWtRow').hidden === true && q('#newWtHint').hidden === true);
+      T('worktree:名字规则照 TUI(小写、非字母数字变 -、掐头尾)',
+        wtSlugify('  My New WT!! ') === 'my-new-wt' && wtSlugify('中文 Foo/Bar__baz!') === 'foo-bar-baz' &&
+        wtSlugify('---') === '', wtSlugify('中文 Foo/Bar__baz!'));
+      var wslug = wtSlug();
+      T('worktree:随机名是 adjective-noun', /^[a-z]+-[a-z]+$/.test(wslug), wslug);
+
+      q('#newWt').checked = true;
+      q('#newWtName').value = '';
+      paintNewWorktree();
+      T('worktree:勾上露出名字行与提示', q('#newWtRow').hidden === false && q('#newWtHint').hidden === false);
+      T('worktree:勾上自动给一个名字', /^[a-z]+-[a-z]+$/.test(q('#newWtName').value), q('#newWtName').value);
+
+      seed();
+      reset();
+      q('#newDir').value = '/proj/src';
+      q('#newTitle').value = 'wt 会话';
+      q('#newWt').checked = true;
+      q('#newWtName').value = '  My New WT!! ';
+      q('#newErr').hidden = true;
+      await submitNew();
+      var wl = reqs(/^\/api\/location\?/)[0];
+      T('worktree:先按目录解析工程', !!wl && /location%5Bdirectory%5D=%2Fproj%2Fsrc/.test(wl.url), wl && wl.url);
+      var wc = reqs(/^\/api\/worktree$/).filter(function (c) { return c.method === 'POST'; })[0];
+      T('worktree:POST /api/worktree 带 projectID + 归一化名字',
+        !!wc && bodyOf(wc).projectID === 'pjWT' && bodyOf(wc).name === 'my-new-wt', wc && bodyOf(wc));
+      var wcn = reqs(/^\/api\/session$/).filter(function (c) { return c.method === 'POST'; })[0];
+      T('worktree:会话开在服务端返回的 worktree 目录',
+        !!wcn && bodyOf(wcn).location.directory === '/wt/my-new-wt', wcn && bodyOf(wcn).location);
+      T('worktree:worktree 目录与源目录都记进目录下拉',
+        store.seenDirs.has('/wt/my-new-wt') && store.seenDirs.has('/proj/src'));
+      T('worktree:创建后自动选中', store.selected === 'ses_new01', store.selected);
+
+      // 名字留空 → 提交时随机
+      seed();
+      reset();
+      q('#newDir').value = '/proj/src';
+      q('#newWt').checked = true;
+      q('#newWtName').value = '';
+      q('#newErr').hidden = true;
+      await submitNew();
+      var wc2 = reqs(/^\/api\/worktree$/).filter(function (c) { return c.method === 'POST'; })[0];
+      T('worktree:名字留空时提交前随机一个',
+        !!wc2 && /^[a-z]+-[a-z]+$/.test(bodyOf(wc2).name), wc2 && bodyOf(wc2));
+
+      // 服务端拒绝 → 不建会话,错误里带服务端那句
+      seed();
+      reset();
+      window.wtFail = true;
+      q('#newDir').value = '/proj/notgit';
+      q('#newWt').checked = true;
+      q('#newWtName').value = 'x';
+      q('#newErr').hidden = true;
+      await submitNew();
+      window.wtFail = false;
+      T('worktree:失败时不发 /api/session', reqs(/^\/api\/session$/).length === 0);
+      T('worktree:错误里带服务端 data.message 而不是 HTTP 400',
+        q('#newErr').hidden === false && q('#newErr').textContent.indexOf('not a git project') >= 0,
+        q('#newErr').textContent);
+
+      // worktree 建好了、会话 POST 失败 → 原地点「创建」必须复用,不再建第二棵
+      seed();
+      reset();
+      window.sessionFailOnce = true;
+      q('#newDir').value = '/proj/src';
+      q('#newWt').checked = true;
+      q('#newWtName').value = 'retry-wt';
+      q('#newErr').hidden = true;
+      await submitNew();
+      T('worktree:会话失败时 worktree 已建好,错误不再冒充 worktree 失败',
+        reqs(/^\/api\/worktree$/).length === 1 && reqs(/^\/api\/session$/).length === 1 &&
+        q('#newErr').textContent.indexOf('worktree 创建失败') < 0, q('#newErr').textContent);
+      q('#newErr').hidden = true;
+      await submitNew();
+      var retrySessions = reqs(/^\/api\/session$/).filter(function (c) { return c.method === 'POST'; });
+      T('worktree:重试复用上次的目录,不再 POST /api/worktree',
+        reqs(/^\/api\/worktree$/).length === 1 && retrySessions.length === 2,
+        reqs(/^\/api\/worktree$/).length + '/' + retrySessions.length);
+      T('worktree:重试的会话仍开在那棵 worktree',
+        bodyOf(retrySessions[1]).location.directory === '/wt/retry-wt',
+        bodyOf(retrySessions[1]).location);
+      q('#newWt').checked = false;
 
       /* ---------------- 导入 ---------------- */
       var exportFile = JSON.stringify({ data: { info: { id: 'ses_old', title: '导入我', projectID: 'pjo' }, messages: [ { id: 'm1', type: 'user' } ] } });

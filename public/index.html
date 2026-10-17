@@ -183,6 +183,16 @@
       <label class="fld"><span>工程目录</span>
         <input id="newDir" list="dirList" placeholder="/绝对/路径" autocomplete="off">
       </label>
+      <label class="chkfld"><input type="checkbox" id="newWt"><span>在 worktree 中新建</span></label>
+      <div class="fldrow" id="newWtRow" hidden>
+        <label class="fld"><span>worktree 名字</span>
+          <div class="wtname">
+            <input id="newWtName" placeholder="留空 = 随机,如 brave-panda" autocomplete="off">
+            <button type="button" class="chip" id="newWtGen">生成</button>
+          </div>
+        </label>
+      </div>
+      <p class="dlghint" id="newWtHint" hidden>工程目录填 git 工程的源目录;会按 OpenCode 的 worktree 配置另建一个工作树,新会话开在那里。</p>
       <label class="fld"><span>标题(可空)</span>
         <input id="newTitle" placeholder="留空则由 OpenCode 命名" autocomplete="off">
       </label>

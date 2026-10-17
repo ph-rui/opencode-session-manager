@@ -2013,6 +2013,51 @@ else
   echo "FAIL: refreshSessionInfo 又排回 Promise.all 后面了(got ${CK_L1:-?}/${CK_L2:-?})"; fail=$((fail + 1))
 fi
 
+# ---- R16 组:新建 worktree(§8.56;起名/生成/确认照 TUI 的 Name worktree)----
+if has "$HOME_HTML" 'id="newWt"' && has "$HOME_HTML" 'id="newWtName"' &&
+   has "$HOME_HTML" 'id="newWtGen"' && has "$HOME_HTML" 'id="newWtRow" hidden' &&
+   has "$HOME_HTML" 'id="newWtHint" hidden' && has "$CSS" '.fldrow[hidden] { display: none; }' &&
+   has "$CSS" 'html.narrow .chkfld { min-height: 44px; }'; then
+  echo "PASS: + 新建里有可选的 worktree 开关,名字行与说明默认收着(不勾时桌面布局一字不动;手机命中区 44px)"; pass=$((pass + 1))
+else
+  echo "FAIL: + 新建里缺 worktree 开关 / 名字行 / 生成按钮,或它们默认就摊开了"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function wtSlugify(v)' && has "$APPJS" 'function wtSlug()' &&
+   has "$APPJS" "const WT_ADJ = [" && has "$APPJS" "const WT_NOUN = [" &&
+   has "$APPJS" ".replace(/[^a-z0-9]+/g, '-')" && has "$APPJS" ".replace(/^-+/, '')" &&
+   has "$APPJS" ".replace(/-+$/, '')" &&
+   has "$APPJS" 'if (on && name && !wtSlugify(name.value)) name.value = wtSlug();'; then
+  echo "PASS: worktree 名字规则照 TUI(小写 / 非字母数字变 - / 掐头尾 / 留空随机 adjective-noun)"; pass=$((pass + 1))
+else
+  echo "FAIL: worktree 名字规则没照 TUI 的 slugify + Slug.create"; fail=$((fail + 1))
+fi
+if has "$APPJS" "'/api/location?' + new URLSearchParams({ 'location[directory]': src })" &&
+   has "$APPJS" ".toString()" &&
+   has "$APPJS" "const projectID = loc && loc.project && loc.project.id;" &&
+   has "$APPJS" "const wt = await api('/api/worktree'" &&
+   has "$APPJS" 'body: JSON.stringify({ projectID, name })' &&
+   has "$APPJS" 'dir = wt.directory;' && has "$APPJS" "phase = 'worktree';"; then
+  echo "PASS: 先按工程目录解析 projectID,再 POST /api/worktree,会话开在返回的目录"; pass=$((pass + 1))
+else
+  echo "FAIL: worktree 接口接线不对(缺 location 解析 / projectID / 返回目录 / 阶段)"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'dataset.wtDir' && has "$APPJS" 'dataset.wtSrc' && has "$APPJS" 'dataset.wtName' &&
+   has "$APPJS" 'const reuse = dlg && dlg.dataset.wtDir' && has "$APPJS" 'if (reuse)' &&
+   has "$APPJS" 'delete dlg.dataset.wtDir;'; then
+  echo "PASS: worktree 已建好但会话失败时,原地重试复用那棵目录(不重复建;关框/换名/换源目录即作废)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺「先建 worktree、后建会话」的重试凭据(失败会多建一棵)"; fail=$((fail + 1))
+fi
+if has "$APPJS" "phase === 'worktree' ? 'worktree ' : ''" &&
+   has "$APPJS" "(j.data && j.data.message)" &&
+   has "$APPJS" "if (\$('#newWt')) \$('#newWt').checked = false;" &&
+   has "$APPJS" "\$('#newWt').addEventListener('change', paintNewWorktree)" &&
+   has "$APPJS" "\$('#newWtGen').addEventListener('click'"; then
+  echo "PASS: 失败会报「worktree 创建失败 + 服务端原话」,再开对话框不残留上次的勾选"; pass=$((pass + 1))
+else
+  echo "FAIL: worktree 失败文案 / data.message 解包 / 复选框复位 / 接线缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

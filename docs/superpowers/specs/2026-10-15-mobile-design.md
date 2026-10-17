@@ -1205,7 +1205,7 @@ ctrl+p commands」。
 | 智能体·模型 | 新 `#chatAgent`，排在 `#chatDir` 前面（`#promptFooter` 最左），照 TUI 的顺序。取值直接用工具栏两个 `<select>` 的当前项文案（`#agentSel` / `#modelSel`，变体接 `#variantSel`，`default` 不印）。工具栏在 `#composer` 里面 —— 手机收起底板时它跟着没了，展开态下这一格是还看得见「现在是哪个智能体/模型」的地方，所以只要选中会话就常驻（窄屏 `max-width: 32%`，别把工程路径挤没）。**（§8.40 改：收起底板时连这一格一起收，细边上只留进度条；「收起时也能看一眼智能体/模型」这条不再成立。§8.42 再改：手机上这一格连同整条都不显示了 —— 智能体·模型在**展开态的工具栏**里就有（`#agentSel` / `#modelSel`），所以「看一眼现在是哪个」这条在手机上改由工具栏交代）** |
 | `tab agents` | 提示文案照 TUI 改成 `tab agents`；**无 Shift 的 `Tab`** 也接上 `cycleAgent()`（在输入框的键位链里排在命令面板/@ 补全/输入历史**之后**，所以那几处开着时先归它们）。Shift+Tab 照旧保留，不破坏既有键位与测试 |
 | 子会话 / shell | 新 `store.subs`（子→父；来自列表接口里带 `parentID` 的那批 + SSE 的 `session.created/updated/deleted`）与 `store.shells`（`shell.created` 记、`shell.exited`/`shell.deleted` 划）。`subagentCount()` 只数 `isRunning()` 的（照 TUI 只数 running），`shellCount()` 数这个会话名下的；两者 ` · ` 连起来接在用量**前面**。单独放一份、不塞进 `store.sessions`，免得顶栏的工程筛选漏进别的工程的子会话 |
-| `(new worktree)` | **不做**：那行不是会话提示栏的常驻元素，是「新建 worktree」对话框里的临时状态（`Re.pendingNew()` / `Re.progress()` 那两段），面板没有这个流程 |
+| `(new worktree)` | **不做**：那行不是会话提示栏的常驻元素，是「新建 worktree」时的临时状态（`Re.pendingNew()` / `Re.progress()` 那两段）。面板的流程已在 §8.56 接通，但进度放在「+ 新建」按钮上（`创建 worktree…` → `创建中…`），提示栏不是它的家 |
 | `showDetails` | `paintInterruptHint()` 顺手给 `#promptFooter` 挂/摘 `.armed`；CSS **只在 `html.narrow` 下**把 `#ctxInfo` / `#agentHint` / `#cmdHint` 收起（桌面照旧）。手机上没 Esc 键、`#agentHint` 本来就在 `html.narrow` 下收着，所以这条主要在「窄桌面窗口」生效 |
 
 **验证**（探针 `footer-shot.js` 扩了 `chatAgent` 与 `arm` 两项，用法 `node footer-shot.js <sid> <宽> <高> <collapsed> <arm>`；`arm=1` 会在页面里把选中会话标成 busy 再合成一次 Esc —— 第一下只上膛、不发请求，安全）：
@@ -2755,6 +2755,60 @@ LAN
 `ui-layout` 184 → **185**(删除即清缓存);`ui-stream` 258、`ui-tools` 305 不变;
 其余套件与 6 个 `e2e-*` 全 0 失败。
 
+### 8.56 新建 worktree:照 TUI 的 Name worktree,在「+ 新建」里顺手建一个
+
+**起因**:TUI 的 `Worktrees` 对话框能看到工程已有的 worktree、选中、删除,以及「新建」;
+新建时先弹 `Name worktree`(输入名字,或按一下生成 `adjective-noun`),再
+`client.api.worktree.create({ projectID, name })`,最后拿返回的 `directory` 当新会话的位置。
+面板此前完全没有 worktree 概念。用户要求把这一步补上。
+
+**做法**:
+
+| 位置 | 行为 |
+|---|---|
+| 入口 | 「+ 新建」里一个**默认不勾**的复选框「在 worktree 中新建」;勾上才露出名字行与说明。不勾时对话框与原来一模一样(桌面主界面三栏更是没动) |
+| 名字 | `wtSlugify()` 照 TUI 的 `slugify`:`trim` → 小写 → 非字母数字变 `-` → 掐掉首尾 `-`。勾上时自动填 `wtSlug()`,照 TUI `Slug.create()` 的 29 个形容词 × 31 个名词;「生成」再换一个;留空则在提交前随机 |
+| 解析工程 | `GET /api/location?location[directory]=<源目录>` → `project.id`;`POST /api/worktree` 只收 `projectID`,不认目录 |
+| 创建 | `POST /api/worktree {projectID, name}` → `{directory}`。服务端按工程的 worktree 配置(默认 `~/.local/share/opencode/worktree/<短 projectID>/<name>`)建目录/分支,并跑工程的 setup;这些都在服务端,面板不重复实现 |
+| 会话 | 用返回的目录 `POST /api/session {location:{directory}}`;源目录与 worktree 目录都进 `store.seenDirs`,下次目录下拉里直接有 |
+| 失败 | 不建会话,对话框不关;错误取 `data.message`(worktree / location 的错误体是 tagged error,顶层没有 `message`,只看顶层会退化成「HTTP 400」),显示 `worktree 创建失败:<服务端原话>` |
+| 重试 | worktree 建好、会话 POST 失败(手机上断一下很常见)时,把 `{源目录, 名字, 返回目录}` 挂在 `#dlgNew.dataset`;源目录与名字都没变就复用,不建第二棵。关对话框 / 换名字 / 换源目录即作废。错误文案此时不再冒充 worktree 失败 |
+| 范围 | 只做「新建」。列出 / 删除 worktree、把已有会话移进 worktree 仍是 TUI 的 `Worktrees` 对话框;面板不造半套按钮 |
+
+**实测**(真页面 1366×900,源 `/tmp/ocsm-probe/wt-demo` 临时 git 仓库):
+
+```
+勾选         名字行 + 说明露出,自动名 neon-mountain
+输入大写/符号  PROBE-WT-…!! → probe-wt-…(客户端先归一化)
+解析工程      /api/location?location[directory]=/tmp/ocsm-probe/wt-demo → projectID
+创建          /api/worktree {projectID, name} → /home/…/worktree/80d169/probe-wt-…
+会话          location.directory = 该 worktree;顶栏仍是 1366×47,主界面尺寸没变
+非 git 目录    worktree 创建失败:Worktree source not found: /tmp
+              对话框不关、按钮恢复可点、会话数 50 → 50(没有偷偷建会话)
+```
+
+对话框自身:桌面收起态 420px 宽、勾开后 535px(说明那行撑的),都在 `min(92vw, 660px)` 内;
+手机 393px 下收起 / 勾开都是 369px,`scrollWidth === clientWidth`,复选框整行 44px 高。
+
+**取舍**:
+
+- **不传 `from`**:TUI 也只传 `{projectID, name}`,源 checkout 由服务端的工程记录决定;面板里
+  填的源目录只用来解析 `projectID`,不偷偷改变 worktree 的来源。
+- **只做新建**:TUI 的 `Worktrees` 对话框还带「有改动时二次确认 + force 删除」,以及把会话
+  移进去的路由切换;面板的主入口是「+ 新建」,先把最常用的一步接通,不为了对齐而摆一排
+  只能看不能用的 worktree 按钮。
+- **名字先在客户端归一化**:少一次「非法字符 → 400」的往返;但重名、非 git、setup 失败
+  仍以服务端为准,面板只负责把原话带到对话框里。
+- **勾选后才改变对话框高度**:默认态一个像素没变;桌面主布局、三栏网格、会话表都没有动。
+- `api()` 顺手认 `data.message`:只补错误文案的取值,成功路径不动。
+
+**回归**:`smoke.sh` 322 → **327**(5 项:开关与默认收起 / 手机 44px / 名字规则 / 接口接线与
+失败文案 / 失败后的原地重试凭据);`ui-capabilities` 85 → **101**(16 项:默认态、名字规则、
+随机名、勾选露出、自动名、解析工程、POST worktree、会话目录、目录记忆、自动选中、留空随机、
+失败不建会话、`data.message`、会话失败不重复建 worktree、重试复用同一目录、重试的会话体);
+`ui-jump` 135、`ui-layout` 185、`ui-stream` 258、`ui-tools` 305、`ui-mobile` 198 不变;
+全量套件与 6 个 `e2e-*` 全 0 失败。
+
 ---
 
 ---
@@ -2771,6 +2825,7 @@ LAN
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
+| worktree 只做「新建」 | 主入口是「+ 新建」；新建那一步把 `projectID`、名字、返回目录、失败原话都接通了，最常用的一半已经能用 | 已有 worktree 的浏览/删除/把会话移进去仍在 TUI 的 `Worktrees` 对话框（§8.56）|
 
 ---
 
