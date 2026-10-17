@@ -2669,7 +2669,7 @@ TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 
 | API 的 GET JSON | 统一先缓冲再压(≥1KB 才压);消息列表仍然先摘 `data:` 图;SSE(`text/event-stream`)一步都不碰 |
 | `app.js` 事件分流 | 消息对账 = `mine`(事件里的 `sessionID` / `info.id` 等于当前选中;没带 id 才按「可能是」放行)且类型属于 `session.*` / `message.*`,并排除 `session.updated/created/deleted/…` 与高频的 `tool.progress`、`tool.input.delta`、`compaction.delta` |
 | 列表刷新 | 只认 `session.created/updated/deleted/renamed/moved/agent.selected/model.selected` 与 shell 三类;`server.connected` 只在**重连**时补一次 |
-| 单飞 + 合并 | `MSG_AUTO_GAP_MS = 4000` / `SESSION_AUTO_GAP_MS = 2500`:同一时刻只飞一条;飞着时再来的只记一个 `queued`,落地后再隔一个间隔补一次 |
+| 单飞 + 合并 | `MSG_AUTO_GAP_MS = 4000` / `SESSION_AUTO_GAP_MS = 2500`(§8.67 起消息对账改为内网 800 / 慢链路 4000):同一时刻只飞一条;飞着时再来的只记一个 `queued`,落地后再隔一个间隔补一次 |
 | 后台静默 | `loadMessages({auto:true})` 不点 `#msgState`、失败不画错误页(只进控制台);`loadSessions({auto:true})` 同理 |
 | 前台优先 | 切会话 / 点重试走非 auto:`AbortController` 直接掐掉在飞的自动对账,`msgLoadGen` 保证被取代那一代的 `finally` 不回写状态 |
 | 轮询兜底 | `loadActive` 的 8s 轮询只在「最近 12s 没有对过账」时才拉消息,避免盯着一个运行中的会话时每 8s 白拉一次 |
@@ -2696,7 +2696,7 @@ TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 
 **取舍**:
 
 - 后台对账最多晚 4s 才把「权威版本」拉回来;这期间 SSE 的本地渲染照常逐帧更新,所以看内容不卡,
-  只是最终对账慢一点。LAN 上本来也看不见这个差别。
+  只是最终对账慢一点。LAN 上本来也看不见这个差别(§8.67 已把内网这段缩到 800ms,慢链路仍 4s)。
 - 压缩在代理的事件循环里同步做:1MB JSON 的 br q5 约 14ms、gzip 约 9ms;静态文件压过一次就缓存。
   选 q5 不选 q9,是因为 q9 只再小 3%,耗时却从 14ms 涨到 44ms。
 - 没有做消息缓存 / 分页改版:切到一个 1MB 的会话仍要下一次(现在约 224KB);真要再快得动存储与协议。
@@ -3371,6 +3371,43 @@ status 读不到就退回原来的 `confirm`,不把删除卡死。
 **回归**:`smoke.sh` 353 不变(只改条件,不增项),`ui-layout` 185 → **186**(从列表切回来
 恢复位置多 1 项),`ui-capabilities` 174 不变;其余套件计数不变;全量回归 **0 失败**,
 日志 `/tmp/ocsm-probe/perf/regress-866.log`。
+
+---
+
+### 8.67 后台消息对账:内网 800ms,慢链路仍 4000ms
+
+**起因**:§8.54 为了 VPN 把消息对账的落地间隔固定成 4 秒。内网上一轮对账刚回来,
+下一条事件再触发时仍要等满 4 秒,表现就是「模型已经回了/工具已经结束了,面板还要过几秒
+才把权威消息列表拉回来」。SSE 的本地渲染虽然照常,但工具最终 metadata、压缩摘要这类
+只有消息列表才准的内容会明显滞后。
+
+**结论**:把消息对账间隔拆成两档 —— `slowLink()` 为真(VPN / 3G / 首屏实测 ≥180ms)
+仍用 4000ms,否则用 800ms。单飞 + 合并的语义不变:同一时刻仍只飞一条,落地后只补一次,
+慢链路不会被新的快档打满。列表刷新仍用 `SESSION_AUTO_GAP_MS = 2500`,这一轮不动。
+
+**改动**:
+
+| 位置 | 行为 |
+|---|---|
+| 常量 | `MSG_AUTO_GAP_FAST_MS = 800` / `MSG_AUTO_GAP_SLOW_MS = 4000`;`msgAutoGap()` 按 `slowLink()` 选择 |
+| 进入自动对账 | `loadMessages({auto:true})` 落地后离上次太近时,按 `msgAutoGap()` 算剩余等待;不再写死 4000 |
+| 合并后补跑 | `finally` 里 `scheduleAutoMsg(msgAutoGap())`,与上面同一个口径 |
+| 不变 | 只认当前会话 / 会话行事件;后台不闪 250ms 状态行、失败不盖界面;前台请求仍优先并掐掉在飞自动对账 |
+| 慢链路 | 仍走 §8.54 的判据与 4 秒档;首屏还没量到 RTT 时短暂用快档,量到后 `store.netSlow` 生效 |
+
+**取舍**:
+
+- **不把间隔降到 0 / 150ms**。800ms 已经比一次 LAN 往返(实测 37ms)宽得多,又给事件密集时
+  留出合并窗口;再快只会把同一轮的多条事件拆成多次 MB 级请求。
+- **不做「内网无限并发」**。单飞仍是最重要的保险;快档只改「落地后等多久」,不改并发数。
+- **列表刷新不跟着变**。列表是小载荷且只认会话行事件,2500ms 不是这次抱怨的来源;改它要
+  重新量频繁改名 / 切模型的场景。
+- **首屏采样前的短窗口用快档**。这段时间通常只有一次请求;慢链路最多多花一次 800ms 间隔,
+  不影响正确性。
+
+**回归**:`smoke.sh` 353 → **354**(1 项:快 / 慢两档与 `msgAutoGap()` 接线),
+`ui-stream` 258 → **259**(1 项:内网 800ms 与慢链路 4000ms);其余套件计数不变;
+全量回归 **0 失败**,日志 `/tmp/ocsm-probe/perf/regress-867.log`。
 
 ---
 

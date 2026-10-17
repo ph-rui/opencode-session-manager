@@ -567,8 +567,30 @@
       window.__msgGate = null;
       await pa;
       await pb;
-      T('合并下来的那次会隔 MSG_AUTO_GAP_MS 再排一次', window.__pending(MSG_AUTO_GAP_MS) >= 1,
-        window.__timeouts);
+      T('合并下来的那次在内网隔 800ms 再排一次',
+        msgAutoGap() === MSG_AUTO_GAP_FAST_MS && window.__pending(MSG_AUTO_GAP_FAST_MS) >= 1,
+        { gap: msgAutoGap(), pending: window.__timeouts });
+
+      store.netSlow = true;
+      msgLastDone = 0;
+      msgLoadBusy = false;
+      msgAutoQueued = false;
+      window.__timeouts.length = 0;
+      var releaseSlow = null;
+      window.__msgGate = new Promise(function (r) { releaseSlow = r; });
+      var pc = loadMessages({ older: false, auto: true });
+      var pd = loadMessages({ older: false, auto: true });
+      releaseSlow();
+      window.__msgGate = null;
+      await pc;
+      await pd;
+      T('慢链路(VPN / 3G)仍隔 4000ms 再排一次,不把带宽打满',
+        msgAutoGap() === MSG_AUTO_GAP_SLOW_MS && window.__pending(MSG_AUTO_GAP_SLOW_MS) >= 1,
+        { gap: msgAutoGap(), pending: window.__timeouts });
+      store.netSlow = false;
+      msgLastDone = 0;
+      msgLoadBusy = false;
+      msgAutoQueued = false;
 
       window.__timeouts.length = 0;
       await loadMessages({ older: false });

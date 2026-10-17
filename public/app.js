@@ -3012,7 +3012,7 @@ async function selectSession(id) {
    * 也刻意排在下面那组【之前】——那组里任何一个卡住,都不该把这条一起拖住。 */
   if (!s) refreshSessionInfo(id);
   if (cached) renderMessages(); // §8.55 先把旧内容顶上来,网络那一趟在后台安静跑
-  // 缓存很新(刚看过 <1.5s)就不必再对账;其余情况走 quiet + now,不显示加载行、也不等 4s 间隔
+  // 缓存很新(刚看过 <1.5s)就不必再对账;其余情况走 quiet + now,不显示加载行、也不等对账间隔
   const fresh = cached && Date.now() - cached.at < MSG_CACHE_FRESH_MS;
   await Promise.all([
     fresh ? Promise.resolve() : loadMessages({ older: false, auto: !!cached, now: !!cached }),
@@ -3138,7 +3138,8 @@ async function loadMessages(opts) {
       try { if (msgAbort) msgAbort.abort(); } catch (_) {}
     }
     if (!opts.now) {
-      const wait = msgLastDone ? MSG_AUTO_GAP_MS - (Date.now() - msgLastDone) : 0;
+      const gap = msgAutoGap();
+      const wait = msgLastDone ? gap - (Date.now() - msgLastDone) : 0;
       if (wait > 0) { scheduleAutoMsg(wait); return; } // 刚拉过:隔一会儿再来,别把 VPN 打满
     }
   } else if (msgAbort) {
@@ -3202,7 +3203,7 @@ async function loadMessages(opts) {
       msgLastDone = Date.now();
       if (msgAutoQueued) {
         msgAutoQueued = false;
-        scheduleAutoMsg(MSG_AUTO_GAP_MS);
+        scheduleAutoMsg(msgAutoGap());
       }
     }
   }
@@ -7807,11 +7808,18 @@ let activeTimer = null;
  * 事件密一点就会七八条请求一起排队 —— 「正在加载」于是永远挂在那儿。
  * 现在:
  *   · 只对「当前会话 + 真会改消息」的事件排重取(provider/model 与别的会话一律不排);
- *   · 同一时刻只飞一条,飞着的时候再来的合并成一次,落地后隔 MSG_AUTO_GAP_MS 再跑;
+ *   · 同一时刻只飞一条,飞着的时候再来的合并成一次,落地后隔一个对账间隔再跑;
  *   · 后台重取不点亮「正在加载消息…」,失败也不把界面盖成错误页(留给下一次);
- *   · 列表刷新同理(SESSION_AUTO_GAP_MS 间隔 + 只认会话行相关事件)。 */
-const MSG_AUTO_GAP_MS = 4000;
+ *   · 列表刷新同理(SESSION_AUTO_GAP_MS 间隔 + 只认会话行相关事件)。
+ * 内网 800ms:事件驱动的对账落地后不至于白等 4 秒;VPN / 3G 仍回到 4 秒,
+ * 避免一次 MB 级消息列表把慢链路打满。仍然只保留一条在途请求。 */
+const MSG_AUTO_GAP_FAST_MS = 800;
+const MSG_AUTO_GAP_SLOW_MS = 4000;
 const SESSION_AUTO_GAP_MS = 2500;
+
+function msgAutoGap() {
+  return slowLink() ? MSG_AUTO_GAP_SLOW_MS : MSG_AUTO_GAP_FAST_MS;
+}
 let msgLoadBusy = false;
 let msgLoadGen = 0;
 let msgAbort = null;

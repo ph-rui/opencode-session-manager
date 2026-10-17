@@ -1913,6 +1913,16 @@ if has "$APPJS" 'function cacheCurrentMessages()' && has "$APPJS" 'const MSG_CAC
 else
   echo "FAIL: §8.55 的内存缓存 / 后台对账 / 删除清理缺了一块"; fail=$((fail + 1))
 fi
+if has "$APPJS" 'const MSG_AUTO_GAP_FAST_MS = 800' &&
+   has "$APPJS" 'const MSG_AUTO_GAP_SLOW_MS = 4000' &&
+   has "$APPJS" 'function msgAutoGap()' &&
+   has "$APPJS" 'return slowLink() ? MSG_AUTO_GAP_SLOW_MS : MSG_AUTO_GAP_FAST_MS;' &&
+   has "$APPJS" 'scheduleAutoMsg(msgAutoGap())' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '慢链路(VPN / 3G)仍隔 4000ms'; then
+  echo "PASS: 后台消息对账内网 800ms、慢链路仍 4000ms,落地后走同一个 msgAutoGap()"; pass=$((pass + 1))
+else
+  echo "FAIL: 后台对账间隔没有按快 / 慢链路分,或落地后没走 msgAutoGap()"; fail=$((fail + 1))
+fi
 if has "$(cat "$(dirname "$0")/ui-jump.html")" 'limit=30' &&
    has "$(cat "$(dirname "$0")/ui-jump.html")" 'MSG_PAGE_NARROW'; then
   echo "PASS: ui-jump.html 里有页大小的断言(桌面 100 / 窄屏 30 / 窄屏翻旧 30 / 转回宽屏 100)"; pass=$((pass + 1))
