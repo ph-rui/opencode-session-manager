@@ -3935,6 +3935,48 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 **回归**：`smoke.sh` 365 → **366**，`ui-tools` 348 → **357**；其余套件计数不变；
 全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-878.log`。
 
+### 8.79 `/mcps`:MCP 服务器只读列表
+
+**起因**：TUI 的 `mcp.list`（`app.tsx:924`）弹 `DialogMcp`，面板完全没有 MCP 入口；B4 先做
+只读列表，不做连接 / 断开 / 增删。`GET /api/mcp` 已验证可用，返回
+`{location,data:[{name,status:{status,error?},integrationID?}]}`；当前现场是空数组。
+
+**结论**：新增命令 `/mcps`，用 `#dlgPick` 列名称、状态和失败原因；有选中会话时带
+`location[directory]`，没选中会话时按 TUI 的 `mcp.list` 看服务端全局列表（不带 location）。
+空列表只 toast「没有配置 MCP 服务器」，不弹空框。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 命令 | `PANEL_COMMANDS` 加 `mcps`（“MCP 服务器与连接状态(只读)”），帮助面板补 `/mcps` |
+| 请求 | `openMcpPick()` 走 `GET /api/mcp`，选中会话时查询 `location[directory]`；异常 toast，不抛到控制台 |
+| 列表 | 标题带数量；`name` 作 label；`status.status` 翻成中文（已连接 / 连接中 / 已禁用 / 连接失败 / 需要授权），`failed` / `needs_auth` 的 `error` 跟在状态后面；开过滤框，名称和状态都参与过滤 |
+| 只读 | `openPick({readonly:true})`：底部写“↑↓ 浏览 · Esc 关闭”，点击 / Enter 不回调、不关框；`pickReadonly` 只在打开时置位，普通选择框照旧 |
+| 不做的 | 不接 `/api/experimental/mcp/:server` 的 connect / disconnect / add / remove，也不展示工具数（`/api/mcp` 没有 tool 字段，不编假计数） |
+
+**取舍**：
+
+- **只读**：连接 / 断开会改服务端运行时状态，且在 TUI 里还有配置落盘；面板先把“有哪些
+  服务器、现在什么状态”交代清楚，写操作另起一项。
+- **没有工具数**：服务端 `Mcp.Server` 只有 name / status / integrationID；唯一相关接口
+  `/api/mcp/resource` 是资源目录，不是工具表。与其猜一个数字，不如只报能确认的状态。
+- **快照，不自动刷新**：每次 `/mcps` 重新拉；列表开着时状态变化不会自己重画。MCP 的
+  `mcp.status.changed` 事件没有在这条路上接，避免为一个只读列表再加一条 SSE 订阅。
+- **只读列表不提供“选中”动作**：点击 / Enter 没有副作用，底部也就不写“Enter 选中”；
+  要关框走 Esc 或关闭按钮。
+
+**验证**：
+
+- `ui-picks.html` 新增 10 项：标题数量、过滤框、请求参数、名称顺序、五种状态与错误原因、
+  只读底部文案、点击不回调不关框、命令入口、未选中会话时走全局列表、空列表只提示。
+- `smoke.sh` 新增 1 项静态锁：`openMcpPick` / `/api/mcp` / `mcpStatusLabel` / 只读脚注 /
+  `pickChoose` 的只读短路 / `/mcps` 命令与帮助文案，以及 `ui-picks.html` 的关键断言都在。
+- `node --check public/app.js` 通过。
+
+**回归**：`smoke.sh` 366 → **367**，`ui-picks` 159 → **169**；其余套件计数不变；
+全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-879.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -3956,6 +3998,7 @@ pin 状态存本地（`context/local.tsx:576-589`）；面板只有归档，列�
 | **滚动存档带 `bottom`，切回直接贴底**（§8.76）| 「离开前看最新」和「离开前翻旧」是两种意图，分开记；新消息在离开期间到达也跟到新底，符合看最新的预期；旧存档兼容 | 离底 80px 内都算最新；只有底部状态不保存具体像素目标；中间位置仍按消息锚点还原 |
 | **`/skills` 选技能，按 `prompt.skills` 发送**（§8.77）| 与 TUI 的 `prompt.skills` / `DialogSkill` 同入口；技能和文件在请求体里彻底分流，同名也不会串；`skillHits` 按会话留在内存，切回草稿仍可发 | `@` 补全仍只找文件；技能只认显式选择；不跨刷新持久化；只列当前工程 |
 | **探索工具组可切「逐条显示」**（§8.78）| 与 TUI 的 `session.toggle.exploration_grouping` 对齐；关掉时跨消息吸收一起短路，续步恢复独立消息；偏好本机保存，不动数据 | 只做探索分组，思考块的全局折叠仍没做；偏好不写 `cli.json`；切换会重画 DOM，已摊开的组回到默认折叠 |
+| **`/mcps` 只读列服务器状态**（§8.79）| 与 TUI 的 `mcp.list` 同入口；先交代有哪些服务器、连没连上、为什么失败，不碰运行时写操作 | 不接 connect / disconnect / add / remove；`/api/mcp` 没有工具数，不编假计数；列表是快照，不跟 SSE 自动刷新 |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|

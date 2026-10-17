@@ -93,6 +93,7 @@ const store = {
   pickAt: -1, // 选择框当前高亮项(下标指向 pickShown)
   pickCurrent: undefined, // 「当前值」那一条的 key(照 TUI 的 DialogSelect 印一枚 ●)
   pickOnPick: null, // 选中回调
+  pickReadonly: false, // §8.79 只读列表(/mcps):Enter / 点击只浏览,不关框也不回调
   msgError: '', // 最近一次拉消息失败的原文(空 = 没在失败);画成 #messages 末尾那条状态行
   msgLoading: false, // 「正在加载消息…」是不是真露出来了(慢到 MSG_LOADING_DELAY_MS 才露)
   msgSeq: 0, // 拉消息的「代」号:切会话或新请求一来,旧的重试/在途响应就作废
@@ -7312,6 +7313,7 @@ const PANEL_COMMANDS = [
   { name: 'models', description: '选择模型(含推理档位)', run: () => openModelPick() },
   { name: 'agents', description: '选择智能体', run: () => openAgentPick() },
   { name: 'skills', description: '插入技能(@skill,按 TUI 的 prompt.skills)', run: () => openSkillPick() },
+  { name: 'mcps', description: 'MCP 服务器与连接状态(只读)', run: () => openMcpPick() },
   { name: 'exploration', description: '探索工具组:折叠 / 逐条显示', run: () => toggleExploreGroup() },
   { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
   { name: 'help', description: '命令与快捷键', run: () => openHelp() },
@@ -7329,6 +7331,7 @@ const HELP_KEYS = [
   { k: '/copy', d: '复制当前会话转录(纯文本,不含思考)' },
   { k: '/copyid', d: '复制当前会话 ID' },
   { k: '/tab-reopen', d: '重开最近关闭的标签(对应 TUI session.tab.reopen)' },
+  { k: '/mcps', d: 'MCP 服务器与连接状态(只读,对应 TUI mcp.list)' },
   { k: '/exploration', d: '折叠 / 逐条显示探索工具组(对应 TUI session.toggle.exploration_grouping)' },
   { k: '/subagents', d: '选择并打开当前会话的子会话' },
   { k: '/parent', d: '回到父会话' },
@@ -7436,6 +7439,13 @@ function paintPickFoot(opts) {
   const foot = $('#pickFoot');
   if (!foot) return;
   const filter = opts && opts.filter ? '打字过滤 · ' : '';
+  // 只读列表(/mcps)没有「选中」这个动作,底部就别写「Enter 选中」骗用户。
+  if (opts && opts.readonly) {
+    foot.innerHTML =
+      '<span class="hFull">' + esc(filter + '↑↓ 浏览 · Esc 关闭') + '</span>' +
+      '<span class="hNarrow">' + esc(filter + '点「关闭」收起') + '</span>';
+    return;
+  }
   foot.innerHTML =
     '<span class="hFull">' + esc(filter + '↑↓ 选择 · Enter 选中 · Esc 关闭') + '</span>' +
     '<span class="hNarrow">' + esc(filter + '点条目选中 · 关闭按钮收起') + '</span>';
@@ -7447,6 +7457,7 @@ function openPick(opts) {
   if (!dlg) return;
   store.pickItems = opts.items || [];
   store.pickOnPick = opts.onPick || null;
+  store.pickReadonly = !!opts.readonly;
   store.pickFilter = '';
   store.pickCurrent = opts.current;
   const cur = (opts.items || []).findIndex((it) => it.key === opts.current);
@@ -7473,7 +7484,7 @@ function closePick() {
 
 // 选中一项:先关框再回调,免得回调里又弹一个选择框(选模型 → 再选变体)时打架
 function pickChoose(it) {
-  if (!it || it.disabled) return;
+  if (!it || it.disabled || store.pickReadonly) return;
   const fn = store.pickOnPick;
   closePick();
   // §8.61:动作项的回调可能是异步的(移会话 / 删工作树),把 Promise 透出去方便测,
@@ -7764,6 +7775,53 @@ function insertSkill(id, name) {
   renderAttachments();
   el.focus();
   updateComposerControls();
+}
+
+/* /mcps:照 TUI 的 mcp.list / DialogMcp,只读列出服务器与状态;不接连接 / 断开 / 增删。
+ * GET /api/mcp 的 Server 形状是 {name,status:{status,error?},integrationID?},
+ * 没有工具数接口,所以这里只写名称、状态和失败原因,不编一个假计数。 */
+function mcpStatusLabel(st) {
+  switch (st && st.status) {
+    case 'connected': return '已连接';
+    case 'pending': return '连接中';
+    case 'disabled': return '已禁用';
+    case 'failed': return '连接失败';
+    case 'needs_auth': return '需要授权';
+    default: return (st && st.status) || '未知状态';
+  }
+}
+
+async function openMcpPick() {
+  const dir = sessionDir(store.selected);
+  let list = [];
+  try {
+    const q = dir ? '?' + new URLSearchParams({ 'location[directory]': dir }).toString() : '';
+    const j = await api('/api/mcp' + q);
+    list = j && Array.isArray(j.data) ? j.data : [];
+  } catch (e) {
+    flash('加载 MCP 服务器失败:' + e.message, 'bad');
+    return;
+  }
+  if (!list.length) {
+    flash('没有配置 MCP 服务器', 'warn');
+    return;
+  }
+  openPick({
+    title: 'MCP 服务器 (' + list.length + ')',
+    filter: true,
+    filterHint: '按名称或状态过滤…',
+    readonly: true,
+    items: list.map((s) => {
+      const st = typeof s.status === 'string' ? { status: s.status } : (s.status || {});
+      const label = mcpStatusLabel(st);
+      const err = st.error == null ? '' : String(st.error);
+      return {
+        key: s.name,
+        label: s.name || '(未命名)',
+        sub: err ? label + ' · ' + err : label,
+      };
+    }),
+  });
 }
 
 // 光标前最后一个 /token(必须在行首)→ 它在输入框里的 [start, end) 与查询词。

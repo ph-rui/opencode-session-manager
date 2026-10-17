@@ -94,6 +94,15 @@
       { id: 'write-docs', name: 'Write Docs', description: '写文档' },
     ];
 
+    /* 真实 GET /api/mcp:Server = { name, status:{ status, error? }, integrationID? } */
+    var MCP_SERVERS = [
+      { name: 'localhost', status: { status: 'connected' } },
+      { name: 'github', status: { status: 'needs_auth', error: 'Run opencode mcp auth github' } },
+      { name: 'broken', status: { status: 'failed', error: 'spawn ENOENT' } },
+      { name: 'off', status: { status: 'disabled' } },
+      { name: 'slow', status: { status: 'pending' } },
+    ];
+
     /* 真实 GET /api/model:两个 provider、一个 disabled、两个带 variants */
     var MODELS = [
       { providerID: 'company', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true,
@@ -117,6 +126,9 @@
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
       if (u.indexOf('/api/skill') === 0) return json({ location: { directory: '/proj/alpha' }, data: SKILLS });
+      if (u === '/api/mcp' || u.indexOf('/api/mcp?') === 0) {
+        return json({ location: { directory: '/proj/alpha' }, data: MCP_SERVERS });
+      }
       if (/\/api\/session\/[^/?]+\/(model|agent)$/.test(u)) return noContent();
       if (/\/api\/session\/[^/?]+\/prompt$/.test(u)) {
         var pb = opts && opts.body ? JSON.parse(opts.body) : {};
@@ -745,6 +757,56 @@
       await openSkillPick();
       T('/skills:没有可用技能时不开空框', picksOpen() === false, picksOpen());
       SKILLS = savedSkills;
+      closePick();
+
+      /* ================= /mcps(§8.79 只读) ================= */
+      closePick();
+      window.calls.length = 0;
+      await openMcpPick();
+      T('/mcps:标题带数量', q('#pickTitle').textContent === 'MCP 服务器 (5)', q('#pickTitle').textContent);
+      T('/mcps:开着过滤框', q('#pickFilter').hidden === false);
+      T('/mcps:按当前工程取列表', hadCall(/^\/api\/mcp\?/) &&
+        lastCall(/^\/api\/mcp\?/).url.indexOf('location%5Bdirectory%5D=%2Fproj%2Falpha') >= 0,
+        lastCall(/^\/api\/mcp\?/));
+      T('/mcps:名称作 label', items().map(function (it) { return it.label; }).join('|') ===
+        'localhost|github|broken|off|slow',
+        items().map(function (it) { return it.label; }));
+      T('/mcps:状态翻成中文,失败原因跟着写',
+        items()[0].sub === '已连接' &&
+        items()[1].sub === '需要授权 · Run opencode mcp auth github' &&
+        items()[2].sub === '连接失败 · spawn ENOENT' &&
+        items()[3].sub === '已禁用' && items()[4].sub === '连接中',
+        items().map(function (it) { return it.sub; }));
+      T('/mcps:只读列表底部只写浏览 / 关闭',
+        store.pickReadonly === true &&
+        q('#pickFoot .hFull').textContent.indexOf('浏览') >= 0 &&
+        q('#pickFoot .hFull').textContent.indexOf('选中') < 0,
+        q('#pickFoot .hFull').textContent);
+      pickChoose(items()[0]);
+      T('/mcps:点条目不回调、也不关框', picksOpen() === true, picksOpen());
+      T('/mcps:命令面板有入口',
+        PANEL_COMMANDS.some(function (c) {
+          return c.name === 'mcps' && c.description.indexOf('MCP') >= 0;
+        }));
+      closePick();
+
+      /* 没选中会话时也照 TUI 的 mcp.list 看全局列表(不带 location) */
+      var mcpSel = store.selected;
+      store.selected = '';
+      window.calls.length = 0;
+      await openMcpPick();
+      T('/mcps:没选中会话也能看,不硬塞空目录', picksOpen() === true && !!lastCall(/^\/api\/mcp$/));
+      closePick();
+      store.selected = mcpSel;
+
+      /* 空列表只提示,不弹一个没有内容的框 */
+      var savedMcp = MCP_SERVERS;
+      MCP_SERVERS = [];
+      closePick();
+      await openMcpPick();
+      T('/mcps:没有服务器时只提示', picksOpen() === false &&
+        q('#toast').textContent === '没有配置 MCP 服务器', q('#toast').textContent);
+      MCP_SERVERS = savedMcp;
       closePick();
 
       /* ================= 没选中会话时不开 ================= */

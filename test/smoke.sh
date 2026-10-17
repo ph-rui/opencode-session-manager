@@ -2499,6 +2499,23 @@ else
   echo "FAIL: §8.78 的开关 / localStorage / 打包条件 / 吸收短路或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R35 组:/mcps 只读列表(§8.79)----
+if has "$APPJS" 'function openMcpPick()' &&
+   has "$APPJS" "'/api/mcp' + q" &&
+   has "$APPJS" 'function mcpStatusLabel(st)' &&
+   has "$APPJS" 'readonly: true,' &&
+   has "$APPJS" 'store.pickReadonly = !!opts.readonly;' &&
+   has "$APPJS" 'if (!it || it.disabled || store.pickReadonly) return;' &&
+   has "$APPJS" '↑↓ 浏览 · Esc 关闭' &&
+   has "$APPJS" "name: 'mcps', description: 'MCP 服务器与连接状态(只读)'" &&
+   has "$APPJS" "k: '/mcps', d: 'MCP 服务器与连接状态(只读,对应 TUI mcp.list)'" &&
+   has "$(cat "$(dirname "$0")/ui-picks.html")" '/mcps:只读列表底部只写浏览 / 关闭' &&
+   has "$(cat "$(dirname "$0")/ui-picks.html")" '/mcps:没选中会话也能看,不硬塞空目录'; then
+  echo "PASS: §8.79 /mcps 只读列表、状态翻译、只读脚注与全局 / 工程两种取数都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.79 的列表 / 状态 / 只读交互 / 命令入口或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
