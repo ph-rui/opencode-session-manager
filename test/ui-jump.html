@@ -632,6 +632,63 @@
         MSG_PAGE_WIDE === 100 && MSG_PAGE_NARROW === 30 && msgPageSize() === 100,
         MSG_PAGE_WIDE + '/' + MSG_PAGE_NARROW);
 
+      /* §8.55 慢链路:桌面也降到手机同档(30 条),往上滚仍自动带更旧。
+         判据是首屏 /api/session 那一趟的往返时间(内网 < 20ms,VPN 200ms 起步)。
+         这里直接改 store.netSlow,不动真实计时。 */
+      store.netMeasured = true;
+      store.netSlow = false;
+      T('内网桌面:仍是一页 100 条', msgPageSize() === 100, msgPageSize());
+      store.netSlow = true;
+      T('实测慢链路:桌面也按 30 条一页(和手机同档)', msgPageSize() === 30, msgPageSize());
+      await loadMessages({ older: false });
+      T('慢链路下的请求真的带 limit=30', lastUrl().indexOf('limit=30') >= 0, lastUrl());
+      store.msgOlderCursor = 'cur-slow';
+      store.msgError = '';
+      box.scrollTop = 0;
+      autoOlderArmed = true;
+      var cSlow = window.calls.length;
+      await autoLoadOlder(box);
+      T('慢链路桌面:滚到顶照样自动带上一页(不用去点按钮)',
+        window.calls.length === cSlow + 1, window.calls.length - cSlow);
+      store.netSlow = false;
+      store.msgOlderCursor = null;
+      store.msgError = '';
+      box.scrollTop = box.scrollHeight;
+
+      /* §8.55 切回看过的会话:内存缓存先顶上,再后台对账(不闪加载行、只发一条) */
+      store.msgCache.clear();
+      store.selected = null;
+      await selectSession('ses_a');
+      await selectSession('ses_b'); // 切走时把 a 存进缓存
+      T('切走时缓存了上一个会话', store.msgCache.has('ses_a'));
+      var msgN = function () {
+        return window.calls.filter(function (c) { return /\/message/.test(c.url); }).length;
+      };
+      var cachedA = store.msgCache.get('ses_a');
+      cachedA.at = Date.now() - 5000; // 模拟离开了一阵 → 需要后台对账
+      var gateC = {};
+      gateC.promise = new Promise(function (r) { gateC.release = r; });
+      window.GATE = gateC.promise;
+      var mN0 = msgN();
+      var pCache = selectSession('ses_a'); // 缓存命中:同步先画
+      T('切回来时旧内容立刻在(不等网络)',
+        q('#messages').textContent.indexOf('会话 A 的第一问') >= 0, q('#messages').textContent.slice(0, 40));
+      T('缓存命中不闪「正在加载消息…」', stateEl.hidden === true);
+      await new Promise(function (r) { window.__realSetTimeout(r, 320); });
+      T('后台对账超过 250ms 也不露加载行', stateEl.hidden === true);
+      gateC.release();
+      window.GATE = null;
+      await pCache;
+      T('后台对账仍然只发一条消息请求', msgN() - mN0 === 1, msgN() - mN0);
+      T('对账回来内容还在', q('#messages').textContent.indexOf('会话 A 的第一问') >= 0);
+
+      /* 缓存还热(<1.5s)时切回:连对账都省掉 */
+      await selectSession('ses_b');
+      var mN1 = msgN();
+      await selectSession('ses_a');
+      T('刚看过的会话(<1.5s)切回来不再发请求', msgN() === mN1, msgN() - mN1);
+      T('缓存上限 6 个会话', MSG_CACHE_MAX === 6 && store.msgCache.size <= 6, store.msgCache.size);
+
       /* ============ 10. 贴完底再跟几帧:估值落定不许把底顶歪(§8.36) ============
        * cvmany 下 scrollHeight 是估值,浏览器是【贴完之后】才把它落定的 —— 一落定
        * scrollTop 就被夹回去,而这时往往已经没有下一次渲染来纠正(事件不来就永远停着)。

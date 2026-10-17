@@ -18,6 +18,14 @@ const store = {
   directory: '',
   sessionCursor: null,
   msgOlderCursor: null,
+  /* §8.55 切回看过的会话:消息先在内存里留一份(只在当前标签页的 JS 堆里,不落
+   * localStorage / sessionStorage —— 内容可能很长,也不该持久到磁盘)。
+   * key = 会话 id,value = { messages, cursor, at };最多留 MSG_CACHE_MAX 个会话。 */
+  msgCache: new Map(),
+  /* §8.55 首屏会话列表那一趟实测到的往返时间:内网 < 20ms,VPN 200ms 起步。
+   * 只在本次页面里生效,刷新/回到内网会重新量。 */
+  netMeasured: false,
+  netSlow: false,
   pending: false,
   running: false,
   // 消息区【跟随中】的状态 —— 含义是「跟着最新输出走」这个意图,不是一次几何测量。
@@ -1158,8 +1166,13 @@ async function loadSessions(opts) {
   if (!quiet) setListLoading(true);
   const gen = ++sessionLoadGen;
   sessionLoadBusy = true;
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   try {
     const j = await api('/api/session?' + q.toString());
+    if (!opts.more) {
+      const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+      noteNetSample(dt); // §8.55 只认第一次(函数内部自己兜住)
+    }
     (j.data || []).forEach((s) => {
       store.sessions.set(s.id, s);
       if (s.parentID) store.subs.set(s.id, s.parentID);
@@ -1308,6 +1321,7 @@ function persistSelected(id, mode) {
 // 取消选中:回到「未选择会话」的空态。删除会话、以及浏览器后退到面板最初那一格,都走这里。
 function clearSelection() {
   const id = store.selected;
+  if (id) cacheCurrentMessages(); // §8.55 取消选中也先留一份(切回来还能秒开)
   store.selected = null;
   persistSelected(null, 'replace');
   store.messages.clear();
@@ -1448,7 +1462,8 @@ let autoOlderBusy = false;  // 上一页还在路上
 let autoOlderWired = false; // 重复接线不重复挂监听
 
 async function autoLoadOlder(box) {
-  if (!document.documentElement.classList.contains('narrow')) return; // 窄屏判定源只有这一个
+  // §8.55 窄屏照旧;桌面只有实测慢链路才接管(慢链路首屏也只拉 30 条,得能接着翻)
+  if (!document.documentElement.classList.contains('narrow') && !slowLink()) return;
   if (autoOlderBusy || !autoOlderArmed) return;
   if (!store.msgOlderCursor) return; // 没有更旧的了
   if (store.msgError) return;        // 上一页失败过:让用户按「重试」,别自己循环撞
@@ -1860,15 +1875,22 @@ function setupHistoryNav() {
 }
 
 async function selectSession(id) {
+  const prev = store.selected;
   // 离开上一个会话前,先把它读到哪记下来(H 组 3)
-  if (store.selected && store.selected !== id) saveScrollAnchor();
+  if (prev && prev !== id) saveScrollAnchor();
+  // §8.55 切走的这一份先留在内存里,切回来时先用它顶上(再后台对账)
+  if (prev && prev !== id) cacheCurrentMessages();
   // 只有「刷新恢复」会先塞 store.restoreScroll;从列表点进来一律跳到底部看最新消息
   const rs = store.restoreScroll && store.restoreScroll.sid === id ? store.restoreScroll.anchor : null;
   store.restoreScroll = rs;
   store.selected = id;
   persistSelected(id);
+  /* §8.55 从别的会话切回来 → 缓存命中就先画,不空着等请求。
+   * prev 为空(首屏 / 刷新恢复 / 取消选中后重选)不走缓存,行为和以前一样。 */
+  const cached = prev && prev !== id ? store.msgCache.get(id) : null;
   store.messages.clear();
-  store.msgOlderCursor = null;
+  if (cached) cached.messages.forEach((m, mid) => store.messages.set(mid, m));
+  store.msgOlderCursor = cached ? cached.cursor || null : null;
   store.pending = false;
   store.forceBottom = !rs;
   store.lastTop = 0; // 滚口要清空,上个会话的 scrollTop 不能拿来跟新会话比(会被当成「用户往上滚」)
@@ -1900,8 +1922,11 @@ async function selectSession(id) {
    * 刻意不 await:不能让这条网络往返改掉选会话的时序(会跟列表刷新抢);
    * 也刻意排在下面那组【之前】——那组里任何一个卡住,都不该把这条一起拖住。 */
   if (!s) refreshSessionInfo(id);
+  if (cached) renderMessages(); // §8.55 先把旧内容顶上来,网络那一趟在后台安静跑
+  // 缓存很新(刚看过 <1.5s)就不必再对账;其余情况走 quiet + now,不显示加载行、也不等 4s 间隔
+  const fresh = cached && Date.now() - cached.at < MSG_CACHE_FRESH_MS;
   await Promise.all([
-    loadMessages({ older: false }),
+    fresh ? Promise.resolve() : loadMessages({ older: false, auto: !!cached, now: !!cached }),
     loadAsks(id),
     loadInbox(id),
     renderControls(s),
@@ -1956,12 +1981,58 @@ const MSG_LOADING_DELAY_MS = 250; // 这么快就回来了就不闪「正在加�
 /* 一页拉多少条:手机的用法是「看一眼」,而首屏体量差得很远 —— 实测某个会话
  * 100 条 = 12.9MB、最新 30 条 = 2.1MB(大头是 tool part 里带回的整份文件与截图,
  * 见 §8.34)。所以窄屏按 30 条一页,桌面照旧 100。翻旧仍然走「加载更旧消息」的游标,
- * 步长跟着这套走(不然翻一页又拉回 12MB)。 */
+ * 步长跟着这套走(不然翻一页又拉回 12MB)。
+ * §8.55:经 VPN 的桌面也算「看一眼」的那一档 —— 首屏那一趟实测慢就按 30 条,
+ * 往上滚仍然自动带更旧的一页(autoLoadOlder 同一套判定)。 */
 const MSG_PAGE_WIDE = 100;
 const MSG_PAGE_NARROW = 30;
 
+/* 首屏会话列表那一趟的往返时间(RTT + 传输 + 解析):内网通常 < 20ms,VPN 是 200ms
+ * 起步,两者中间空得很。只量第一次,量到一次就够了。 */
+const SLOW_SAMPLE_MS = 180;
+
+function noteNetSample(ms) {
+  if (store.netMeasured) return;
+  store.netMeasured = true;
+  if (ms >= SLOW_SAMPLE_MS) store.netSlow = true;
+}
+
+/* navigator.connection 只在 Chromium 系可用(手机/Edge 都有),当个旁证:
+ * 真正的判据还是上面那次实测。两项都认不出慢时才回落到 100 条。 */
+function slowLink() {
+  if (store.netSlow) return true;
+  const c = typeof navigator !== 'undefined' &&
+    (navigator.connection || navigator.mozConnection || navigator.webkitConnection);
+  if (!c) return false;
+  if (c.effectiveType && /(^|-)2g$|(^|-)3g$/.test(c.effectiveType)) return true;
+  if (typeof c.rtt === 'number' && c.rtt >= 400) return true;
+  return false;
+}
+
 function msgPageSize() {
-  return document.documentElement.classList.contains('narrow') ? MSG_PAGE_NARROW : MSG_PAGE_WIDE;
+  return (document.documentElement.classList.contains('narrow') || slowLink())
+    ? MSG_PAGE_NARROW
+    : MSG_PAGE_WIDE;
+}
+
+/* §8.55 内存缓存:只缓存成功拿到过的消息页(失败的空壳不缓存)。
+ * 切走时快照;回来后先画快照,再走一次 quiet 对账。最多留 6 个会话,
+ * 超出按插入顺序丢最旧的那个(Map 的 set 会把已存在的键挪到末尾)。 */
+const MSG_CACHE_MAX = 6;
+const MSG_CACHE_FRESH_MS = 1500;
+
+function cacheCurrentMessages() {
+  const id = store.selected;
+  if (!id || !store.messages.size || store.msgError) return;
+  store.msgCache.delete(id);
+  store.msgCache.set(id, {
+    messages: new Map(store.messages),
+    cursor: store.msgOlderCursor,
+    at: Date.now(),
+  });
+  while (store.msgCache.size > MSG_CACHE_MAX) {
+    store.msgCache.delete(store.msgCache.keys().next().value);
+  }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1972,9 +2043,15 @@ async function loadMessages(opts) {
   if (!id) return;
   const quiet = !!opts.auto; // 后台对账:不点亮状态行、失败不盖界面
   if (quiet) {
-    if (msgLoadBusy) { msgAutoQueued = true; return; } // 已有一条在飞:合并成一次
-    const wait = msgLastDone ? MSG_AUTO_GAP_MS - (Date.now() - msgLastDone) : 0;
-    if (wait > 0) { scheduleAutoMsg(wait); return; } // 刚拉过:隔一会儿再来,别把 VPN 打满
+    if (msgLoadBusy) {
+      if (!opts.now) { msgAutoQueued = true; return; } // 已有一条在飞:合并成一次
+      // 缓存命中后的第一次对账:旧那一代立刻作废,别让它继续占带宽
+      try { if (msgAbort) msgAbort.abort(); } catch (_) {}
+    }
+    if (!opts.now) {
+      const wait = msgLastDone ? MSG_AUTO_GAP_MS - (Date.now() - msgLastDone) : 0;
+      if (wait > 0) { scheduleAutoMsg(wait); return; } // 刚拉过:隔一会儿再来,别把 VPN 打满
+    }
   } else if (msgAbort) {
     // 前台请求(切会话/点重试)优先:上一轮自动对账就地作废,别让它继续占带宽
     try { msgAbort.abort(); } catch (_) {}
@@ -4964,6 +5041,7 @@ async function onAction(act, id) {
     await guard(() => api('/api/session/' + id, { method: 'DELETE' }));
     store.sessions.delete(id);
     if (store.selected === id) clearSelection();
+    store.msgCache.delete(id); // §8.55 删掉的会话不再留快照(clearSelection 会先快照一次)
     renderSessions();
     return;
   }
@@ -6699,6 +6777,7 @@ function handleControlEvent(e) {
       store.inbox.delete(id);
       for (const [mid, L] of store.live) if (L.sid === id) store.live.delete(mid);
       if (store.selected === id) clearSelection();
+      store.msgCache.delete(id); // §8.55 删掉的会话不再留快照
       dirty = true;
     }
     refreshActive = true;
@@ -7215,7 +7294,7 @@ function init() {
   setupComposerToggle(); // 底板收起/展开(手机默认收起,见上面那一节)
   setupHistoryNav();
   setupScrollMemory();
-  setupAutoOlder(); // 窄屏滚到顶自动拉更旧(§8.41:那一行在手机上收起来了)
+  setupAutoOlder(); // 窄屏 / 实测慢链路滚到顶自动拉更旧(§8.41 / §8.55)
   setupJumpLatest(); // 一键回底(TUI 的 Jump to latest / End)
   setupMsgState(); // 拉消息的状态行(正在加载 / 加载失败 + 重试)
   setupListState(); // 拉会话列表的状态行(同上,挂在左栏里,§8.45)

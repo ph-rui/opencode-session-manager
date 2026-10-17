@@ -1866,13 +1866,31 @@ else
   echo "FAIL: ui-jump.html 里没有这组断言"; fail=$((fail + 1))
 fi
 
-# ---- R12 组:一页拉多少条(手机 30 / 桌面 100;§8.35)----
+# ---- R12 组:一页拉多少条(手机 30 / 桌面 100;实测慢链路也 30;§8.35 / §8.55)----
 if has "$APPJS" 'const MSG_PAGE_NARROW = 30' && has "$APPJS" 'const MSG_PAGE_WIDE = 100' &&
-   has "$APPJS" "document.documentElement.classList.contains('narrow') ? MSG_PAGE_NARROW : MSG_PAGE_WIDE" &&
+   has "$APPJS" "document.documentElement.classList.contains('narrow') || slowLink()" &&
    has "$APPJS" 'new URLSearchParams({ limit: String(msgPageSize()) })'; then
-  echo "PASS: 窄屏一页 30 条、桌面 100 条,首屏与翻页共用同一个口径(msgPageSize)"; pass=$((pass + 1))
+  echo "PASS: 窄屏一页 30 条、桌面 100 条、实测慢链路也 30 条,首屏与翻页共用同一个口径(msgPageSize)"; pass=$((pass + 1))
 else
-  echo "FAIL: 一页多少条没按窄屏分,或者分了两处口径"; fail=$((fail + 1))
+  echo "FAIL: 一页多少条没按窄屏/慢链路分,或者分了两处口径"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const SLOW_SAMPLE_MS = 180' && has "$APPJS" 'function slowLink()' &&
+   has "$APPJS" 'noteNetSample(dt)' && has "$APPJS" ' && !slowLink()) return;' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '慢链路桌面:滚到顶' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" 'limit=30'; then
+  echo "PASS: §8.55 慢链路判据接在首屏与滚顶翻旧上(ui-jump 有对应断言)"; pass=$((pass + 1))
+else
+  echo "FAIL: 慢链路没有接在首屏页大小 / 滚顶翻旧上"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function cacheCurrentMessages()' && has "$APPJS" 'const MSG_CACHE_MAX = 6' &&
+   has "$APPJS" 'const MSG_CACHE_FRESH_MS = 1500' && has "$APPJS" 'store.msgCache.get(id)' &&
+   has "$APPJS" 'if (cached) renderMessages()' &&
+   has "$APPJS" 'loadMessages({ older: false, auto: !!cached, now: !!cached })' &&
+   has "$APPJS" 'store.msgCache.delete(id)' &&
+   has "$(cat "$(dirname "$0")/ui-layout.html")" '删掉的会话不再留在内存缓存里'; then
+  echo "PASS: §8.55 切回看过的会话先用内存缓存顶上,再后台对账(上限 6、删除即清)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.55 的内存缓存 / 后台对账 / 删除清理缺了一块"; fail=$((fail + 1))
 fi
 if has "$(cat "$(dirname "$0")/ui-jump.html")" 'limit=30' &&
    has "$(cat "$(dirname "$0")/ui-jump.html")" 'MSG_PAGE_NARROW'; then

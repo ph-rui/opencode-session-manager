@@ -407,6 +407,7 @@
       /* ============ 7. 删除当前会话时清掉 hash ============ */
       await onAction('del', 'ses_b');
       T('删除后不再是选中态', store.selected === null, store.selected);
+      T('删掉的会话不再留在内存缓存里', !store.msgCache.has('ses_b'), store.msgCache.size);
       T('删除后 hash 被清空(否则刷新会去恢复一个已删除的会话)', location.hash === '', location.hash);
       T('删除后不再显示该会话的消息', q('#messages').textContent.indexOf('会话 B 的第一问') < 0);
 
