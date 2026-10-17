@@ -104,6 +104,8 @@
   (async function () {
     var post = function (b) { try { window.__realFetch('/result', { method: 'POST', body: b }); } catch (_) {} };
     var out = [];
+    // §8.53 并排偏好是全局的;这套老断言按统一视图写,先钉死,别被窗口宽度(auto)影响
+    try { localStorage.setItem('ocs.diffView', 'unified'); } catch (_) {}
     var T = function (name, cond, extra) {
       out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | got=' + JSON.stringify(extra)));
     };

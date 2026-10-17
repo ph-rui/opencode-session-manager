@@ -111,6 +111,8 @@
     var files = [{
       file: 'default.xml', status: 'modified', additions: 1, deletions: 1, patch: REAL_PATCH,
     }];
+    // §8.53 并排偏好是全局的:先钉成 unified,原有这些 diff 断言才不会被窗口宽度影响
+    try { localStorage.setItem('ocs.diffView', 'unified'); } catch (_) {}
 
     try {
       /* ================= parsePatch ================= */
@@ -1067,10 +1069,22 @@
       T('没留 .msg.idle 的空壳(原来会剩一条 3px 灰边 + 22px 空隙)', qa('#messages .msg.idle').length === 0);
       T('有描述的那条照常印出来', qa('#messages .msg').pop().textContent.indexOf('Continuing after restart') > 0);
 
-      /* ================= §8.52 并排视图(仅桌面) ================= */
+      /* ================= §8.52 / §8.53 并排视图(照 TUI 的偏好模型) ================= */
       var spFiles = [{ file: 'a.js', status: 'modified', additions: 2, deletions: 2,
         patch: '@@ -1,3 +1,3 @@\n-const a = 1;\n-const b = 2;\n+const a = 9;\n+const b = 3;\n common' }];
-      diffViews.set('p1#0', 'split');
+      T('并排判定:只有 modified 分栏(added / deleted 照 TUI 一律统一)',
+        diffViewWanted('modified', 'auto', true) && !diffViewWanted('added', 'auto', true) &&
+        !diffViewWanted('deleted', 'auto', true) && !diffViewWanted('', 'auto', true));
+      T('并排判定:面板不够宽就不分栏',
+        !diffViewWanted('modified', 'auto', false) && !diffViewWanted('modified', 'split', false));
+      T('并排判定:没记过 = auto(够宽就并排),记过 unified 就统一',
+        diffViewWanted('modified', 'auto', true) && !diffViewWanted('modified', 'unified', true));
+
+      var realWide = window.diffWide;
+      window.diffWide = function () { return true; };
+      try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
+      T('并排:没记过偏好时是 auto,够宽即分栏',
+        diffViewPref() === 'auto' && diffHtml(spFiles, { pid: 'p1' }).indexOf('diff split') >= 0);
       var sp = diffHtml(spFiles, { pid: 'p1' });
       T('并排:切到并排时容器带 split 类', sp.indexOf('diff split') >= 0, sp);
       T('并排:两对增删各占一行、左右各一栏', qaOf(sp, 'pair') === 2, qaOf(sp, 'pair'));
@@ -1092,34 +1106,58 @@
       var sp2 = diffHtml([{ file: 'a.js', status: 'modified', patch: '@@ -1,2 +1 @@\n-x1\n-x2\n+y' }], { pid: 'p1' });
       T('并排:一侧落单就给对面留空单元格', qaOf(sp2, 'side empty') === 1, qaOf(sp2, 'side empty'));
       var sp3 = diffHtml([{ file: 'a.js', status: 'added', patch: '@@ -0,0 +1 @@\n+hello' }], { pid: 'p1' });
-      T('并排:纯新增也有一对(左空右新)', qaOf(sp3, 'pair') === 1 && qaOf(sp3, 'side empty') === 1);
+      T('并排:added 文件即便在 split 偏好下也保持统一视图(也不画按钮)',
+        sp3.indexOf('diff split') < 0 && sp3.indexOf('dswap') < 0, sp3);
       T('并排:上下文与 hunk 行整行跨两栏',
         sp.indexOf('<div class="dl hunk">') >= 0 && sp.indexOf('<div class="dl ctx">') >= 0);
-      T('并排:没给 part id 的纯函数调用照旧是统一视图(也不画按钮)',
-        diffHtml(spFiles).indexOf('diff split') < 0 && diffHtml(spFiles).indexOf('dswap') < 0);
+      T('并排:没给 part id 时照样按偏好分栏,只是不画按钮',
+        diffHtml(spFiles).indexOf('diff split') >= 0 && diffHtml(spFiles).indexOf('dswap') < 0);
+      diffViewSet('unified');
+      T('并排:偏好记成 unified 后整块回统一视图(按钮还在,只是没点亮)',
+        diffHtml(spFiles, { pid: 'p1' }).indexOf('diff split') < 0 &&
+        diffHtml(spFiles, { pid: 'p1' }).indexOf('class="dswap on"') < 0);
+      diffViewSet('split');
+      T('并排:偏好记成 split 后整块分栏', diffHtml(spFiles, { pid: 'p1' }).indexOf('diff split') >= 0);
       document.documentElement.classList.add('narrow');
-      T('并排:窄屏强制回统一视图(CSS 再把按钮收掉)',
+      T('并排:窄屏即使偏好 split 也渲染成统一视图(CSS 再把按钮收掉)',
         diffHtml(spFiles, { pid: 'p1' }).indexOf('diff split') < 0);
       document.documentElement.classList.remove('narrow');
-      diffViews.delete('p1#0');
-      T('并排:切回统一视图没有 split 类', diffHtml(spFiles, { pid: 'p1' }).indexOf('diff split') < 0);
 
-      /* 真点一下:走 #messages 上的点击委托,只重画那一张卡片 */
+      /* 真点一下:偏好是全局的,所有 diff 卡片一起换形态 */
+      var spParts = ['part_v1', 'part_v2'].map(function (id) {
+        return { id: id, type: 'tool', name: 'edit',
+          state: { status: 'completed', input: { path: 'a.js' },
+            metadata: { files: [{ file: 'a.js', status: 'modified', additions: 1, deletions: 1,
+              patch: '@@ -1 +1 @@\n-const a = 1;\n+const a = 2;' }] } } };
+      });
       store.selected = 'ses_v';
-      store.messages = new Map([['v1', { id: 'v1', type: 'assistant', time: { created: 1 }, content: [{
-        id: 'part_v1', type: 'tool', name: 'edit',
-        state: { status: 'completed', input: { path: 'a.js' }, metadata: { files: spFiles } },
-      }] }]]);
+      store.messages = new Map([['v1', { id: 'v1', type: 'assistant', time: { created: 1 }, content: spParts }]]);
+      try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
       setupDiffView();
       renderMessages();
-      var swBtn = q('#messages .dswap');
-      T('并排:卡片头上真的有个切换按钮', !!swBtn);
-      if (swBtn) swBtn.click();
-      T('并排:点一下整张卡片变成两栏', qa('#messages .diff.split').length === 1,
+      T('并排:两张卡片各有一个切换按钮', qa('#messages .dswap').length === 2, qa('#messages .dswap').length);
+      T('并排:没记过偏好 + 够宽 = 两张都是两栏', qa('#messages .diff.split').length === 2,
         qa('#messages .diff.split').length);
-      var swBtn2 = q('#messages .dswap');
-      if (swBtn2) swBtn2.click();
-      T('并排:再点一下回到统一视图', qa('#messages .diff.split').length === 0);
+      q('#messages .dswap').click();
+      T('并排:点一下两张一起回统一视图', qa('#messages .diff.split').length === 0 &&
+        diffViewPref() === 'unified', diffViewPref());
+      q('#messages .dswap').click();
+      T('并排:再点一下两张一起变两栏(偏好是全局的)', qa('#messages .diff.split').length === 2 &&
+        diffViewPref() === 'split', diffViewPref());
+
+      /* auto 档跟着面板宽度翻面(窗口缩放 / 拖分栏条):只在够不够宽翻面时重画 */
+      window.diffWide = function () { return false; };
+      syncDiffWidth();
+      T('并排:面板变窄(不够 760px)时自动退回统一视图', qa('#messages .diff.split').length === 0,
+        qa('#messages .diff.split').length);
+      window.diffWide = function () { return true; };
+      syncDiffWidth();
+      T('并排:面板再变宽时按偏好自动回到两栏', qa('#messages .diff.split').length === 2,
+        qa('#messages .diff.split').length);
+
+      try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
+      window.diffWide = realWide;
+      diffWideSeen = diffCanSplit();
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

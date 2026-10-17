@@ -2528,7 +2528,7 @@ markdown、html、两套高亮叠加的嵌套顺序、hunk 不上色、`write` �
 |---|---|
 | `splitRowsHtml(rows, lang)` | 同一 hunk 里连续的删段与紧随的增段按位置左右对齐;上下文 / hunk / meta 行整行跨两栏;一侧落单就给对面留一个空单元格 |
 | `splitCellHtml(r, lang, side)` | 单个半栏:自己的行号 + 符号 + 源码(行内高亮与语法色照旧) |
-| `diffViews` | `Map`,key = `partID#文件序号`,value = `'split'`;**只记在当前页面**,刷新回统一视图(没有持久化,和 TUI 的 `config.diffs.view` 不同) |
+| `diffViews` | `Map`,key = `partID#文件序号`,value = `'split'`;**只记在当前页面**,刷新回统一视图(没有持久化,和 TUI 的 `config.diffs.view` 不同)——**已被 §8.53 改掉** |
 | `.dfile` 里的 `.dswap` | 「⇆ 并排」按钮,`data-pid` / `data-fi` 指向那张卡;激活时加 `.on` |
 | `#messages` 上的点击委托 | `setupDiffView()` → `toggleDiffView(btn)`:翻转状态,然后用 `toolHtml(p)` **只重画这一张卡片**(不整表重绘,别处摊开的 `<details>` 不会被搬一遍) |
 
@@ -2563,6 +2563,75 @@ phone-393       narrow=true  split=false btn=true  btnShown=none  pairs=0
 
 **已知**:每侧独立横向滚动,长行会在分栏处截断(横向能滚,但不是折行);
 切换状态不持久化 —— 要跟 TUI 那样记住,需要定一个键名与作用域,留给下一轮。
+
+**后续(§8.53)**:用户一句「反正向TUI对齐」,把上面两条「已知」都收了 ——
+偏好改成全局持久(TUI 的 `diffs.view`),分栏长行改成折行(TUI 的 `wrapMode="char"`),
+并且只有 `modified` 的文件才分栏。做法与实测见下一节。
+
+---
+
+### 8.53 并排偏好照 TUI 收口:全局持久 + auto + 只有 modified 分栏 + 分栏折行
+
+**起因**:§8.52 落地后我列了两个可选项(要不要持久化、分栏长行要不要折行),用户回「反正向TUI对齐」。
+
+**先看 TUI 到底怎么做的**(`packages/tui/src/feature-plugins/system/diff-viewer.tsx` 与 CLI 配置文档):
+
+| TUI 的行为 | 依据 |
+|---|---|
+| `diffs.view` 三档 `auto` / `split` / `unified`,是**全局偏好** | `~/.config/opencode/cli.json` 的 `diffs.view` |
+| `auto` = 面板够宽才并排,阈值 `MIN_SPLIT_WIDTH = 100`(终端格) | 源码常量;`splitAvailable()` 与 `view()` |
+| 切换键 `diff.toggle_view` 写回偏好(`onPreferencesChange({ view: next })`) | 同一文件的 commands 表 |
+| 只有 `status === "modified"` 的文件分栏,`added` / `deleted` 一律统一视图 | `view={entry.file.status === "modified" ? view() : "unified"}` |
+| 长行 `wrapMode="char"`:按字符折行,不是每侧横向滚 | `PatchDiff … wrapMode="char"` |
+
+**面板怎么落地**:
+
+| 位置 | 现在的行为 |
+|---|---|
+| `DIFF_VIEW_KEY = 'ocs.diffView'` | 全局偏好,`localStorage`;值 `split` / `unified`,没记过 = auto |
+| `DIFF_SPLIT_MIN_PX = 760` | 100 格 × 约 7.6px(面板等宽字体 0.92 × 14px);量 `#messages.clientWidth` |
+| `diffViewWanted(status, pref, wide)` | 纯判定:`modified` + 够宽 + 偏好不是 `unified` 才分栏 |
+| `diffViewSet()` + 全局重画 | 点任一卡片上的「⇆ 并排」= 写偏好,然后把消息里**所有** diff 卡片一起重画;被点的那张按滚动差补偿,留在原处 |
+| `syncDiffWidth()` + `ResizeObserver` | auto 档随面板宽度重算(窗口缩放、拖分栏条),只在「够不够宽」翻面时重画;120ms 防抖 |
+| 窄屏 | `<html>.narrow` 仍然一票否决(渲染成统一视图 + CSS 收掉按钮)—— 手机的横屏 894px 虽然「够宽」,但 `short` 档下切两栏同样没意义 |
+
+**没做的事(坦白记一笔)**:面板没有直接去读 TUI 的 `cli.json` 的 `diffs.view`。两边各自持久 ——
+TUI 记 `cli.json`,面板记 `localStorage`;语义照着 TUI,但账不是同一本。要真共享得让服务端
+开一个配置读取接口并盯文件变化,这一轮不做。
+
+**实测**(真会话 `ses_demo…`,探针跑两趟抓到 24~34 张 diff 卡片 —— 流式会话里
+渲染窗口内的卡片数会变;探针 `/tmp/ocsm-probe/pw/pref-split.js`):
+
+```
+1366×900(auto,偏好空)  聊天区 790px              → 全部卡片分栏
+点一下第一张                                   → 全部转统一,localStorage=unified(约 340~490ms)
+刷新                                          → 仍是 unified(偏好真的落盘了)
+再点一下                                       → 全部转分栏,localStorage=split
+再刷新                                        → 仍是 split
+1100×900(auto,偏好空)  聊天区 524px < 760        → 统一视图
+1100 → 拖到 1366(不刷新) 聊天区 790px              → auto 当场把卡片全变分栏
+393×894(narrow)                               → 统一视图,按钮 display:none
+分栏 .side / 跨栏 .dl                         → white-space:pre-wrap、overflow-wrap:anywhere,
+                                                scrollWidth == clientWidth,.diff 横向溢出 0
+```
+
+第一次只给 `.side` 加了折行,`.diff` 的 `scrollWidth - clientWidth` 还有 3741px ——
+跨两栏的 hunk / 上下文行(`.dl.ctx`、`.dl.hunk`)还是 `white-space: pre`,一条长上下文就能把整块顶出去。
+补 `.diff.split .dl { white-space: pre-wrap; overflow-wrap: anywhere; }` 之后归零。
+
+一次切换几十张卡片约 340~490ms(每张都要重新生成整卡 HTML)。并排/统一是低频操作,先不为此加
+「只换 diff 正文」的分支;真嫌慢再优化。
+
+分栏正文折行后,左右两栏的行高由较长的那一侧决定;`pre-wrap` 保留缩进,`overflow-wrap: anywhere`
+把超长 token 断开(终端里就是 `wrapMode="char"` 的效果)。
+
+**回归**:`smoke.sh` 314 → **316**(样式:分栏折行且跨栏行也折行、没有逐侧横向滚;代码:偏好是
+全局持久的、auto 阈值在、宽度变化会重算、没有按卡片的 `diffViews`);`ui-tools` 297 → **305**
+(重写并排那组:`diffViewWanted` 的三态、只有 modified、不够宽不分栏、`added` 文件不跟着分栏、
+偏好写进 localStorage、两张卡片一起切换、面板变窄/变宽时 auto 翻面);`ui-stream` 249 不变
+(那套老断言的 diff 是统一视图,开头把偏好钉成 `unified`);其余 17 套与 6 个 `e2e-*` 全 0 失败。
+
+---
 
 ---
 

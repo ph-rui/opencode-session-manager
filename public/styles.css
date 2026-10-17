@@ -666,15 +666,18 @@ html.narrow .dswap { display: none; }
 .src .tk.kw { color: var(--syn-kw); }
 /* write 的正文只有一列行号 */
 .diff.code .dl .ln.o { display: none; }
-/* §8.52 并排视图:左右两栏、中间一条竖线;上下文 / hunk 行整行跨两栏 */
+/* §8.52 并排视图:左右两栏、中间一条竖线;上下文 / hunk 行整行跨两栏。
+   §8.53 分栏里的长行按字符折行(照 TUI 的 wrapMode="char"),不再每侧横向滚 */
 .diff.split { overflow-x: hidden; }
 .dl.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.dl.pair > .side { display: flex; min-width: 0; overflow-x: auto; white-space: pre; }
+.dl.pair > .side { display: flex; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dl.pair > .side + .side { border-left: 1px solid var(--diff-rule); }
 .dl.pair > .side.old { background: var(--diff-del-bg); }
 .dl.pair > .side.new { background: var(--diff-add-bg); }
 .dl.pair > .side.empty { background: var(--diff-ln-bg); }
-.dl.pair > .side .src { flex: 1 1 auto; padding-right: 10px; color: var(--fg); }
+.dl.pair > .side .src { flex: 1 1 auto; min-width: 0; padding-right: 10px; white-space: inherit; color: var(--fg); }
+/* 跨两栏的 hunk / 上下文行也得折行,否则它们一长整块又横向溢出(scrollWidth 会飙到几千) */
+.diff.split .dl { white-space: pre-wrap; overflow-wrap: anywhere; }
 .dl.pair > .side.old .ln, .dl.pair > .side.old .sign { background: var(--diff-del-ln); color: var(--diff-del-fg); }
 .dl.pair > .side.new .ln, .dl.pair > .side.new .sign { background: var(--diff-add-ln); color: var(--diff-add-fg); }
 /* 转成窄屏档(或窗口缩到窄屏)时并排退回上下两段,别把 393px 切成两条 190px */

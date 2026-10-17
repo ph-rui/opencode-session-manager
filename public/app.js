@@ -2576,8 +2576,46 @@ function diffCounts(files) {
   return { additions: additions, deletions: deletions };
 }
 
-// 多文件 diff:每文件一块「状态徽标 + 路径 + 增删统计」,下面接统一视图正文。
-const diffViews = new Map(); // §8.52 并排视图的选择:key = partID#文件序号,value = 'split'
+// 多文件 diff:每文件一块「状态徽标 + 路径 + 增删统计」,下面接正文(统一视图或并排视图)。
+/* §8.53 并排视图照 TUI 的偏好模型收口(§8.52 的后续):
+ *   · 偏好是全局的、持久的(TUI 存 diffs.view;面板存 localStorage['ocs.diffView']);
+ *   · 没记过 = auto:面板够宽就并排(TUI 的 MIN_SPLIT_WIDTH 是 100 格,折成 760px);
+ *   · 只有 modified 的文件分栏(added / deleted 照 TUI 一律统一视图);
+ *   · 分栏里长行按字符折行(TUI 的 wrapMode="char"),不再每侧横向滚。
+ */
+const DIFF_VIEW_KEY = 'ocs.diffView';
+const DIFF_SPLIT_MIN_PX = 760;
+
+function diffViewPref() {
+  try {
+    const v = localStorage.getItem(DIFF_VIEW_KEY);
+    if (v === 'split' || v === 'unified') return v;
+  } catch (_) {} // 隐私模式下当「没记过」
+  return 'auto';
+}
+
+function diffViewSet(v) {
+  try { localStorage.setItem(DIFF_VIEW_KEY, v); } catch (_) {}
+}
+
+// 面板(聊天区)够不够宽放两栏;量 #messages,拿不到就退回窗口宽度
+function diffWide() {
+  const box = document.getElementById('messages');
+  const w = box ? box.clientWidth : window.innerWidth;
+  return w >= DIFF_SPLIT_MIN_PX;
+}
+
+// 渲染时的完整条件:窄屏一票否决,桌面再看宽度
+function diffCanSplit() {
+  return !document.documentElement.classList.contains('narrow') && diffWide();
+}
+
+// 纯判定:文件状态 + 偏好 + 面板宽度 → 分不分栏(断言在 test/ui-tools.html)
+function diffViewWanted(status, pref, wide) {
+  if (status !== 'modified') return false;
+  if (!wide) return false;
+  return pref !== 'unified';
+}
 
 function splitCellHtml(r, lang, side) {
   if (!r) return '<div class="side empty"></div>';
@@ -2624,36 +2662,36 @@ function splitRowsHtml(rows, lang) {
 function diffHtml(files, opts) {
   let html = '';
   const pid = (opts && opts.pid) || '';
-  const narrow = document.documentElement.classList.contains('narrow');
-  let fi = 0;
+  const pref = diffViewPref();
+  // 窄屏永远统一视图(393px 切两条各 190px 没意义);桌面再看偏好与宽度
+  const wide = diffCanSplit();
   for (const f of files || []) {
     const b = diffBadge(f && f.status);
     const lang = langOf(f && f.file);
     const rows = pairDiffRows(parsePatch(f && f.patch));
     const adds = typeof (f && f.additions) === 'number' ? f.additions : rows.filter((r) => r.k === 'add').length;
     const dels = typeof (f && f.deletions) === 'number' ? f.deletions : rows.filter((r) => r.k === 'del').length;
-    // §8.52 并排视图:只有桌面、只有给了 part id(否则纯函数照旧出统一视图)
-    const split = !!pid && !narrow && diffViews.get(pid + '#' + fi) === 'split';
+    // 没给 status 的(老数据)按 modified 处理,和 diffBadge 的兜底一致
+    const status = (f && f.status) || 'modified';
+    const split = diffViewWanted(status, pref, wide);
     html +=
       '<div class="dfile">' +
       '<span class="dbadge ' + b.cls + '">' + b.label + '</span>' +
       '<span class="dpath">' + esc(abbrevPath((f && f.file) || '')) + '</span>' +
       (adds ? '<span class="tadd">+' + adds + '</span>' : '') +
       (dels ? '<span class="tdel">-' + dels + '</span>' : '') +
-      (rows.length && pid
+      (rows.length && pid && status === 'modified'
         ? '<button type="button" class="dswap' + (split ? ' on' : '') + '" data-pid="' + esc(pid) +
-          '" data-fi="' + fi + '" title="切换并排 / 统一视图(仅桌面)">⇆ 并排</button>'
+          '" title="并排 / 统一视图(照 TUI 的 diffs.view)">⇆ 并排</button>'
         : '') +
       '</div>';
     if (!rows.length) {
       html += '<div class="dnote">' + (dels ? '-' + dels + ' line' + (dels !== 1 ? 's' : '') : '(no content)') + '</div>';
-      fi++;
       continue;
     }
     html += split
       ? '<div class="diff split">' + splitRowsHtml(rows, lang) + '</div>'
       : '<div class="diff">' + rows.map((r) => diffRowHtml(r, lang)).join('') + '</div>';
-    fi++;
   }
   return html;
 }
@@ -2668,25 +2706,57 @@ function findToolPart(pid) {
   return null;
 }
 
-function toggleDiffView(btn) {
-  const pid = btn && btn.getAttribute ? btn.getAttribute('data-pid') : '';
-  if (!pid) return false;
-  const key = pid + '#' + ((btn.getAttribute('data-fi') || '0'));
-  if (diffViews.get(key) === 'split') diffViews.delete(key);
-  else diffViews.set(key, 'split');
-  const card = btn.closest ? btn.closest('details.tool') : null;
-  const p = findToolPart(pid);
-  if (card && p) {
-    // 只重画这一张卡片(整表重绘会把别处摊开的 details 一起搬一遍)
+// §8.53 重画消息里所有带切换按钮的 diff 卡片(只动这些卡片,别的 details 不搬)。
+// pid 非空时把那张卡片当锚点,高度变了就补滚动,让它留在原处。
+function redrawDiffCards(pid) {
+  const box = $('#messages');
+  if (!box) return null;
+  const tops = new Map();
+  let anchor = null;
+  for (const card of Array.from(box.querySelectorAll('details.tool'))) {
+    const b = card.querySelector('.dswap');
+    if (!b) continue;
+    const id = b.getAttribute('data-pid') || '';
+    const p = findToolPart(id);
+    if (!p) continue;
+    const open = card.open;
+    const top = card.getBoundingClientRect().top;
     const tmp = document.createElement('div');
     tmp.innerHTML = toolHtml(p);
     const fresh = tmp.firstElementChild;
-    if (fresh) card.replaceWith(fresh);
-    else renderMessages();
-  } else {
-    renderMessages();
+    if (!fresh) continue;
+    fresh.open = open;
+    card.replaceWith(fresh);
+    tops.set(fresh, top);
+    if (id === pid) anchor = fresh;
   }
+  if (anchor && tops.has(anchor)) {
+    const delta = anchor.getBoundingClientRect().top - tops.get(anchor);
+    if (delta) box.scrollTop += delta;
+  }
+  return anchor;
+}
+
+// §8.53 切换是全局的(照 TUI 的 diff.toggle_view):先记偏好,再把所有 diff 卡片一起重画
+// —— 并排是「这一屏的看片方式」,不是某一张卡片的私有状态。
+function toggleDiffView(btn) {
+  if (!btn || !btn.getAttribute) return false;
+  const pid = btn.getAttribute('data-pid') || '';
+  const splitNow = diffViewWanted('modified', diffViewPref(), diffCanSplit());
+  diffViewSet(splitNow ? 'unified' : 'split');
+  redrawDiffCards(pid);
   return true;
+}
+
+// §8.53 auto 档要跟着面板宽度走:窗口缩放、拖分栏条都算。只在「够不够宽」翻面时重画
+// (TUI 的 splitAvailable() 也是这么随宽度重算的);平时的 resize 不动 DOM。
+let diffWideSeen = null;
+function syncDiffWidth() {
+  const wide = diffCanSplit();
+  if (diffWideSeen === null) { diffWideSeen = wide; return; }
+  if (wide === diffWideSeen) return;
+  diffWideSeen = wide;
+  if (document.querySelector('#messages .dswap')) redrawDiffCards('');
 }
 
 function setupDiffView() {
@@ -2699,6 +2769,13 @@ function setupDiffView() {
     e.stopPropagation(); // 卡片头在 summary 外面,但别让冒泡再触发别的点击处理
     toggleDiffView(btn);
   });
+  diffWideSeen = diffCanSplit();
+  if (typeof ResizeObserver === 'function') {
+    const bump = debounce(syncDiffWidth, 120);
+    new ResizeObserver(bump).observe(box);
+  } else {
+    window.addEventListener('resize', debounce(syncDiffWidth, 120));
+  }
 }
 
 // write 工具的正文:按行号显示,不做增删着色(服务端没给 diff)。

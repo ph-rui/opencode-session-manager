@@ -214,6 +214,14 @@ if has "$CSS" '.dl.pair' && has "$CSS" 'grid-template-columns: minmax(0, 1fr) mi
 else
   echo "FAIL: styles.css 缺并排视图骨架,或窄屏没把切换按钮收掉"; fail=$((fail + 1))
 fi
+# §8.53 分栏里的长行折行(照 TUI 的 wrapMode="char"),不能再给每侧横向滚
+if has "$CSS" 'white-space: pre-wrap' && has "$CSS" 'overflow-wrap: anywhere' &&
+   has "$CSS" '.diff.split .dl { white-space: pre-wrap; overflow-wrap: anywhere; }' &&
+   ! has "$CSS" '.dl.pair > .side { display: flex; min-width: 0; overflow-x: auto'; then
+  echo "PASS: styles.css 分栏长行按字符折行(§8.53 的 pre-wrap / anywhere,无逐侧横向滚)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 分栏仍靠横向滚(§8.53 要照 TUI 折行)"; fail=$((fail + 1))
+fi
 # H 组 1:会话区字号由一个变量统管,区内字号一律相对 em(整块等比缩放,不是只有正文变大)
 if has "$CSS" '--chat-fs: 14px' && has "$CSS" 'font-size: var(--chat-fs)' &&
    has "$CSS" 'font-size: 0.92em' && has "$CSS" 'font-size: 0.88em'; then
@@ -273,6 +281,19 @@ if has "$APPJS" 'function splitRowsHtml(' && has "$APPJS" 'function setupDiffVie
   echo "PASS: app.js 有并排视图(§8.52:配对渲染 + 卡片上的切换 + init 接线)"; pass=$((pass + 1))
 else
   echo "FAIL: app.js 缺并排视图(§8.52 的 splitRowsHtml / setupDiffView 没接上)"; fail=$((fail + 1))
+fi
+# §8.53 并排偏好照 TUI:全局 + 持久 + auto(够宽才并排)+ 只有 modified 分栏
+if has "$APPJS" "const DIFF_VIEW_KEY = 'ocs.diffView';" &&
+   has "$APPJS" 'DIFF_SPLIT_MIN_PX = 760' &&
+   has "$APPJS" 'function diffViewWanted(' &&
+   has "$APPJS" 'diffViewWanted(status, pref, wide)' &&
+   has "$APPJS" 'localStorage.setItem(DIFF_VIEW_KEY, v)' &&
+   has "$APPJS" 'diffViewSet(splitNow ? ' &&
+   has "$APPJS" 'function syncDiffWidth(' && has "$APPJS" 'new ResizeObserver(' &&
+   ! has "$APPJS" 'const diffViews = new Map()'; then
+  echo "PASS: app.js 的并排偏好是全局持久偏好(§8.53:diffViewWanted / localStorage / 没有按卡片的 diffViews)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 并排偏好还是按卡片的临时状态(§8.53 要照 TUI 的 diffs.view)"; fail=$((fail + 1))
 fi
 if has "$APPJS" "const LIST_KEY = 'ocs.listHiddenTab';" && has "$APPJS" 'function listCollapsed()' &&
    has "$APPJS" 'paint(listCollapsed());' && has "$APPJS" 'sessionStorage.getItem(LIST_KEY)' &&
