@@ -2326,6 +2326,29 @@ else
   echo "FAIL: §8.68 的跨消息吸收 / 占位 / 锚点 / 样式缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R24 组:子会话不进主列表(§8.69 / A1)----
+if has "$APPJS" 'const roots = all.filter((s) => !s.parentID);' &&
+   has "$APPJS" 'const archived = all.filter((s) => !s.parentID && isArchived(s));' &&
+   has "$(cat "$(dirname "$0")/ui-picks.html")" '/sessions:子会话不进主列表'; then
+  echo "PASS: §8.69 主列表 / /sessions / 已归档计数都只算顶层会话"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.69 的 parentID 过滤或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R25 组:子会话 / 父会话导航(§8.69 / B2)----
+if has "$APPJS" 'function childIDs(sid)' && has "$APPJS" 'function parentOf(sid)' &&
+   has "$APPJS" 'async function openSubagentPick(sid)' && has "$APPJS" 'function goParent(sid)' &&
+   has "$APPJS" "name: 'subagents'" && has "$APPJS" "name: 'parent'" &&
+   has "$APPJS" 'function setupMessageActions()' && has "$APPJS" 'data-child="' &&
+   has "$HOME_HTML" 'id="opSubagents"' && has "$HOME_HTML" 'id="opParent"' &&
+   has "$CSS" '.completion[data-child] {' &&
+   has "$(cat "$(dirname "$0")/ui-picks.html")" '/subagents:选中即切到子会话' &&
+   has "$(cat "$(dirname "$0")/ui-tools.html")" '子会话收工行带 data-child'; then
+  echo "PASS: §8.69 头部入口 / /subagents / /parent / 收工行 childID 跳转都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.69 的子会话选择、父会话入口或收工行跳转缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

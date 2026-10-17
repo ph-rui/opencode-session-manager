@@ -653,6 +653,10 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   white-space: nowrap;
   color: var(--muted);
 }
+/* 有 childID 的子会话收工行可点(照 TUI 的 SessionNoticeMessageV2);shell 收工行不套这个。 */
+.completion[data-child] { cursor: pointer; }
+.completion[data-child]:hover .cHead { text-decoration: underline; }
+.completion[data-child]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 正文整体限高内滚:长改动不会把消息流撑爆 */
 .toolbody { margin: 4px 0 2px; max-height: 420px; overflow: auto; }

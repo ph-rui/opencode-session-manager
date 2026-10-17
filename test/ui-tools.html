@@ -1182,6 +1182,33 @@
         km({ id: 'n7', type: 'synthetic', metadata: { source: 'subagent', agent: 'explorer', state: 'cancelled' }, description: 'x' })
           .querySelector('.completion').classList.contains('warn') &&
         kTxt({ id: 'n7', type: 'synthetic', metadata: { source: 'subagent', agent: 'explorer', state: 'cancelled' }, description: 'x' }).indexOf('! Explorer cancelled') === 0);
+
+      /* 子会话收工行可点(§8.69,B2;照 TUI 的 SessionNoticeMessageV2 读 metadata.childID) */
+      var childMsg = { id: 'n9', type: 'synthetic',
+        metadata: { source: 'subagent', agent: 'explorer', state: 'completed', childID: 'ses_kid' },
+        description: '查好了' };
+      var childEl = km(childMsg);
+      var childRow = childEl.querySelector('.completion');
+      T('子会话收工行带 data-child / role=link / tabindex=0',
+        childRow.getAttribute('data-child') === 'ses_kid' &&
+        childRow.getAttribute('role') === 'link' && childRow.tabIndex === 0,
+        [childRow.getAttribute('data-child'), childRow.getAttribute('role'), childRow.tabIndex]);
+      T('shell 收工行不带 data-child(没有可去的地方)',
+        km({ id: 'n10', type: 'synthetic', metadata: { source: 'shell', state: 'completed' }, description: '跑完了' })
+          .querySelector('.completion').getAttribute('data-child') === null);
+      var gotChild = null;
+      var prevSelect = selectSession;
+      selectSession = function (id) { gotChild = id; };
+      q('#messages').appendChild(childEl);
+      setupMessageActions();
+      childRow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('点子会话收工行打开子会话', gotChild === 'ses_kid', gotChild);
+      gotChild = null;
+      childRow.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      T('Enter 也能打开子会话(键盘可达)', gotChild === 'ses_kid', gotChild);
+      childEl.remove();
+      selectSession = prevSelect;
+
       T('skill 消息画成「→ Skill <名字>」(照 SessionSkillMessage)',
         kTxt({ id: 'n8', type: 'skill', name: 'brainstorming' }) === '→Skillbrainstorming' &&
         km({ id: 'n8', type: 'skill', name: 'brainstorming' }).querySelector('.toolrow').className.indexOf('skillmsg') > 0,

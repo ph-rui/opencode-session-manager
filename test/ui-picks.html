@@ -19,6 +19,7 @@
         <div class="chline"><span id="chatTitle"></span><span id="chatState"></span></div>
         <div id="chatMeta"></div>
         <div id="chatOps" hidden>
+          <button type="button" id="opSubagents" hidden></button><button type="button" id="opParent" hidden></button>
           <button type="button" id="opExport"></button><button type="button" id="opTui"></button><button type="button" id="opArchive"></button>
         </div>
         <button id="older" hidden></button>
@@ -74,6 +75,9 @@
         tokens: {}, cost: 0, location: { directory: '/proj/beta' } },
       { id: 'ses_arch', title: '已归档会话', projectID: 'pj1', time: { created: 3, updated: 700 },
         tokens: {}, cost: 0, location: { directory: '/proj/beta' }, metadata: { ocs: { archived: 1 } } },
+      /* 子会话(§8.69):主列表 / /sessions 都不该列它;kid 更新更晚也不会顶到前面 */
+      { id: 'ses_kid', title: '子会话', projectID: 'pj1', time: { created: 4, updated: 850 },
+        tokens: {}, cost: 0, location: { directory: '/proj/alpha' }, parentID: 'ses_a' },
     ];
 
     /* 真实 GET /api/agent:隐藏的与 subagent 都要被 loadAgents 滤掉 */
@@ -115,7 +119,12 @@
       ], cursor: {} });
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       if (/^\/api\/session\/[^/?]+\/(inbox|form|permission)/.test(u)) return json({ data: [] });
-      if (u.indexOf('/api/session?') === 0) return json({ data: SESSIONS, cursor: {} });
+      if (u.indexOf('/api/session?') === 0) {
+        /* 服务端支持 parentID 过滤(GET /api/session?parentID=…),/subagents 靠它补全子会话 */
+        var pid = new URL(u, 'http://x').searchParams.get('parentID');
+        var list = pid ? SESSIONS.filter(function (s) { return s.parentID === pid; }) : SESSIONS;
+        return json({ data: list, cursor: {} });
+      }
       return json({ data: [] });
     };
     window.EventSource = class { constructor() {} close() {} };
@@ -328,6 +337,9 @@
       T('/sessions:列出左栏那批(已归档默认不列)',
         items().length === 2 && items().map(function (i) { return i.key; }).join(',') === 'ses_a,ses_b',
         items().map(function (i) { return i.key; }));
+      T('/sessions:子会话不进主列表(照 TUI 的 !parentID)',
+        items().every(function (i) { return i.key !== 'ses_kid'; }),
+        items().map(function (i) { return i.key; }));
       T('/sessions:标题作 label', items()[0].label === '甲会话' && items()[1].label === '乙会话');
       T('/sessions:sub 里有目录名', items()[0].sub.indexOf('alpha') >= 0, items()[0].sub);
       T('/sessions:当前会话高亮', store.pickAt === 0, store.pickAt);
@@ -357,7 +369,44 @@
       T('/sessions:选中即切到那个会话', store.selected === 'ses_b', store.selected);
       store.selected = 'ses_a';
 
-      /* ================= /models ================= */
+      /* ================= 子会话 / 父会话(§8.69,B2) ================= */
+      T('子会话表:列表里的 parentID 记进了 store.subs', childIDs('ses_a').indexOf('ses_kid') >= 0,
+        childIDs('ses_a'));
+      T('子会话表:parentOf 认得父会话,顶层会话没有父',
+        parentOf('ses_kid') === 'ses_a' && parentOf('ses_a') === null,
+        [parentOf('ses_kid'), parentOf('ses_a')]);
+      renderChatOps();
+      T('头部:父会话露「子会话 1」入口',
+        q('#opSubagents').hidden === false && q('#opSubagents').textContent === '子会话 1',
+        [q('#opSubagents').hidden, q('#opSubagents').textContent]);
+      T('头部:顶层会话不露「回父会话」', q('#opParent').hidden === true);
+
+      await openSubagentPick('ses_a');
+      T('/subagents:标题', q('#pickTitle').textContent === '子会话');
+      T('/subagents:开着过滤框', q('#pickFilter').hidden === false);
+      T('/subagents:只列这个父会话的孩子', items().length === 1 && items()[0].key === 'ses_kid',
+        items().map(function (i) { return i.key; }));
+      T('/subagents:标题作 label', items()[0].label === '子会话', items()[0].label);
+      pickChoose(items()[0]);
+      await settle(function () { return store.selected === 'ses_kid'; });
+      T('/subagents:选中即切到子会话', store.selected === 'ses_kid', store.selected);
+      T('头部:子会话露「回父会话」,不露「子会话」',
+        q('#opParent').hidden === false && q('#opSubagents').hidden === true,
+        [q('#opParent').hidden, q('#opSubagents').hidden]);
+      goParent('ses_kid');
+      await settle(function () { return store.selected === 'ses_a'; });
+      T('/parent:回到父会话', store.selected === 'ses_a', store.selected);
+      T('头部:回到父会话后入口跟着换回来',
+        q('#opSubagents').hidden === false && q('#opParent').hidden === true);
+
+      store.selected = 'ses_b';
+      clearToast();
+      await openSubagentPick('ses_b');
+      T('/subagents:没有子会话时只提示、不开空框',
+        picksOpen() === false && q('#toast').textContent.indexOf('没有子会话') >= 0,
+        q('#toast').textContent);
+      store.selected = 'ses_a';
+
       await openModelPick();
       T('/models:标题', q('#pickTitle').textContent === '选择模型');
       T('/models:开着过滤框', q('#pickFilter').hidden === false);

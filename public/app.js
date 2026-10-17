@@ -922,8 +922,25 @@ function renderChatOps() {
   const s = store.sessions.get(store.selected);
   const on = isArchived(s);
   const ab = $('#opArchive');
-  ab.textContent = on ? '取消归档' : '归档';
-  ab.classList.toggle('arch-on', on);
+  if (ab) {
+    ab.textContent = on ? '取消归档' : '归档';
+    ab.classList.toggle('arch-on', on);
+  }
+  // 子会话 / 父会话入口(B2,照 TUI 的 session.child.first / session.parent)。
+  // 窄屏整条 #chatOps 被 CSS 收掉,这两件事在 / 命令面板里也有(/subagents、/parent)。
+  const sub = $('#opSubagents');
+  if (sub) {
+    const n = childIDs(store.selected).length;
+    sub.hidden = !n;
+    sub.textContent = '子会话 ' + n;
+    sub.title = n ? '选择并打开当前会话的子会话(' + n + ' 个)' : '';
+  }
+  const par = $('#opParent');
+  if (par) {
+    const pid = parentOf(store.selected);
+    par.hidden = !pid;
+    par.title = pid ? '回到父会话 ' + pid : '';
+  }
 }
 
 /* ----------------------------- 对话框 ----------------------------- */
@@ -2107,9 +2124,12 @@ async function loadSessions(opts) {
 
 // 当前顶部筛选/排序下,左栏真正列出来的那些会话 —— 会话选择框(/sessions)与左栏共用这一份,
 // 保证对话框里看到的永远是同一批、同一序。
+// 子会话不进主列表(照 TUI 的 dialog-session-list:`.filter((session) => !session.parentID)`);
+// 它们仍留在 store.sessions / store.subs 里,给「子会话」选择、收工行跳转和标签栏用。
 function visibleSessions() {
   const all = Array.from(store.sessions.values());
-  return (store.showArchived ? all : all.filter((s) => !isArchived(s))).sort((a, b) => {
+  const roots = all.filter((s) => !s.parentID);
+  return (store.showArchived ? roots : roots.filter((s) => !isArchived(s))).sort((a, b) => {
     const ta = (a.time && a.time.updated) || 0;
     const tb = (b.time && b.time.updated) || 0;
     return store.order === 'asc' ? ta - tb : tb - ta;
@@ -2296,7 +2316,8 @@ function setupSessionTabs() {
 
 function renderSessions() {
   const all = Array.from(store.sessions.values());
-  const archived = all.filter(isArchived);
+  // 「另 N 个已归档」和左栏是同一个口径:只数顶层会话,子会话不混进来。
+  const archived = all.filter((s) => !s.parentID && isArchived(s));
   const rows = visibleSessions();
   const tb = $('#list tbody');
   tb.innerHTML = '';
@@ -3049,6 +3070,8 @@ function refreshSessionInfo(id) {
       if (store.selected !== id) return; // 期间切走了
       const merged = Object.assign({}, info);
       if (!merged.location && merged.directory) merged.location = { directory: merged.directory };
+      if (merged.parentID) store.subs.set(id, merged.parentID);
+      else store.subs.delete(id);
       store.sessions.set(id, merged);
       renderSessions();
       paintChatHeader(merged);
@@ -4830,8 +4853,13 @@ function noticeRowHtml(m) {
   const status = state === 'completed' ? 'finished' : state === 'error' ? 'failed' : state || 'finished';
   const text = source === 'shell' ? noticeText(m).replace(/\s+/g, ' ').trim() : noticeText(m);
   const cls = state === 'error' ? ' err' : state === 'cancelled' ? ' warn' : '';
+  // 照 TUI 的 SessionNoticeMessageV2:子会话收工行可点(childID 来自 synthetic 消息的
+  // metadata.childID),点了就进那个子会话;shell 收工行没有可去的地方,保持纯文本。
+  const childID = source === 'subagent' && typeof meta.childID === 'string' ? meta.childID : '';
   return (
-    '<div class="completion' + cls + '"><span class="cHead">' + (state === 'completed' ? '↳' : '!') + ' ' +
+    '<div class="completion' + cls + '"' +
+    (childID ? ' data-child="' + esc(childID) + '" role="link" tabindex="0" title="打开子会话"' : '') +
+    '><span class="cHead">' + (state === 'completed' ? '↳' : '!') + ' ' +
     esc(actor) + ' ' + esc(status) + '</span>' +
     (text ? '<span class="cSuffix"> · ' + esc(text) + '</span>' : '') + '</div>'
   );
@@ -5647,6 +5675,85 @@ function subagentCount(sid) {
   return n;
 }
 
+/* 子会话 / 父会话导航(照 TUI 的 session.child.first / session.parent)。
+ * 子会话表 store.subs 由列表接口的 parentID 与 SSE 的 session.created/updated 维护;
+ * childIDs() 只认「谁是谁的孩子」,标题等信息可能还没到,所以 header 的个数用它;
+ * childSessions() 才去 store.sessions 取能显示的条目。 */
+function childIDs(sid) {
+  if (!sid) return [];
+  const out = [];
+  for (const [cid, pid] of store.subs) if (pid === sid) out.push(cid);
+  return out;
+}
+
+function childSessions(sid) {
+  return childIDs(sid)
+    .map((cid) => store.sessions.get(cid))
+    .filter(Boolean)
+    .sort((a, b) => ((b.time && b.time.updated) || 0) - ((a.time && a.time.updated) || 0));
+}
+
+function parentOf(sid) {
+  if (!sid) return null;
+  const s = store.sessions.get(sid);
+  return (s && s.parentID) || store.subs.get(sid) || null;
+}
+
+/* 子会话选择框:/subagents,以及桌面头部那枚「子会话 N」。
+ * 列表页只拉最近一页,父会话的孩子可能不在 store 里 —— 单独按 parentID 补拉一次
+ * (服务端支持 GET /api/session?parentID=…);拉不到就退回已经知道的那批。 */
+async function openSubagentPick(sid) {
+  sid = sid || store.selected;
+  if (!sid) return;
+  let list = childSessions(sid);
+  try {
+    const q = new URLSearchParams({ parentID: sid, limit: '200' });
+    const j = await api('/api/session?' + q.toString());
+    if (store.selected !== sid) return; // 期间切走了
+    if (j && Array.isArray(j.data)) {
+      list = j.data.filter((s) => s && s.id && s.parentID === sid);
+      for (const s of list) {
+        store.sessions.set(s.id, s);
+        store.subs.set(s.id, sid);
+      }
+      renderChatOps(); // 头部「子会话 N」的个数可能刚刚才知道
+    }
+  } catch (e) {
+    flash('子会话列表拉取失败:' + e.message, 'bad');
+  }
+  if (!list.length) {
+    flash('当前会话没有子会话', 'warn');
+    return;
+  }
+  openPick({
+    title: '子会话',
+    filter: true,
+    filterHint: '按标题过滤…',
+    current: store.selected,
+    items: list.map((s) => {
+      const st = runStatus(s.id);
+      return {
+        key: s.id,
+        label: s.title || '(无标题)',
+        sub: [st === 'retry' ? '重试中' : st ? '运行中' : '', rel(s.time && s.time.updated)]
+          .filter(Boolean)
+          .join(' · '),
+      };
+    }),
+    onPick: (it) => selectSession(it.key),
+  });
+}
+
+// 回父会话(照 TUI 的 session.parent):当前不在顶层才动,否则明说一声。
+function goParent(sid) {
+  const pid = parentOf(sid || store.selected);
+  if (!pid) {
+    flash('当前是顶层会话', 'warn');
+    return;
+  }
+  selectSession(pid);
+}
+
 /* 这个会话正挂着的持久 shell 个数(提示栏那格,照 TUI 的 shell.list(location) 按
  * metadata.sessionID 过滤;TUI 不过滤状态,活着的都算)。 */
 function shellCount(sid) {
@@ -6341,6 +6448,7 @@ async function onAction(act, id) {
     if (!confirm('确定删除该会话?此操作不可撤销。')) return;
     await guard(() => api('/api/session/' + id, { method: 'DELETE' }));
     store.sessions.delete(id);
+    store.subs.delete(id); // 子会话表也要清:不然父会话头部会一直数着已经删掉的那个
     removeTab(id); // §8.59 真删掉的会话也从标签栏移除
     if (store.selected === id) clearSelection();
     store.msgCache.delete(id); // §8.55 删掉的会话不再留快照(clearSelection 会先快照一次)
@@ -6789,6 +6897,8 @@ const PANEL_COMMANDS = [
   { name: 'tui', description: '在 TUI 中打开当前会话', run: () => openTui() },
   { name: 'copy', description: '复制「在 TUI 打开」的命令', run: () => copyTui() },
   { name: 'sessions', description: '切换会话(列表选择)', run: () => openSessionPick() },
+  { name: 'subagents', description: '选择并打开当前会话的子会话', run: (sid) => openSubagentPick(sid) },
+  { name: 'parent', description: '回到父会话', run: (sid) => goParent(sid) },
   { name: 'models', description: '选择模型(含推理档位)', run: () => openModelPick() },
   { name: 'agents', description: '选择智能体', run: () => openAgentPick() },
   { name: 'clear', description: '清空输入框(TUI prompt.clear)', run: () => clearInput() },
@@ -6802,6 +6912,8 @@ const HELP_KEYS = [
   { k: '↑ / ↓', d: '面板里移动;光标在首行/末行时取输入历史' },
   { k: 'Enter / Tab', d: '选中面板项' },
   { k: '/worktrees', d: '列出 / 删除工作树,或把当前会话移进去' },
+  { k: '/subagents', d: '选择并打开当前会话的子会话' },
+  { k: '/parent', d: '回到父会话' },
   { sec: '会话' },
   { k: 'Esc', d: '关命令面板 → 关 @ 补全 → 连按两下中断当前回合(对应 TUI session.interrupt)' },
   { k: 'End', d: '跳回最新消息(对应 TUI session.last);往上翻过头了也能一键回来' },
@@ -8129,6 +8241,7 @@ function handleControlEvent(e) {
   }
   if (dirty) {
     renderSessions();
+    renderChatOps(); // 子会话创建 / 删除时,头部的「子会话 N」和「父会话」入口要跟着变
     updateChatStatus();
   }
 }
@@ -8534,6 +8647,31 @@ function syncCtxInfoHome() {
   else foot.insertBefore(ctx, $('#agentHint') || null);
 }
 
+// 子会话收工行的点击委托(照 TUI 的 SessionNoticeMessageV2):整行可点,但正在选字时
+// 不跳(与 TUI 的 getSelection 判断一致);键盘 Enter / 空格同样算「打开」。
+function setupMessageActions() {
+  const box = $('#messages');
+  if (!box) return;
+  const open = (el) => {
+    const id = el && el.dataset ? el.dataset.child : '';
+    if (id) selectSession(id);
+  };
+  box.addEventListener('click', (e) => {
+    const row = e.target.closest('.completion[data-child]');
+    if (!row) return;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && String(sel).trim()) return;
+    open(row);
+  });
+  box.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('.completion[data-child]');
+    if (!row) return;
+    e.preventDefault();
+    open(row);
+  });
+}
+
 // 会话列表的点击委托:点按钮走 onAction,点行本身进会话。
 // 抽成函数是为了让 test/ui-mobile.html 能单独装上它(那里屏蔽了 init)。
 function setupListActions() {
@@ -8647,6 +8785,8 @@ function init() {
   $('#opExport').addEventListener('click', openExport);
   $('#opTui').addEventListener('click', openTui);
   $('#opArchive').addEventListener('click', () => toggleArchive(store.selected));
+  $('#opSubagents').addEventListener('click', () => openSubagentPick(store.selected));
+  $('#opParent').addEventListener('click', () => goParent(store.selected));
   $('#newOk').addEventListener('click', submitNew);
   $('#newDir').addEventListener('change', fillNewSelectors);
   $('#newWt').addEventListener('change', paintNewWorktree);
@@ -8665,6 +8805,7 @@ function init() {
   );
 
   setupListActions();
+  setupMessageActions();
 }
 
 document.addEventListener('DOMContentLoaded', init);

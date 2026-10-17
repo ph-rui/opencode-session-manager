@@ -3462,6 +3462,60 @@ status 读不到就退回原来的 `confirm`,不把删除卡死。
 **回归**：`smoke.sh` 354 → **355**，`ui-tools` 321 → **335**；其余套件计数不变；全量回归
 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-868.log`。
 
+### 8.69 子会话过滤与父子导航
+
+**起因**：TUI 的会话列表明确 `.filter((session) => !session.parentID)`
+（`component/dialog-session-list.tsx`），子会话走单独的 picker；面板的 `visibleSessions()`
+没有过滤，现场 108 个会话里有 29 个带 `parentID`，子会话会混进左栏和 `/sessions`。
+同时面板只有 `subagentCount()` 这个计数，没有打开子会话 / 回父会话的入口，子会话收工行
+（synthetic 消息的 `metadata.childID`）也点不动。审计 A1 + B2 一起做。
+
+**结论**：主列表只显示顶层会话；子会话仍留在 `store.sessions` / `store.subs` 里供给导航。
+桌面头部加「子会话 N」「‹ 父会话」两个入口，命令面板加 `/subagents` / `/parent`（窄屏整条
+`#chatOps` 本来就被 CSS 收掉，手机上走命令）；子会话收工行按 TUI 的 `SessionNoticeMessageV2`
+整行可点，点了切到 `metadata.childID`。
+
+**改动**：
+
+| 位置 | 行为 |
+|---|---|
+| 主列表 | `visibleSessions()` 先滤掉 `parentID` 再排序；`renderSessions()` 的「另 N 个已归档」也只数顶层会话 |
+| 子会话表 | 列表接口与 SSE 原本就维护 `store.subs`（子→父）；`refreshSessionInfo()` 补拉单个会话时也补记 / 清掉这条映射，深链进子会话后能马上认出父会话 |
+| 头部入口 | `renderChatOps()` 按 `childIDs()` 个数显示「子会话 N」、按 `parentOf()` 显示「‹ 父会话」；`#opSubagents` / `#opParent` 只是新增的按钮，没有删改原有导出 / TUI / 归档 |
+| `/subagents` | `openSubagentPick()` 先按 `GET /api/session?parentID=…&limit=200` 补全（列表页只拉最近一页，父会话的孩子可能不在 store 里），合并进 `store.sessions` / `store.subs` 后用现成的 `openPick()` 列标题 / 运行状态 / 更新时间；一个都没有就只提示、不开空框 |
+| `/parent` | `goParent()` 取 `parentOf()` 切过去；顶层会话只提示「当前是顶层会话」 |
+| 收工行 | `noticeRowHtml()` 对 `source === 'subagent'` 且 `metadata.childID` 是字符串的行加 `data-child`、`role="link"`、`tabindex="0"`；`setupMessageActions()` 在 `#messages` 上委托 click / Enter / 空格，正在选字时不跳（照 TUI 的 `getSelection` 判断） |
+| 删除 | `onAction('del')` 与 SSE `session.deleted` 都清 `store.subs`，父会话头部的个数不会留着已删的子会话 |
+| CSS | `.completion[data-child]` 是手型、hover 下划线、`:focus-visible` 有描边；shell 收工行没有这个属性，保持纯文本 |
+
+**取舍**：
+
+- **只列直接子会话**，不做 TUI `sessionFamily()` 那棵带 `├─` / `└─` 前缀的整棵家族树。
+  面板的入口是「当前会话的子会话」和「回父会话」，直接子会话已经覆盖主路径；家族树要另做
+  缩进投影与活动 / 全部筛选，收益不值当。
+- **列表接口仍返回子会话，只在显示层过滤**。这样不需要改代理或服务端契约，子会话随时能被
+  标签栏 / 收工行 / 深链打开；代价是最近一页的 50 条里如果有子会话，主列表实际显示不到 50 个。
+- **头部入口在窄屏不可见**（§8.41 已把 `#chatOps` 整条收掉）。手机走 `/subagents`、`/parent`
+  两条命令，和「手机上少显示」的既定方向一致，没有为这两项再往标题行塞按钮。
+- **只有子会话收工行可点**。shell 收工行没有 `childID`，保持纯文本；与 TUI 的
+  `source === "subagent"` 判断一致。
+- **父会话被删后留下的孤儿子会话仍按带 `parentID` 处理**，和 TUI 一样不把它们重新混进主列表；
+  父会话删除是否级联由服务端决定，面板不猜。
+
+**验证**：
+
+- `ui-picks.html` 新增 14 项：`/sessions` 不含子会话、`store.subs` / `parentOf`、头部两个入口的
+  显隐与文案、`/subagents` 的标题 / 过滤框 / 只列当前父会话的孩子 / 选中即切换、切到子会话后
+  头部换成「回父会话」、`/parent` 切回、没有子会话时只提示不开框。
+- `ui-tools.html` 新增 4 项：子会话收工行带 `data-child` / `role=link` / `tabindex=0`、shell
+  收工行不带、点一下切到子会话、键盘 Enter 也能切。
+- `smoke.sh` 新增 2 项静态锁：A1 的两处 `!parentID` 过滤、B2 的函数 / 命令 / 按钮 / 收工行
+  属性 / 两份浏览器断言都在。
+- `node --check public/app.js` 通过。
+
+**回归**：`smoke.sh` 355 → **357**，`ui-picks` 96 → **110**，`ui-tools` 335 → **339**；
+其余套件计数不变；全量回归 **0 失败**，日志 `/tmp/ocsm-probe/perf/regress-869.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -3473,6 +3527,7 @@ status 读不到就退回原来的 `confirm`,不把删除卡死。
 | 断点判定放在一句内联脚本里 | 无「闪桌面三栏」，且判定源唯一 | `<head>` 多一行脚本 |
 | 复用 `#dlgPick` 当动作面板 | 零新增对话框；已处理「先关框再回调」| 语义上「选择框」兼作「动作表」|
 | **探索组只并同一条助手消息内的相邻工具** → **纯探索续步也吸收**（§8.68）| 实测（60 个会话窗口）跨消息只有 8 处，占探索分组的 2.9%；TUI 靠按 part 投影才天然并得起来。§8.68 没有改成行投影，只在渲染前把「下一条非终步、整条都是探索工具」的续步藏成占位，把工具并进上一段最后一个探索组 —— 覆盖实测那 8 处，又不动 `msgEls` / `content-visibility` / 锚点四条路 | 带正文、终步、流式中的续步仍分成两段；续步自己的 `.meta` / `.afoot` 跟着整条藏掉；不是 TUI 那种任意 part 的完全行投影 |
+| **主列表只显示顶层会话，子会话用单独的入口**（§8.69）| 和 TUI 的 `!parentID` 一致，现场 29/108 个子会话不再混进左栏；只在显示层过滤，保留 `store.subs` 给标签栏、收工行与深链用 | 列表页仍会返回子会话，主列表实际可能不到 50 个；只列直接子会话、不做 TUI 的整棵家族树；窄屏头部入口被 `#chatOps` 一并收掉，只能走 `/subagents` / `/parent` |
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
