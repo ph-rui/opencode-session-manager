@@ -1456,8 +1456,8 @@ else
 fi
 CTX_CALLS=$(printf '%s' "$APPJS" | grep -oF 'paintContextUsage();' | wc -l)
 if has "$APPJS" 'function paintContextUsage(' && has "$APPJS" 'function currentMessages(' &&
-   [ "$CTX_CALLS" = 6 ]; then
-  echo "PASS: paintContextUsage 六个调用点(updateChatStatus 两分支 + renderControls + 分支回来补画 + /__health 给 home 后补画 + 深链补拉会话后补画),口径与渲染共用 currentMessages()"; pass=$((pass + 1))
+   [ "$CTX_CALLS" = 7 ]; then
+  echo "PASS: paintContextUsage 七个调用点(updateChatStatus 两分支 + renderControls + 分支回来补画 + /__health 给 home 后补画 + 深链补拉会话后补画 + 移入工作树后补画),口径与渲染共用 currentMessages()"; pass=$((pass + 1))
 else
   echo "FAIL: paintContextUsage 的接线不对(got $CTX_CALLS 个调用点)"; fail=$((fail + 1))
 fi
@@ -2188,6 +2188,48 @@ if [ -f "$SMOKE_CFG" ] && has "$(cat "$SMOKE_CFG")" 'OPENCODE_CONFIG_DIR' &&
   echo "PASS: test/config-e2e-run.js 在,ui-tools.html 有 §8.60 的浏览器断言"; pass=$((pass + 1))
 else
   echo "FAIL: 缺 config 端到端测试或 ui-tools 的共享偏好断言"; fail=$((fail + 1))
+fi
+
+# ---- R19 组:工作树列表 / 删除 / 移入(§8.61;照 TUI 的 Worktrees 对话框)----
+if has "$APPJS" "name: 'worktrees'" && has "$APPJS" "function openWorktrees()" &&
+   has "$APPJS" "'/worktrees', d:"; then
+  echo "PASS: /worktrees 进了命令面板与快捷键说明(和 /diff 一样不往聊天头部加按钮)"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 /worktrees 命令或快捷键说明"; fail=$((fail + 1))
+fi
+if has "$APPJS" "api('/api/worktree/refresh'" &&
+   has "$APPJS" "/api/worktree?' + new URLSearchParams" &&
+   has "$APPJS" "const j = await api('/api/session/' + enc(sid));" &&
+   has "$APPJS" 'function openWorktreeActions(it, ctx)' &&
+   has "$APPJS" 'function wtCurrentRoot(list, dir)'; then
+  echo "PASS: 打开先取会话最新目录,再 refresh 后按 projectID 列;当前根排最前,选中后进动作菜单"; pass=$((pass + 1))
+else
+  echo "FAIL: 工作树列表 / refresh / 当前根 / 动作菜单缺了一块"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function moveSessionToWorktree(sid, directory)' &&
+   has "$APPJS" "/api/session/' + enc(sid) + '/move" &&
+   has "$APPJS" 'body: JSON.stringify({ directory })' &&
+   has "$APPJS" 's.location = Object.assign({}, s.location, { directory });'; then
+  echo "PASS: 移入走 session/move,并把本地会话目录同步过去(列表/提示栏/工具栏一起刷新)"; pass=$((pass + 1))
+else
+  echo "FAIL: 移入没有调 session/move 或没更新本地目录"; fail=$((fail + 1))
+fi
+SMOKE_DELWT=$(printf '%s' "$APPJS" | sed -n '/^async function removeWorktree(w, ctx, force) {/,/^}/p' 2>/dev/null)
+if [ -n "$SMOKE_DELWT" ] && has "$SMOKE_DELWT" "method: 'DELETE'" &&
+   has "$SMOKE_DELWT" 'forceRequired === true' && has "$SMOKE_DELWT" 'force: !!force' &&
+   has "$SMOKE_DELWT" 'clearSelection();' && has "$APPJS" 'err.data = j && j.data'; then
+  echo "PASS: 删除只对 worktree 开放,有改动先 confirm 再 force;删掉当前目录就回列表"; pass=$((pass + 1))
+else
+  echo "FAIL: 工作树删除的 force 确认 / 当前目录回退 / err.data 解包缺了一块"; fail=$((fail + 1))
+fi
+SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
+if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.61 worktree 管理' &&
+   has "$(cat "$SMOKE_CAP")" '移入:POST session/move' &&
+   has "$(cat "$SMOKE_CAP")" '有未提交改动:先 confirm' &&
+   has "$(cat "$SMOKE_CAP")" '删掉当前会话所在工作树'; then
+  echo "PASS: test/ui-capabilities.html 里有工作树列表 / 移入 / 删除 / force / 当前目录的浏览器断言"; pass=$((pass + 1))
+else
+  echo "FAIL: test/ui-capabilities.html 缺工作树管理的关键断言"; fail=$((fail + 1))
 fi
 
 echo

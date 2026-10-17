@@ -84,6 +84,14 @@
     <div class="dlgacts"><button type="button" data-close>关闭</button><button type="button" id="diffReload">刷新</button></div>
   </div></dialog>
 
+  <dialog id="dlgPick" class="dlg"><div class="dlgform">
+    <h3 id="pickTitle">选择</h3>
+    <input id="pickFilter" class="pickfilter" type="text" autocomplete="off" spellcheck="false" hidden>
+    <div id="pickList" class="picklist" role="listbox"></div>
+    <div class="dlgfoot" id="pickFoot"></div>
+    <div class="dlgacts"><button type="button" class="chip" data-close>关闭</button></div>
+  </div></dialog>
+
   <pre id="results"></pre>
 
   <script>
@@ -130,6 +138,16 @@
     window.__downloads = [];
     window.confirmMsg = null;
     window.confirm = function (msg) { window.confirmMsg = msg; return true; };
+    window.__worktrees = [
+      { directory: '/proj/a' },
+      { directory: '/wt/one', strategy: 'git' },
+      { directory: '/wt/two', strategy: 'git' },
+    ];
+    window.__wtListFail = false;
+    window.__wtMoveFail = false;
+    window.__wtDeleteForceOnce = false;
+    window.__wtDeletes = [];
+    window.__wtMoves = [];
     URL.createObjectURL = function (b) { window.__blobs.push(b); return 'blob:stub'; };
     URL.revokeObjectURL = function () {};
     HTMLAnchorElement.prototype.click = function () { window.__downloads.push(this.download); };
@@ -161,6 +179,33 @@
         }
         return json({ directory: '/wt/' + JSON.parse(opts.body).name });
       }
+      if (u.indexOf('/api/worktree?') === 0) {
+        if (window.__wtListFail) return fail(500, { message: 'wt list boom' });
+        return json(window.__worktrees);
+      }
+      if (method === 'POST' && u === '/api/worktree/refresh') {
+        return { ok: true, status: 204, text: async function () { return ''; } };
+      }
+      if (method === 'DELETE' && u === '/api/worktree') {
+        var wd = JSON.parse(opts.body);
+        window.__wtDeletes.push(wd);
+        if (window.__wtDeleteForceOnce && !wd.force) {
+          window.__wtDeleteForceOnce = false;
+          return fail(400, {
+            _tag: 'WorktreeError', name: 'WorktreeError',
+            data: { message: 'worktree has uncommitted changes', forceRequired: true },
+          });
+        }
+        window.__worktrees = window.__worktrees.filter(function (w) { return w.directory !== wd.directory; });
+        return { ok: true, status: 204, text: async function () { return ''; } };
+      }
+      var mv = u.match(/^\/api\/session\/([^/?]+)\/move$/);
+      if (method === 'POST' && mv) {
+        var mb = JSON.parse(opts.body);
+        window.__wtMoves.push({ sid: decodeURIComponent(mv[1]), directory: mb.directory });
+        if (window.__wtMoveFail) return fail(400, { data: { message: 'move boom' } });
+        return { ok: true, status: 204, text: async function () { return ''; } };
+      }
       if (u.indexOf('/api/experimental/session/import') === 0) {
         window.__importSeen++;
         if (window.importConflictOnce && window.__importSeen === 1) {
@@ -183,6 +228,12 @@
         } });
       }
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
+      var oneSession = u.match(/^\/api\/session\/([^/?]+)$/);
+      if (method === 'GET' && oneSession) {
+        var oneID = decodeURIComponent(oneSession[1]);
+        var one = store.sessions.get(oneID) || SESSIONS.filter(function (s) { return s.id === oneID; })[0];
+        return one ? json({ data: one }) : fail(404, { message: 'session not found' });
+      }
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
       if (/^\/api\/session\/[^/?]+\/diff\?context=3$/.test(u)) {
@@ -794,6 +845,139 @@
         getComputedStyle(tabA.querySelector('.tabx')).display === 'flex' &&
         getComputedStyle(tabB.querySelector('.tabx')).display === 'none');
       document.documentElement.classList.remove('narrow', 'view-chat');
+
+      /* ---- §8.61 worktree 管理(列出 / 删除 / 移入) ---- */
+      var WTS = [
+        { directory: '/proj/a' },
+        { directory: '/wt/one', strategy: 'git' },
+        { directory: '/wt/two', strategy: 'git' },
+      ];
+      var resetWt = function () {
+        seed();
+        store.selected = 'ses_a';
+        window.__worktrees = WTS.map(function (w) { return { directory: w.directory, strategy: w.strategy }; });
+        window.__wtListFail = false;
+        window.__wtMoveFail = false;
+        window.__wtDeleteForceOnce = false;
+        window.__wtDeletes = [];
+        window.__wtMoves = [];
+        window.confirmMsg = null;
+        closePick();
+        reset();
+      };
+      var wtLabels = function () {
+        return qa('#pickList .pi-label').map(function (el) { return el.textContent; });
+      };
+      var wtItem = function (dir) {
+        return store.pickItems.filter(function (it) { return it.key === dir; })[0];
+      };
+
+      var wtCmd = PANEL_COMMANDS.filter(function (c) { return c.name === 'worktrees'; })[0];
+      T('/worktrees 进命令面板', !!wtCmd && wtCmd.description.indexOf('工作树') >= 0, wtCmd);
+
+      resetWt();
+      await openWorktrees();
+      var wtRefresh = reqs(/^\/api\/worktree\/refresh$/);
+      var wtList = reqs(/^\/api\/worktree\?/);
+      T('打开工作树:先 refresh 再按 projectID 列',
+        wtRefresh.length === 1 && bodyOf(wtRefresh[0]).projectID === 'pj1' &&
+        wtList.length === 1 && /projectID=pj1/.test(wtList[0].url),
+        { refresh: wtRefresh, list: wtList });
+      T('工作树对话框标题带会话名、当前根标 ●',
+        q('#dlgPick').open === true &&
+        q('#pickTitle').textContent.indexOf('工作树') === 0 &&
+        !!q('#pickList .pick-item.current') &&
+        q('#pickList .pick-item.current .pi-label').textContent === '/proj/a',
+        { title: q('#pickTitle').textContent, cur: q('#pickList .pick-item.current .pi-label') });
+      T('当前根排最前,其余主检出在前、worktree 在后',
+        wtLabels().join('|') === '/proj/a|/wt/one|/wt/two', wtLabels());
+
+      pickChoose(wtItem('/wt/one'));
+      T('点工作树打开动作菜单:移入 / 删除 / 刷新',
+        q('#pickTitle').textContent.indexOf('/wt/one') >= 0 &&
+        qa('#pickList .pi-label').map(function (el) { return el.textContent; }).join('|') ===
+          '把当前会话移到这里|删除工作树|刷新工作树列表',
+        { title: q('#pickTitle').textContent, labels: wtLabels() });
+      await pickChoose(store.pickItems[0]);
+      T('移入:POST session/move,目录沿用该工作树',
+        window.__wtMoves.length === 1 &&
+        window.__wtMoves[0].sid === 'ses_a' && window.__wtMoves[0].directory === '/wt/one' &&
+        store.sessions.get('ses_a').location.directory === '/wt/one' &&
+        q('#toast').textContent.indexOf('已移动到') >= 0,
+        { moves: window.__wtMoves, loc: store.sessions.get('ses_a').location });
+
+      resetWt();
+      await openWorktrees();
+      pickChoose(wtItem('/proj/a'));
+      var mainAct = store.pickItems;
+      T('主检出:删除项禁用,当前目录的移入项也禁用',
+        mainAct[0].disabled === true && mainAct[1].disabled === true &&
+        mainAct[1].sub === '主检出不能删',
+        mainAct);
+      closePick();
+
+      resetWt();
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one'));
+      await pickChoose(store.pickItems[1]);
+      T('删除工作树:确认前不发 force,DELETE 带 projectID + 目录',
+        window.__wtDeletes.length === 1 &&
+        window.__wtDeletes[0].projectID === 'pj1' &&
+        window.__wtDeletes[0].directory === '/wt/one' &&
+        window.__wtDeletes[0].force === false && window.confirmMsg === null,
+        { deletes: window.__wtDeletes, confirm: window.confirmMsg });
+      T('删除后重新列,列表里不再有它',
+        q('#dlgPick').open === true && wtLabels().indexOf('/wt/one') < 0, wtLabels());
+
+      resetWt();
+      window.__wtDeleteForceOnce = true;
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one'));
+      await pickChoose(store.pickItems[1]);
+      T('有未提交改动:先 confirm,再带 force=true 重试',
+        window.__wtDeletes.length === 2 &&
+        window.__wtDeletes[0].force === false && window.__wtDeletes[1].force === true &&
+        window.confirmMsg && window.confirmMsg.indexOf('未提交改动') >= 0 &&
+        wtLabels().indexOf('/wt/one') < 0,
+        { deletes: window.__wtDeletes, confirm: window.confirmMsg });
+
+      resetWt();
+      store.sessions.get('ses_a').location.directory = '/wt/one';
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one'));
+      await pickChoose(store.pickItems[1]);
+      T('删掉当前会话所在工作树:清空选中并回列表',
+        store.selected === null && q('#dlgPick').open === false &&
+        q('#toast').textContent.indexOf('已回到列表') >= 0,
+        { sel: store.selected, toast: q('#toast').textContent });
+
+      resetWt();
+      store.selected = null;
+      await openWorktrees();
+      T('没打开会话时只提示,不发工作树请求',
+        q('#toast').textContent.indexOf('先打开一个会话') >= 0 &&
+        reqs(/\/api\/worktree/).length === 0,
+        { toast: q('#toast').textContent, calls: window.calls });
+
+      resetWt();
+      window.__wtListFail = true;
+      await openWorktrees();
+      T('工作树列表失败:报服务端原话,不弹空框',
+        q('#toast').textContent.indexOf('工作树列表加载失败') >= 0 &&
+        q('#toast').textContent.indexOf('wt list boom') >= 0 &&
+        q('#dlgPick').open === false,
+        { toast: q('#toast').textContent, open: q('#dlgPick').open });
+
+      resetWt();
+      window.__wtMoveFail = true;
+      await openWorktrees();
+      pickChoose(wtItem('/wt/one'));
+      await pickChoose(store.pickItems[0]);
+      T('移入失败:报服务端原话,本地目录不动',
+        q('#toast').textContent.indexOf('移动会话失败') >= 0 &&
+        q('#toast').textContent.indexOf('move boom') >= 0 &&
+        store.sessions.get('ses_a').location.directory === '/proj/a',
+        { toast: q('#toast').textContent, loc: store.sessions.get('ses_a').location });
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

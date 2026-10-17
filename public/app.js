@@ -154,6 +154,7 @@ async function api(path, opts) {
     const msg = (j && (j.message || j.error || (j.data && j.data.message))) || 'HTTP ' + r.status;
     const err = new Error(msg);
     err.status = r.status;
+    err.data = j && j.data; // §8.61:worktree 删除要靠 data.forceRequired 判断要不要再确认
     throw err;
   }
   /* 正文只下到一半(手机上一个 12MB 的会话首页被掐断过就是这种)时 JSON.parse 会失败。
@@ -211,6 +212,14 @@ function flash(msg, kind) {
   toastTimer = setTimeout(() => {
     el.hidden = true;
   }, 2600);
+}
+
+function clearToast() {
+  const el = $('#toast');
+  if (!el) return;
+  el.hidden = true;
+  el.textContent = '';
+  clearTimeout(toastTimer);
 }
 
 /* ----------------------------- 会话运行状态 ----------------------------- */
@@ -945,8 +954,8 @@ async function fillNewSelectors() {
 
 /* §8.56 worktree:照 TUI 的 DialogWorktreeName 那三步 —— 起名、生成、确认。
  * 名字规则也一样(全小写、非字母数字变 -、掐掉首尾 -);留空就随机 adjective-noun。
- * 面板只做「在 + 新建里顺手新建一个 worktree」;列出/删除 worktree 是 TUI 那个
- * Worktrees 对话框的事,这里不造半套。 */
+ * §8.61 补齐 TUI Worktrees 对话框的后半段:列出 / 删除 / 把当前会话移进去,入口是
+ * /worktrees 命令(与 /diff 一样只走命令面板,不往聊天头部加按钮)。 */
 const WT_ADJ = [
   'brave', 'calm', 'clever', 'cosmic', 'crisp', 'curious', 'eager', 'gentle', 'glowing',
   'happy', 'hidden', 'jolly', 'kind', 'lucky', 'mighty', 'misty', 'neon', 'nimble',
@@ -1081,6 +1090,224 @@ async function submitNew() {
     showDlgErr(err, (phase === 'worktree' ? 'worktree ' : '') + '创建失败:' + e.message);
   }
   setBusy(btn, false);
+}
+
+/* §8.61 worktree 管理:列出 / 删除 / 把当前会话移进去。
+ * 列的是服务端 /api/worktree 给的「根」目录(主检出 + OpenCode 建的 worktree),不把
+ * 会话落在根下的子目录再拆成一层 —— TUI 会拆,但面板在手机上多一层只会更难找。
+ * 删除只对带 strategy 的 worktree 开放(主检出永远不能删);移入走 session/move。 */
+function wtUnder(root, dir) {
+  if (!root || !dir) return false;
+  const r = normPath(root);
+  const d = normPath(dir);
+  return d === r || d.indexOf(r + '/') === 0;
+}
+
+function wtListOf(j) {
+  const raw = Array.isArray(j) ? j : j && Array.isArray(j.data) ? j.data : [];
+  const seen = new Set();
+  const out = [];
+  for (const x of raw) {
+    if (!x || typeof x.directory !== 'string' || !x.directory) continue;
+    const dir = normPath(x.directory);
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    out.push({ directory: dir, strategy: typeof x.strategy === 'string' ? x.strategy : '' });
+  }
+  return out;
+}
+
+function wtCurrentRoot(list, dir) {
+  if (!dir) return null;
+  let best = null;
+  for (const w of list) {
+    if (wtUnder(w.directory, dir) && (!best || w.directory.length > best.length)) best = w.directory;
+  }
+  return best;
+}
+
+// 每次都向服务端要一次会话信息:移入 / 删除之后本地 store 可能正被后台列表刷新
+// 用旧 location 覆盖(SSE 的 session.moved 与定时 loadSessions 会赛跑),而当前根
+// 标错就会把「删掉当前工作树」误判成「删别的」。多这一趟 GET 换准头,值。
+async function worktreeSession(sid) {
+  const j = await api('/api/session/' + enc(sid));
+  const info = j && j.data;
+  if (!info || !info.id) throw new Error('拿不到这个会话的工程信息');
+  if (!info.location && info.directory) info.location = { directory: info.directory };
+  if (store.selected === sid) store.sessions.set(sid, info);
+  return info;
+}
+
+async function openWorktrees() {
+  const sid = store.selected;
+  if (!sid) {
+    flash('先打开一个会话,再管理工作树', 'warn');
+    return;
+  }
+  flash('正在读取工作树…');
+  let s;
+  try {
+    s = await worktreeSession(sid);
+  } catch (e) {
+    flash('工作树列表加载失败:' + e.message, 'bad');
+    return;
+  }
+  if (store.selected !== sid) return;
+  const projectID = s && s.projectID;
+  if (!projectID) {
+    flash('这个会话没有工程号,列不了工作树', 'bad');
+    return;
+  }
+  const currentDir = (s.location && s.location.directory) || '';
+  // TUI 的 Worktrees 对话框打开时先 refresh 再列;refresh 失败(工程不认 / 不是 git)
+  // 不影响下面那次 list,静默跳过。
+  try {
+    await api('/api/worktree/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectID }),
+    });
+  } catch (_) {}
+  let list;
+  try {
+    list = wtListOf(
+      await api('/api/worktree?' + new URLSearchParams({ projectID }).toString())
+    );
+  } catch (e) {
+    if (store.selected === sid) flash('工作树列表加载失败:' + e.message, 'bad');
+    return;
+  }
+  if (store.selected !== sid) return;
+  if (!list.length) {
+    flash('这个工程没有工作树', 'warn');
+    return;
+  }
+  const currentRoot = wtCurrentRoot(list, currentDir);
+  // 照 TUI:当前所在根排最前;其余主检出在前、worktree 在后,主检出按路径长短。
+  list.sort((a, b) => {
+    const ac = a.directory === currentRoot;
+    const bc = b.directory === currentRoot;
+    if (ac !== bc) return ac ? -1 : 1;
+    const aw = !!a.strategy;
+    const bw = !!b.strategy;
+    if (aw !== bw) return aw ? 1 : -1;
+    if (!aw && !bw) return a.directory.length - b.directory.length;
+    return a.directory.localeCompare(b.directory);
+  });
+  openPick({
+    title: '工作树 · ' + ((s && s.title) || sid),
+    filter: true,
+    filterHint: '按路径过滤…',
+    current: currentRoot,
+    items: list.map((w) => ({
+      key: w.directory,
+      directory: w.directory,
+      label: abbrevHome(w.directory),
+      sub: w.strategy ? 'worktree' : '主检出',
+      strategy: w.strategy,
+    })),
+    onPick: (it) => openWorktreeActions(it, { sid, projectID, currentDir, currentRoot }),
+  });
+  clearToast(); // 列表已经打开,别让「正在读取」在框后面挂到 2.6s
+}
+
+function openWorktreeActions(it, ctx) {
+  if (!it) return;
+  const isCurrent = !!ctx.currentDir && normPath(ctx.currentDir) === normPath(it.directory);
+  const currentHere = !!ctx.currentRoot && ctx.currentRoot === it.directory;
+  const items = [
+    {
+      key: 'move',
+      label: '把当前会话移到这里',
+      sub: isCurrent ? '当前就在这个目录' : '',
+      disabled: isCurrent,
+    },
+    {
+      key: 'delete',
+      label: '删除工作树',
+      sub: !it.strategy
+        ? '主检出不能删'
+        : currentHere
+          ? '当前会话在此;删除后回列表'
+          : '有未提交改动会再确认',
+      disabled: !it.strategy,
+    },
+    { key: 'refresh', label: '刷新工作树列表' },
+  ];
+  openPick({
+    title: '工作树 · ' + abbrevHome(it.directory),
+    filter: false,
+    items,
+    onPick: (act) => {
+      if (!act) return;
+      if (act.key === 'move') return moveSessionToWorktree(ctx.sid, it.directory);
+      if (act.key === 'delete') return removeWorktree(it, ctx);
+      if (act.key === 'refresh') return openWorktrees();
+    },
+  });
+}
+
+async function moveSessionToWorktree(sid, directory) {
+  try {
+    await api('/api/session/' + enc(sid) + '/move', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ directory }),
+    });
+  } catch (e) {
+    flash('移动会话失败:' + e.message, 'bad');
+    return;
+  }
+  let s = store.sessions.get(sid);
+  if (!s) s = { id: sid };
+  s.location = Object.assign({}, s.location, { directory });
+  store.sessions.set(sid, s);
+  store.seenDirs.add(directory);
+  renderSessions();
+  if (store.selected === sid) {
+    paintChatHeader(s);
+    renderChatOps();
+    paintContextUsage();
+    renderControls(s);
+  }
+  flash('已移动到 ' + abbrevHome(directory), 'ok');
+}
+
+async function removeWorktree(w, ctx, force) {
+  const dir = w.directory;
+  try {
+    await api('/api/worktree', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        projectID: ctx.projectID,
+        directory: dir,
+        force: !!force,
+      }),
+    });
+  } catch (e) {
+    if (!force && e.data && e.data.forceRequired === true) {
+      if (!confirm('这个工作树有未提交改动,强制删除?')) return;
+      return removeWorktree(w, ctx, true);
+    }
+    flash('删除工作树失败:' + e.message, 'bad');
+    return;
+  }
+  store.seenDirs.delete(dir);
+  renderSessions();
+  // 删除是异步的,期间用户可能已经切到别的会话;要按【现在选中的】目录判断,
+  // 否则会把刚切过去的会话也一起清掉。同一个会话优先信打开动作菜单时刚拿到的
+  // ctx.currentDir(store 可能被后台列表刷成旧值)。
+  const selDir = store.selected === ctx.sid
+    ? ctx.currentDir || sessionDir(ctx.sid) || ''
+    : sessionDir(store.selected) || '';
+  if (selDir && wtUnder(dir, selDir)) {
+    clearSelection();
+    flash('工作树已删除;当前会话所在目录没了,已回到列表', 'warn');
+    return;
+  }
+  if (store.selected === ctx.sid) await openWorktrees();
+  flash('已删除工作树:' + abbrevHome(dir), 'ok');
 }
 
 function showDlgErr(el, msg) {
@@ -5910,6 +6137,7 @@ const PANEL_COMMANDS = [
   { name: 'undo', description: '撤销到最后一条用户消息(含该轮文件改动)', run: (sid) => runUndo(sid) },
   { name: 'redo', description: '重做:清除已暂存的撤销', run: (sid) => runRedo(sid) },
   { name: 'diff', description: '查看最近一轮变更(照 TUI 的 /diff)', run: () => openDiff() },
+  { name: 'worktrees', description: '管理工作树(列出 / 删除 / 把当前会话移进去)', run: () => openWorktrees() },
   { name: 'rename', description: '重命名当前会话', run: (sid) => onAction('rename', sid) },
   { name: 'delete', description: '删除当前会话(需确认)', run: (sid) => onAction('del', sid) },
   { name: 'export', description: '导出当前会话为 JSON', run: () => openExport() },
@@ -5929,6 +6157,7 @@ const HELP_KEYS = [
   { k: 'Ctrl+P', d: '随时打开命令面板(对应 TUI command.palette.show)' },
   { k: '↑ / ↓', d: '面板里移动;光标在首行/末行时取输入历史' },
   { k: 'Enter / Tab', d: '选中面板项' },
+  { k: '/worktrees', d: '列出 / 删除工作树,或把当前会话移进去' },
   { sec: '会话' },
   { k: 'Esc', d: '关命令面板 → 关 @ 补全 → 连按两下中断当前回合(对应 TUI session.interrupt)' },
   { k: 'End', d: '跳回最新消息(对应 TUI session.last);往上翻过头了也能一键回来' },
@@ -6071,7 +6300,9 @@ function pickChoose(it) {
   if (!it || it.disabled) return;
   const fn = store.pickOnPick;
   closePick();
-  if (fn) fn(it);
+  // §8.61:动作项的回调可能是异步的(移会话 / 删工作树),把 Promise 透出去方便测,
+  // 页面上的点击处理器照样不 await。
+  if (fn) return fn(it);
 }
 
 // 选择框里的键位:↑/↓ 环绕、Enter 选中(Esc 交给 <dialog> 自己关)

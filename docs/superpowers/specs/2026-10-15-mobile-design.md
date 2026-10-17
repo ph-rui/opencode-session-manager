@@ -2776,7 +2776,7 @@ LAN
 | 会话 | 用返回的目录 `POST /api/session {location:{directory}}`;源目录与 worktree 目录都进 `store.seenDirs`,下次目录下拉里直接有 |
 | 失败 | 不建会话,对话框不关;错误取 `data.message`(worktree / location 的错误体是 tagged error,顶层没有 `message`,只看顶层会退化成「HTTP 400」),显示 `worktree 创建失败:<服务端原话>` |
 | 重试 | worktree 建好、会话 POST 失败(手机上断一下很常见)时,把 `{源目录, 名字, 返回目录}` 挂在 `#dlgNew.dataset`;源目录与名字都没变就复用,不建第二棵。关对话框 / 换名字 / 换源目录即作废。错误文案此时不再冒充 worktree 失败 |
-| 范围 | 只做「新建」。列出 / 删除 worktree、把已有会话移进 worktree 仍是 TUI 的 `Worktrees` 对话框;面板不造半套按钮 |
+| 范围 | 这一版只做「新建」;列出 / 删除 worktree、把已有会话移进 worktree 后来在 §8.61 补齐 |
 
 **实测**(真页面 1366×900,源 `/tmp/ocsm-probe/wt-demo` 临时 git 仓库):
 
@@ -2797,9 +2797,9 @@ LAN
 
 - **不传 `from`**:TUI 也只传 `{projectID, name}`,源 checkout 由服务端的工程记录决定;面板里
   填的源目录只用来解析 `projectID`,不偷偷改变 worktree 的来源。
-- **只做新建**:TUI 的 `Worktrees` 对话框还带「有改动时二次确认 + force 删除」,以及把会话
-  移进去的路由切换;面板的主入口是「+ 新建」,先把最常用的一步接通,不为了对齐而摆一排
-  只能看不能用的 worktree 按钮。
+- **这一版只做新建**:TUI 的 `Worktrees` 对话框还带「有改动时二次确认 + force 删除」,以及把
+  会话移进去的路由切换;面板的主入口是「+ 新建」,先接通最常用的一步,不摆只能看不能用的
+  按钮。后半段已在 §8.61 用 `/worktrees` 补齐。
 - **名字先在客户端归一化**:少一次「非法字符 → 400」的往返;但重名、非 git、setup 失败
   仍以服务端为准,面板只负责把原话带到对话框里。
 - **勾选后才改变对话框高度**:默认态一个像素没变;桌面主布局、三栏网格、会话表都没有动。
@@ -3067,6 +3067,55 @@ ERRORS []
 
 ---
 
+### 8.61 工作树列表 / 删除 / 把已有会话移进去
+
+**起因**:上一批 1–4 的第 3 项;§8.56 只做了「在 `+ 新建` 里新建 worktree」,TUI 的
+`Worktrees` 对话框还有列出、删除、把已有会话移进去。
+
+**结论**:补一条 `/worktrees` 命令,复用现有的 `#dlgPick`(不新造对话框),入口和 `/diff`
+一样只走命令面板,不往聊天头部加按钮。列表列服务端 `/api/worktree` 返回的工程根目录
+(主检出 + OpenCode 建的 worktree),不把会话落在根下的子目录再拆一层。
+
+**流程**:
+
+| 动作 | 实现 |
+|---|---|
+| 打开 | 每次先 `GET /api/session/:id` 拿最新的 `projectID` / `location.directory`(后台列表刷新可能用旧 location 覆盖 store),再列工作树 |
+| 刷新 + 列 | `POST /api/worktree/refresh {projectID}`(失败静默) → `GET /api/worktree?projectID=...`;按 TUI 排序:当前根最前,其余主检出在前、worktree 在后,主检出按路径长短 |
+| 移入 | `POST /api/session/:id/move {directory}`;成功后本地改 `s.location.directory`,重画列表 / 头部 / 提示栏 / 工具栏 / 上下文用量,不重拉消息 |
+| 删除 | 只对带 `strategy` 的 worktree 开放;`DELETE /api/worktree {projectID,directory,force:false}`。返回 `data.forceRequired` 时原生 `confirm`,确认后带 `force:true` 重试;主检出的删除项直接禁用 |
+| 删到当前目录 | 删除成功后若当前会话目录在被删根下,`clearSelection()` 回列表并提示;用户期间切了会话则按「现在选中的」目录判断,不乱清 |
+| 删除其它目录 | 删完从目录下拉里移除,并重新打开 `/worktrees` 列表 |
+
+**取舍**:
+
+- **只列根目录**。TUI 从会话的 `location` 里拿子目录当额外移动目标;面板只列 API 给的根,
+  手机上少一层,也避免把「工程目录」和「worktree」混在一起。
+- **删除前不展示文件变更 diff**。TUI 会先列 `forceRequired` 的那批文件;面板用一句原生
+  `confirm` 代替,和现有的删会话 / 撤销确认保持同一形态。服务端仍是最终裁判。
+- **新建 worktree 不放进这个对话框**。`+ 新建` 里的开关已经覆盖,`/worktrees` 只做
+  「已有工作树」的浏览 / 删除 / 移入。
+- **移入不重拉消息**。`session/move` 只换 location;会话 id、消息、标签、滚动位置都不变,
+  清缓存或重拉只会闪一下。
+- 依赖 `api()` 把错误响应里的 `data` 一起带出来(`err.data`),否则删除的 `forceRequired`
+  只能退化成「HTTP 400」。这是通用能力,其它调用方不受影响。
+
+**实测**(真页面 1366×900,临时工程 `/tmp/ocsm-probe/wt-demo`、临时会话、临时 worktree,
+结束后会话与 worktree 都删掉,不碰真实业务会话):
+
+```
+list        /tmp/ocsm-probe/wt-demo + ~/.local/share/opencode/worktree/80d169/probe-ui-…
+move in     /api/session/:id/move → location = worktree;当前根 ● 跟着换
+move back   location = /tmp/ocsm-probe/wt-demo
+delete      toast「已删除工作树:…」,列表只剩主检出,服务端 /api/worktree 也只剩主检出
+ERRORS []
+```
+
+**回归**:`smoke.sh` 343 → **348**(5 项),`ui-capabilities` 136 → **150**(14 项);
+其余套件计数不变;全量回归 **0 失败**,日志 `/tmp/ocsm-probe/perf/regress-861.log`。
+
+---
+
 ---
 
 ## 9. 取舍与理由
@@ -3081,7 +3130,7 @@ ERRORS []
 | 列表主要换 CSS 形态（仅增一个桌面隐藏的 `⋯`）| 桌面零风险，16 套测试继续有效 | 卡片行里留着用不到的表格语义 |
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
-| worktree 只做「新建」 | 主入口是「+ 新建」；新建那一步把 `projectID`、名字、返回目录、失败原话都接通了，最常用的一半已经能用 | 已有 worktree 的浏览/删除/把会话移进去仍在 TUI 的 `Worktrees` 对话框（§8.56）|
+| worktree 管理补到列出 / 删除 / 移入 | 复用 `#dlgPick` 和现有 `+ 新建`，不新造对话框；把 TUI `Worktrees` 最常用的后半段补齐 | 只列工程根目录，不拆子目录；删除前不展示文件变更预览，用原生 `confirm`；入口只在 `/worktrees` 命令（§8.61）|
 | 变更总览只接 Last turn | 服务端 `/diff` 按 turn 快照算净变更，同一轮改多次只算最终结果，shell 改的也算；「刚跑完这轮改了什么」是最常看的 | `branch` / `working` / `committed` 三档、文件树、逐文件 reviewed 仍在 TUI 的 diff viewer（§8.57）|
 | 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
 | 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
