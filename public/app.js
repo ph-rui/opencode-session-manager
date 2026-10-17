@@ -74,6 +74,9 @@ const store = {
   msgSeq: 0, // 拉消息的「代」号:切会话或新请求一来,旧的重试/在途响应就作废
   listError: '', // 最近一次拉会话列表失败的原文(空 = 没在失败);画成左栏那条状态行(§8.45)
   listLoading: false, // 「正在加载会话…」是不是真露出来了(慢到 LIST_LOADING_DELAY_MS 才露)
+  // 用户最近一次点击的时刻(§8.46 ③):ResizeObserver 补贴底前先看看「是不是用户自己弄高的」
+  gestureAt: 0,
+  repinWired: false, // 那只 click 监听只挂一次(init 会被反复调)
 };
 
 const $ = (s) => document.querySelector(s);
@@ -1532,8 +1535,19 @@ function jumpToLatest() {
  *   - 用户一往上滚就停手(store.nearBottom 被滚动监听翻成 false);
  *   - 又渲染/又切会话就作废(repinSeq,见 renderMessages 与 selectSession);
  *   - 短会话压根没有 cvmany,不走这条路。
- * 估值落定实测在贴底后 400ms 内,预算给到 800ms 有余量。 */
-const REPIN_BUDGET_MS = 800;
+ *
+ * §8.46:原来还压着一个 800ms 的【时间】预算 —— 跟高度没关系,只是赌「估值落定会在
+ * 800ms 内」。改成盯高度:
+ *   ① 高度连续 REPIN_STABLE_FRAMES 帧没变就收手(估值落定实测 400ms 内,但没必要干等);
+ *      REPIN_MAX_MS 只当自保 —— 内容一直在长时别把 rAF 挂到天荒地老;
+ *   ② 真正「图迟一步撑开」那种跟时间赌不赢(解码可能几秒后才完):另起一个
+ *      ResizeObserver 盯 #messages 里的内容元素 —— 高度一变(估值落定 / 图撑开),
+ *      只要还贴着底就补贴一次。没有时间窗口,也不常驻 rAF(空闲时零开销);
+ *   ③ 用户自己点开 <details> 也会让内容长高,那不是「迟到的东西」:刚点过的 400ms 内
+ *      不抢着贴(以前的时间预算天然躲开了这一类,别在改成盯高度后把它弄丢)。 */
+const REPIN_STABLE_FRAMES = 2;
+const REPIN_MAX_MS = 3000;
+const REPIN_GESTURE_MS = 400;
 let repinSeq = 0;
 
 function repinUntilStable(box) {
@@ -1541,16 +1555,57 @@ function repinUntilStable(box) {
   const seq = ++repinSeq;
   const t0 = performance.now();
   let prev = -1;
+  let stable = 0;
   const step = () => {
     if (seq !== repinSeq || !store.nearBottom) return;
     const h = box.scrollHeight;
     if (h !== prev) {
       prev = h;
+      stable = 0;
       pinBottom(box);
+    } else if (++stable >= REPIN_STABLE_FRAMES) {
+      return; // 高度稳住了:这一轮采样结束(不用等满 REPIN_MAX_MS)
     }
-    if (performance.now() - t0 < REPIN_BUDGET_MS) requestAnimationFrame(step);
+    if (performance.now() - t0 < REPIN_MAX_MS) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/* 「盯内容高度」的第二只眼(§8.46 ②):ResizeObserver 盯 #messages 的每个直接子元素。
+ * renderMessages 收尾时 sync 一次(新建 / 换掉的节点跟着换);高度一变就补贴一次 ——
+ * 判定仍旧只有「还贴着底」(store.nearBottom),用户翻上去了绝不把人拽下来。 */
+let repinObs = null;
+const repinSeen = new Set();
+
+function syncRepinWatch() {
+  const box = $('#messages');
+  if (!box || typeof ResizeObserver !== 'function') return;
+  if (!repinObs) {
+    repinObs = new ResizeObserver(() => {
+      if (!store.selected || !store.nearBottom) return;
+      // 刚点过(多半是点开 <details> / 点消息里的按钮):内容长高是用户自己要的,别抢
+      if (Date.now() - (store.gestureAt || 0) < REPIN_GESTURE_MS) return;
+      pinBottom(box);
+      updateJumpLatest(true);
+    });
+  }
+  for (const el of Array.from(box.children)) {
+    if (repinSeen.has(el)) continue;
+    repinSeen.add(el);
+    repinObs.observe(el);
+  }
+  for (const el of repinSeen) {
+    if (el.parentElement === box) continue;
+    repinSeen.delete(el);
+    repinObs.unobserve(el);
+  }
+}
+
+function setupRepinWatch() {
+  syncRepinWatch();
+  if (store.repinWired) return;
+  store.repinWired = true;
+  document.addEventListener('click', () => { store.gestureAt = Date.now(); }, true);
 }
 
 function setupJumpLatest() {
@@ -3299,6 +3354,7 @@ function renderMessages() {
   updateJumpLatest(atB);
   // 贴完底之后再跟几帧:cvmany 的离屏估值是【贴完之后】才落定的,一落定就把底顶歪(见 repinUntilStable)
   if (pinned && box.classList.contains('cvmany')) repinUntilStable(box);
+  syncRepinWatch(); // §8.46:盯内容高度那只眼(新建/换掉的节点跟着换,晚了才撑开的图也接得住)
 
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
@@ -6582,6 +6638,7 @@ function init() {
   setupJumpLatest(); // 一键回底(TUI 的 Jump to latest / End)
   setupMsgState(); // 拉消息的状态行(正在加载 / 加载失败 + 重试)
   setupListState(); // 拉会话列表的状态行(同上,挂在左栏里,§8.45)
+  setupRepinWatch(); // 盯内容高度的补贴底(§8.46)
   setupAttachments();
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)

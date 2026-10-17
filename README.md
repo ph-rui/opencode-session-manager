@@ -470,7 +470,7 @@ node test/ui-mobile-run.js    # 手机端窄屏适配:两个视口各跑一遍(3
 UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(格式 宽,高;多个用 ; 分隔)
 ```
 
-- `smoke.sh`:301 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
+- `smoke.sh`:303 项。含顶栏/分栏条改造的结构断言(8 个控件都在 `#topbar` 切片内、`#btnList` 在 `#resizer-mid` 切片内而不在顶栏、首页不再有 `#filters`/`<aside>`/`#resizer-left` 且只剩 1 个分栏条、`styles.css` 主区为 `var(--list-w, 560px) var(--rz-w, 16px) minmax(0, 1fr)` 且不再写死高度)、
   工具卡片的 3 项样式断言(有 diff 配色变量、`.dl.add/.dl.del`、`.dfile/.diff`),以及列表折叠/恢复的 4 项(收起时为分栏条留 16px 窄槽、**收起时不隐藏分栏条**、**折叠记忆只认 `sessionStorage`**(刷新同一标签页保持、新标签页展开,localStorage 里的老键谁也不碰)与 hash 持久化),再加 H 组的 7 项(会话区字号旋钮 `--chat-fs` 与区内相对 `em`、agent/skill 提及的样式与渲染、`pushState`+`popstate` 前后退同步、滚动位置锚点 `ocs.scroll`/`sessionStorage`、顶栏条件持久化与 `setupFilters`、用户消息提及渲染),
    H 组 6 的 8 项(附件与 `@` 补全的前端逻辑、上传必须走 `/api/experimental/fs/write` 而不是自建端点、`#mentions`/`.achip`/`.att-img`/`.att-src` 样式、输入区的附件按钮/文件框/待发送行/补全下拉、`/__health` 给出 `uploadDir`、代理会建目录并定期清理、附件 uri 必须加 `file://` 前缀),
    外加**两条顺序锁**:用 `awk` 取 `init()` 函数体,断言 `setupFilters()` 排在 `loadSessions` 之前(否则启动会按默认值白拉一次)、`setupAttachments()` 排在 `paintDelivery()` 之前(先接线再画输入区),
@@ -479,7 +479,7 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
    再加性能与投递的各 3 项:`.cvmany` 离屏跳渲染(`#messages.cvmany > .msg` + `content-visibility` + 估值高度都在、**反向封锁**不许挂成无条件的 `#messages > .msg`、开关由 `renderMessages()` 按 `CV_MIN_MSGS` 挂且 `ui-layout` 有正反两面断言)、运行中默认投递 = 插话(`const DEFAULT_DELIVERY = 'steer'`、`store.delivery` 走这个常量而不是写死字面量、`setDelivery()` 里非法值回默认)。
    再加**拉消息失败不许一声不响**的 8 项(移动端设计 §8.34:`#messages` 里那条状态行的结构、`setupMsgState()` 定义 1 次 + `init()` 1 次的接线锁、重试次数 `MSG_TRIES = 3` 与退避 `[800, 2500]`、失败亮原因 + 一个「重试」、**「空数组」与「没拿到」分家**(`Array.isArray(j.data)` / 缺 `data` / 半截正文都算失败)、「正在加载」慢到 250ms 才露且切会话/取消选中把在途请求作废、`.msgstate[hidden]` 必须显式写、`ui-jump.html` 里有这组断言)。
    再加**一页拉多少条**的 2 项(移动端设计 §8.35:窄屏 `MSG_PAGE_NARROW = 30` / 桌面 `MSG_PAGE_WIDE = 100`、口径只有 `msgPageSize()` 一处且首屏与翻页共用、`ui-jump.html` 反向断言)。
-   再加**贴完底再跟几帧**的 2 项(移动端设计 §8.36:`repinUntilStable()` 只在 `cvmany` 下启动、有 `REPIN_BUDGET_MS` 上限、`repinSeq++` 三个作废点(切会话/取消选中/再渲染)、停手的两条硬条件(又渲染了 / 用户往上滚了)、`ui-jump.html` 反向断言)。
+   再加**贴完底再跟几帧**的 2 项(移动端设计 §8.36 / §8.46:`repinUntilStable()` 只在 `cvmany` 下启动、有 `REPIN_MAX_MS` 自保上限、`repinSeq++` 三个作废点(切会话/取消选中/再渲染)、停手的三条硬条件(又渲染了 / 用户往上滚了 / 高度连续两帧没变)、`ui-jump.html` 反向断言)+ **盯内容高度**的 2 项(§8.46:`ResizeObserver` 只认 `#messages` 的子元素、刚点过 400ms 内不抢着贴、`ui-jump.html` 里有「迟到撑开也贴回」与「刚点过不抢」两组)。
    再加**消息列表摘掉 data: 图**的 4 项(移动端设计 §8.37:代理里 `stripToolUris()`/`isMessageListUrl()` 这对纯函数在、URL 正则只认 `/api/session/<id>/message`、只有那一条走缓冲改写且解析失败一律原样发、只摘 `data:` 开头的 uri(留 name/mime + `omitted` 字节数)、**SSE 的流式透传不许被顺手缓冲**、纯函数已导出、`test/strip-run.js` 在)。
    再加**选中的会话不在列表页里时那两排不许消失**的 2 项(移动端设计 §8.39:判据只有「有没有选中会话」—— `renderChatOps()` 的 `bar.hidden = !store.selected` + `blankControls()` 在 + `refreshSessionInfo()` 里补画 `renderChatOps()`,以及**一条源码顺序锁**:`selectSession()` 里 `if (!s) refreshSessionInfo(id);` 必须排在 `await Promise.all([…])` 之前(那组里任何一条卡住都拖不住它))。行为断言在 `ui-layout` 的幽灵会话那一组里。
    再加**窄屏收掉那一行 + 滚到顶自动拉更旧**的 2 项(移动端设计 §8.41,起因是用户「主要是手机端屏幕下,显示太多东西没必要」):`html.narrow #chatOps, html.narrow #older { display: none; }` 两条都在(只收几个 chip 不收整行 = 一行还是 40px,所以两条一起断),以及 `setupAutoOlder()` 必须接进 `init()` 且**只有那一处接线**(定义 1 + init 1)、`autoLoadOlder(box)` + `AUTO_OLDER_TOP = 120` 在、窄屏判定源仍是 `html.narrow`、`store.msgError` 非空时不自动重撞 + 拉完那段锚点(`scrollAnchor()` / `applyScrollAnchor(at)`)在 —— 这一条锁的是「收掉那一行之后翻旧还有路」,只收不补等于手机上再也看不到更旧的消息。行为断言在 `ui-jump` 的 7b/7c 组与 `ui-mobile` 的 C/D 组。
@@ -603,7 +603,7 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   **前进 / 后退**(点会话入栈、重复点同一个不多压一格、收到 `popstate` 切到 URL 里的会话且不重复入栈、后退到无 hash 时取消选中并清空对话区、空操作不入栈)、
   **会话内滚动位置**(跳到底部 / 存锚点 / 刷新后回到原处且确实不在底部 / 只还原一次 / 点会话进来仍跳底部 / 锚点消息不存在时退回像素值 / 无存档照旧 / **没有存档的长会话深链到底**(不塞 `anchor` 为 `null` 的 pending —— 那会拦住 `forceBottom`,长会话一打开就停在最上面,见移动端设计 §8.23)/ 上限 20 与淘汰顺序 / 存的是 `sessionStorage`;外加**长会话挂 `.cvmany` 让离屏消息跳过渲染、短会话不挂**(不留下「估值高度撑出假滚动条」的机会))、
   **顶栏条件持久化**(空存档的默认值、四项恢复、记住的目录不在结果里也能选回、四类控件改动即时落盘、清空搜库存空串、存的是 `localStorage`)。
-- `ui-jump-run.js`:116 项浏览器内断言,覆盖一键回底「跳到最新 ↓」:形状(`#jumpLatest` 是 `#messages` 的**子元素**、`.chip`、默认 `hidden`、文案)、接线(`wired` 标记、重复接线不再挂监听、只按当前状态重画)、
+- `ui-jump-run.js`:123 项浏览器内断言,覆盖一键回底「跳到最新 ↓」:形状(`#jumpLatest` 是 `#messages` 的**子元素**、`.chip`、默认 `hidden`、文案)、接线(`wired` 标记、重复接线不再挂监听、只按当前状态重画)、
   **显隐判定**(刚选中落底部时收起、往上翻就露出来、滚回底部又收起、短会话收起、没选中收起;**走浏览器真派发的那条 `scroll` 事件**,不是手动调函数;另外手工把 `hidden` 改错再补派发一次 `scroll` 就该被纠正回来,证明监听确实挂在 `#messages` 上)、
   **真布局**(露出来时它真的钉在滚动口下沿且贴右:底边在 `#messages` 底边之上 24px 内、右沿离内边距不到 40px、带阴影)、
   **口径**(79px 算在底部、80px 不算、`BOTTOM_SLACK === 80`)、**什么才算「用户往上滚」**(照移动端设计 §8.23:容器变矮 —— 状态条出现 / 底板展开 / `#asks` 弹出 / 软键盘顶起 —— 把离底距离撑大时**不关**跟随;`scrollTop` 比上次记下的**变小**了才关;让路期间容器变矮一动不动;`pinBottom()` 会把贴底时的 `scrollTop` 记下来,`atBottom()` 保持纯几何)、**新内容到达**(往上翻着时新内容进来按钮仍露着**且不把人拽到底部**;就在底部时仍然自动跟随且按钮不冒出来)、
@@ -623,10 +623,13 @@ UI_CASES='360,780' node test/ui-mobile-run.js   # 想量别的尺寸时覆盖(�
   另有 5 项锁**一页拉多少条**(见移动端设计 §8.35):桌面(`html` 不带 `narrow`)一页 `limit=100`、
   手机(`html.narrow`)一页 `limit=30`、**窄屏翻旧也是 30**(不然翻一页又拉回十几 MB)、
   转回宽屏又按 100(口径跟着类名走,转屏即时生效)、两个常量与 `msgPageSize()` 只有一处。
-  另有 10 项锁**贴完底再跟几帧**(见移动端设计 §8.36,起因是「打开会话停在最新消息上面一截」):
-  预算常数与函数在、长会话挂着 `cvmany`、**贴完底之后内容又变高(≈估值落定)会被自动贴回底部**、
+  另有 17 项锁**贴完底再跟几帧 / 盯内容高度**(见移动端设计 §8.36 与 §8.46,起因是「打开会话停在
+  最新消息上面一截」、以及「图迟一步撑开就跟不上了」):收手条件是高度稳定 + 一道自保上限(不再盯时间)、
+  长会话挂着 `cvmany`、`#messages` 的子元素全在 `ResizeObserver` 的观察名单里、
+  **高度稳的时候两条采样就收手**(不白等满上限)、**贴完底之后内容又变高(≈估值落定)会被自动贴回底部**、
   按钮不因此冒出来、**往上滚让路之后再变高一动不动**、按钮该露着、清掉高的那块再复位、
-  **每一次渲染都把上一轮采样作废**(`repinSeq` 涨了)。
+  **采样早收手之后图迟到撑开也照样贴回**(靠 ResizeObserver,不在任何时间窗口里)、
+  **刚点过(<details> 撑高)不抢着贴**、**过了那 400ms 照旧贴**、**每一次渲染都把上一轮采样作废**(`repinSeq` 涨了)。
   另有 12 项锁**选中的会话不在列表页里时那两排不许消失**(见移动端设计 §8.39,起因是
   「手机端不显示导出/在TUI打开/归档那一栏」+「输入框下面只剩进度条」):用一个「列表页里没有它、
   消息却拿得到」的幽灵会话走一遍 `selectSession` —— 消息照旧拉得到(对得上用户看到的样子)、

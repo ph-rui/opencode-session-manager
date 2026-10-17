@@ -1766,21 +1766,37 @@ else
   echo "FAIL: ui-jump.html 里没有页大小的断言"; fail=$((fail + 1))
 fi
 
-# ---- R13 组:贴完底再跟几帧(cvmany 的离屏估值是贴完之后才落定的;§8.36)----
-if has "$APPJS" 'function repinUntilStable(box)' && has "$APPJS" 'const REPIN_BUDGET_MS = 800' &&
-   has "$APPJS" 'requestAnimationFrame(step)' &&
+# ---- R13 组:贴完底再跟几帧(cvmany 的离屏估值是贴完之后才落定的;§8.36 / §8.46)----
+if has "$APPJS" 'function repinUntilStable(box)' && has "$APPJS" 'const REPIN_MAX_MS = 3000' &&
+   has "$APPJS" 'const REPIN_STABLE_FRAMES = 2' && has "$APPJS" 'requestAnimationFrame(step)' &&
    has "$APPJS" "if (pinned && box.classList.contains('cvmany')) repinUntilStable(box)" &&
    [ "$(printf '%s' "$APPJS" | grep -oF 'repinSeq++' | wc -l)" = 3 ]; then
-  echo "PASS: 贴完底再跟几帧:只在 cvmany 下、有预算上限,切会话/取消选中/再渲染三处都作废"; pass=$((pass + 1))
+  echo "PASS: 贴完底再跟几帧:只在 cvmany 下、有自保上限,切会话/取消选中/再渲染三处都作废"; pass=$((pass + 1))
 else
-  echo "FAIL: 「贴完底再跟几帧」没接对(或缺作废点/预算上限)"; fail=$((fail + 1))
+  echo "FAIL: 「贴完底再跟几帧」没接对(或缺作废点/自保上限)"; fail=$((fail + 1))
 fi
 if has "$APPJS" 'if (seq !== repinSeq || !store.nearBottom) return;' &&
+   has "$APPJS" '} else if (++stable >= REPIN_STABLE_FRAMES) {' &&
    has "$(cat "$(dirname "$0")/ui-jump.html")" 'repinUntilStable' &&
-   has "$(cat "$(dirname "$0")/ui-jump.html")" 'REPIN_BUDGET_MS'; then
-  echo "PASS: 采样停下来有两条硬条件(又渲染了 / 用户往上滚了),ui-jump 里有这组断言"; pass=$((pass + 1))
+   has "$(cat "$(dirname "$0")/ui-jump.html")" 'REPIN_STABLE_FRAMES'; then
+  echo "PASS: 采样停下来有三条硬条件(又渲染了 / 用户往上滚了 / 高度稳住了),ui-jump 里有这组断言"; pass=$((pass + 1))
 else
   echo "FAIL: 采样没有停手条件,或 ui-jump.html 里没有这组断言"; fail=$((fail + 1))
+fi
+# §8.46:「图迟一步撑开」不再跟时间赌 —— ResizeObserver 盯内容高度,只要还贴着底就补
+if has "$APPJS" 'function syncRepinWatch()' && has "$APPJS" 'new ResizeObserver(' &&
+   has "$APPJS" 'syncRepinWatch(); // §8.46' && has "$APPJS" 'function setupRepinWatch()' &&
+   has "$INIT_FN_O" 'setupRepinWatch()' &&
+   has "$APPJS" 'if (Date.now() - (store.gestureAt || 0) < REPIN_GESTURE_MS) return;'; then
+  echo "PASS: 盯内容高度的是 ResizeObserver(每次渲染换观察名单),刚点过的不抢着贴"; pass=$((pass + 1))
+else
+  echo "FAIL: 盯内容高度那只眼没接上(或缺「刚点过不抢」那条)"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-jump.html")" '图迟到撑开(采样早收手了)' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '刚点过就不抢'; then
+  echo "PASS: ui-jump 里有「迟到撑开也贴回」与「刚点过不抢」两组断言"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-jump.html 里缺「迟到撑开」/「刚点过不抢」的断言"; fail=$((fail + 1))
 fi
 
 # ---- R14 组:消息列表里摘掉 data: 图(面板一个字节都不显示,却占 89% 的流量;§8.37)----

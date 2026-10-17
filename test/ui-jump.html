@@ -636,15 +636,40 @@
        * cvmany 下 scrollHeight 是估值,浏览器是【贴完之后】才把它落定的 —— 一落定
        * scrollTop 就被夹回去,而这时往往已经没有下一次渲染来纠正(事件不来就永远停着)。
        * 这一段用「内容突然变高」模拟那次落定:老写法里没人管,于是停在最新消息上面一截。 */
-      T('有 repinUntilStable 与预算常数(跟帧是有上限的)', typeof repinUntilStable === 'function' && REPIN_BUDGET_MS >= 400,
-        typeof repinUntilStable + '/' + REPIN_BUDGET_MS);
+      T('有 repinUntilStable,收手条件是「高度稳定」+ 一道自保上限(§8.46:不再盯时间)',
+        typeof repinUntilStable === 'function' && REPIN_STABLE_FRAMES >= 2 && REPIN_MAX_MS >= 1000,
+        typeof repinUntilStable + '/' + REPIN_STABLE_FRAMES + '/' + REPIN_MAX_MS);
       await selectSession('ses_long'); // 60 条 → cvmany 挂着
       await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
       T('(前置)长会话挂着 cvmany', box.classList.contains('cvmany'));
       T('(前置)此刻在底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
+      /* 「盯内容高度」那只眼:每次渲染收尾都把 #messages 的子元素交给 ResizeObserver */
+      T('renderMessages 收尾时把内容元素全交给 ResizeObserver(不是常驻 rAF)',
+        typeof syncRepinWatch === 'function' && typeof setupRepinWatch === 'function' &&
+        repinSeen.size === box.children.length,
+        repinSeen.size + '/' + box.children.length);
+      /* 高度稳的时候两帧就收手,不再一路跟满 REPIN_MAX_MS。
+       * 先等高度真的稳住:刚切进这条 60 条的会话时,估值还在落定。 */
+      var hPrev = -1;
+      var hSame = 0;
+      for (var gi9 = 0; gi9 < 30 && hSame < 3; gi9++) {
+        await tick();
+        if (box.scrollHeight === hPrev) hSame++;
+        else { hSame = 0; hPrev = box.scrollHeight; }
+      }
+      T('(前置)高度已经稳住(估值落定完了)', hSame >= 3, hSame);
+      var pins = 0;
+      var realPin = pinBottom;
+      pinBottom = function (b) { pins++; return realPin(b); };
+      repinUntilStable(box);
+      await tick(); await tick(); await tick(); await tick(); await tick();
+      pinBottom = realPin;
+      T('高度连续两帧没变就收手(以前是白等满 800ms)', pins === 1, pins);
       var grow = document.createElement('div');
       grow.style.height = '600px';
       box.appendChild(grow);
+      syncRepinWatch(); // 真页面里这步是 renderMessages 收尾做的
+      store.gestureAt = 0; // 前面那些组点过按钮,别让「刚点过就不抢」这条挡住
       await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
       T('贴完底之后内容又变高(≈估值落定)→ 自动贴回底部', maxTop() - box.scrollTop < 2,
         box.scrollTop + '/' + maxTop());
@@ -663,6 +688,33 @@
       box.scrollTop = box.scrollHeight;
       await tick();
       T('(复位)清掉那块高的、回到底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
+
+      /* 「图迟一步撑开」:采样早收手了(不在任何时间窗口里),靠 ResizeObserver 接住 */
+      var late = document.createElement('div');
+      late.style.height = '0px';
+      box.appendChild(late);
+      syncRepinWatch();
+      await tick();
+      T('(前置)迟到的那个元素已经在观察名单里', repinSeen.has(late) === true);
+      late.style.height = '700px';
+      await tick(); await tick(); await tick();
+      T('图迟到撑开(采样早收手了)→ 照样贴回底部', maxTop() - box.scrollTop < 2,
+        box.scrollTop + '/' + maxTop());
+      /* 用户刚点过(多半是点开 <details>):内容长高是他自己要的,不抢着贴 */
+      store.gestureAt = Date.now();
+      var before9 = box.scrollTop;
+      late.style.height = '1000px';
+      await tick(); await tick(); await tick();
+      T('刚点过就不抢(点开 <details> 撑高不该把人拽到底)',
+        box.scrollTop === before9 && maxTop() - box.scrollTop > 100, box.scrollTop + '/' + maxTop());
+      store.gestureAt = 0;
+      late.style.height = '1100px';
+      await tick(); await tick(); await tick();
+      T('(复原)过了那 400ms 的话它照旧贴(免得那条挡住正常补贴)', maxTop() - box.scrollTop < 2,
+        box.scrollTop + '/' + maxTop());
+      late.remove();
+      box.scrollTop = box.scrollHeight;
+      await tick();
 
       /* 新一轮渲染要把上一轮采样作废 —— 否则它会在新内容上乱贴位置 */
       var seq0 = repinSeq;
