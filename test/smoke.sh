@@ -349,11 +349,11 @@ if has "$APPJS" "const DIFF_VIEW_KEY = 'ocs.diffView';" &&
    has "$APPJS" 'DIFF_SPLIT_MIN_PX = 760' &&
    has "$APPJS" 'function diffViewWanted(' &&
    has "$APPJS" 'diffViewWanted(status, pref, wide)' &&
-   has "$APPJS" 'localStorage.setItem(DIFF_VIEW_KEY, v)' &&
+   has "$APPJS" 'localStorage.setItem(DIFF_VIEW_KEY, next)' &&
    has "$APPJS" 'diffViewSet(splitNow ? ' &&
    has "$APPJS" 'function syncDiffWidth(' && has "$APPJS" 'new ResizeObserver(' &&
    ! has "$APPJS" 'const diffViews = new Map()'; then
-  echo "PASS: app.js 的并排偏好是全局持久偏好(§8.53:diffViewWanted / localStorage / 没有按卡片的 diffViews)"; pass=$((pass + 1))
+  echo "PASS: app.js 的并排偏好是全局持久偏好(§8.53/§8.60:diffViewWanted / localStorage 缓存 / 没有按卡片的 diffViews)"; pass=$((pass + 1))
 else
   echo "FAIL: app.js 并排偏好还是按卡片的临时状态(§8.53 要照 TUI 的 diffs.view)"; fail=$((fail + 1))
 fi
@@ -2153,6 +2153,41 @@ if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.59 最近会话标签�
   echo "PASS: test/ui-capabilities.html 里有标签栏的浏览器断言(自动入栏 / 切换 / 关闭 / 上限 / 窄屏)"; pass=$((pass + 1))
 else
   echo "FAIL: test/ui-capabilities.html 缺标签栏的关键断言"; fail=$((fail + 1))
+fi
+
+# §8.60 TUI diff 偏好共享:面板不再只记 localStorage,而是读写 cli.json 的 diffs.view
+if has "$SERVERJS" "url === '/__config/diffs'" && has "$SERVERJS" 'function readDiffView()' &&
+   has "$SERVERJS" 'function writeDiffView(view)' && has "$SERVERJS" 'diffView: dv.view'; then
+  echo "PASS: /__config/diffs 路由、读写函数与 health 的 diffView 都在"; pass=$((pass + 1))
+else
+  echo "FAIL: 服务端没接 /__config/diffs 或 health 没带 diffView"; fail=$((fail + 1))
+fi
+if has "$SERVERJS" 'fs.renameSync(tmp, CLI_CONFIG_FILE)' && has "$SERVERJS" 'fs.chmodSync(tmp, mode)' &&
+   has "$SERVERJS" 'JSON.stringify(obj, null, 2)' && has "$SERVERJS" 'CONFIG_BODY_MAX'; then
+  echo "PASS: 写 cli.json 走同目录临时文件 + rename,保留权限,只收小请求体"; pass=$((pass + 1))
+else
+  echo "FAIL: cli.json 的写法不是原子替换,或没保留权限 / 没限制请求体"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'function applyServerDiffPref(view, mtime)' &&
+   has "$APPJS" 'function loadDiffPref()' && has "$APPJS" "api('/__config/diffs'" &&
+   has "$APPJS" "method: 'PATCH'" && has "$APPJS" 'loadDiffPref(); // §8.60'; then
+  echo "PASS: 面板首屏读 /__config/diffs、切换时 PATCH 回去,init 已接线"; pass=$((pass + 1))
+else
+  echo "FAIL: 面板没读/写 cli.json,或 init 没接 loadDiffPref"; fail=$((fail + 1))
+fi
+if has "$APPJS" "hasOwnProperty.call(j, 'diffView')" && has "$APPJS" 'diffPrefMigrated' &&
+   has "$APPJS" '并排偏好没写进 cli.json:' && has "$APPJS" 'diffPrefMtime'; then
+  echo "PASS: health 带回 TUI 偏好、旧 localStorage 只迁移一次、写失败有提示"; pass=$((pass + 1))
+else
+  echo "FAIL: health 同步 / 迁移 / 写失败提示缺了一块"; fail=$((fail + 1))
+fi
+SMOKE_CFG="$(dirname "$0")/config-e2e-run.js"
+SMOKE_TOOLS="$(dirname "$0")/ui-tools.html"
+if [ -f "$SMOKE_CFG" ] && has "$(cat "$SMOKE_CFG")" 'OPENCODE_CONFIG_DIR' &&
+   has "$(cat "$SMOKE_CFG")" 'diffs.view' && has "$(cat "$SMOKE_TOOLS")" '§8.60 TUI diff 偏好共享'; then
+  echo "PASS: test/config-e2e-run.js 在,ui-tools.html 有 §8.60 的浏览器断言"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺 config 端到端测试或 ui-tools 的共享偏好断言"; fail=$((fail + 1))
 fi
 
 echo

@@ -2590,16 +2590,17 @@ phone-393       narrow=true  split=false btn=true  btnShown=none  pairs=0
 
 | 位置 | 现在的行为 |
 |---|---|
-| `DIFF_VIEW_KEY = 'ocs.diffView'` | 全局偏好,`localStorage`;值 `split` / `unified`,没记过 = auto |
+| `DIFF_VIEW_KEY = 'ocs.diffView'` | 全局偏好;真正的账在 TUI 的 `cli.json` 的 `diffs.view`(§8.60),`localStorage` 只当首屏缓存 |
 | `DIFF_SPLIT_MIN_PX = 760` | 100 格 × 约 7.6px(面板等宽字体 0.92 × 14px);量 `#messages.clientWidth` |
 | `diffViewWanted(status, pref, wide)` | 纯判定:`modified` + 够宽 + 偏好不是 `unified` 才分栏 |
-| `diffViewSet()` + 全局重画 | 点任一卡片上的「⇆ 并排」= 写偏好,然后把消息里**所有** diff 卡片一起重画;被点的那张按滚动差补偿,留在原处 |
+| `diffViewSet()` + 全局重画 | 点任一卡片上的「⇆ 并排」= 写偏好(PATCH 回 `cli.json`),然后把消息里**所有** diff 卡片一起重画;被点的那张按滚动差补偿,留在原处 |
 | `syncDiffWidth()` + `ResizeObserver` | auto 档随面板宽度重算(窗口缩放、拖分栏条),只在「够不够宽」翻面时重画;120ms 防抖 |
 | 窄屏 | `<html>.narrow` 仍然一票否决(渲染成统一视图 + CSS 收掉按钮)—— 手机的横屏 894px 虽然「够宽」,但 `short` 档下切两栏同样没意义 |
 
-**没做的事(坦白记一笔)**:面板没有直接去读 TUI 的 `cli.json` 的 `diffs.view`。两边各自持久 ——
-TUI 记 `cli.json`,面板记 `localStorage`;语义照着 TUI,但账不是同一本。要真共享得让服务端
-开一个配置读取接口并盯文件变化,这一轮不做。
+**已经收掉(§8.60)**:面板不再只记自己的 `localStorage` —— 首屏读 TUI 的
+`~/.config/opencode/cli.json` 的 `diffs.view`,点「⇆ 并排」时 PATCH 回同一个字段;
+TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 只当首屏缓存与
+服务端不可达时的退路;§8.60 有完整取舍。
 
 **实测**(真会话 `ses_demo…`,探针跑两趟抓到 24~34 张 diff 卡片 —— 流式会话里
 渲染窗口内的卡片数会变;探针 `/tmp/ocsm-probe/pw/pref-split.js`):
@@ -3001,6 +3002,71 @@ tab 栏放在**聊天区顶部**,**左列表保留**,手机竖屏也显示。其
 
 ---
 
+### 8.60 共享 TUI 的 diff 偏好(cli.json 的 diffs.view)
+
+**起因**:上一批 1–4 的第 2 项;§8.53 留的「面板没读 TUI 的 `cli.json`」。
+
+**结论**:只共享 `diffs.view` 一个字段,不碰 `diffs.wrap` / `tree` / `single` / `source`。
+面板没有这些控件的 UI 或渲染路径:统一视图固定按字符折行(§8.58);文件树 / 单文件 /
+来源只在 TUI 的独立 diff viewer 里有意义。`diffs.view` 正好是面板唯一有的三档偏好。
+
+**服务端**:
+
+| 端点 / 位置 | 行为 |
+|---|---|
+| `GET /__config/diffs` | `{view, mtime}`;`view` 只在 `cli.json` 里真有合法三档时返回,没记过就是 `null` |
+| `PATCH /__config/diffs` | body 只收 `{"view":"auto|split|unified"}`;多余字段 / 坏 JSON 400,超过 64KB 413 |
+| 写文件 | 读 → 只改 `obj.diffs.view` → `JSON.stringify(obj,null,2)+'\n'` → 同目录临时文件 + `chmod` 原 mode(新文件 0600)+ `rename`;TUI 的 watcher 永远读不到半截 JSON |
+| 拒绝覆盖 | `cli.json` 不是严格 JSON,或 `diffs` 不是对象时 GET 500、PATCH 500,原字节一个不动 |
+| 鉴权 / 缓存 | 路由排在来源白名单与 Basic 鉴权之后;`cache-control: no-store` |
+| `/__health` | 顺手带 `diffView` / `diffMtime` —— 面板本来每 15s 轮询,不另开 SSE / 轮询 |
+
+只支持严格 JSON。`cli.json` 若有注释或尾逗号,`JSON.parse` 会拒绝(接口带原因),
+宁可不写也不猜;TUI 自己生成 / 迁移出来的文件是严格 JSON。
+
+**面板**:
+
+- `diffViewPref()` 仍同步:先读 `localStorage['ocs.diffView']` 当首屏缓存;`loadDiffPref()`
+  首屏 GET 服务端,`applyServerDiffPref()` 用 mtime 挡住旧响应 —— 只有新值 / 新 mtime
+  才更新偏好,并在页面里已有 diff 卡片时一起重画。
+- 点「⇆ 并排」:`diffViewSet()` 先本地乐观更新并立刻重画,再 PATCH `{view}`;成功用返回的
+  `view` / `mtime` 回填;失败只 toast「并排偏好没写进 cli.json:…」,页面继续按刚点的值工作,
+  下一次 health 会按 TUI 那本账同步回来。
+- TUI → 面板:`health()` 每 15s 已经会跑,最多晚 15s;正在写回时不接受 health(免得旧值
+  把乐观值打回去);比已应用值更旧的 mtime 忽略。
+- 迁移:首次 GET 若 `cli.json` 没有 `view`、而 `localStorage` 里还有旧 `split` / `unified`,
+  只迁一次(PATCH 回去),之后两边以 `cli.json` 为准;没有旧值就保持 auto。
+- `localStorage` 仍写,但降级为缓存 / 退路;隐私模式写不进去时用内存 cache,功能照常。
+
+**实测**(临时代理 `49451` + 临时 `OPENCODE_CONFIG_DIR` + 临时 `cli.json`,不碰用户自己的配置;
+真会话 `ses_demo…`,22 张 diff 卡片):
+
+```
+init cli=unified                  pref=unified split=0
+点一下                            pref=split   split=22  cli=split
+模拟 TUI 改 unified + health()    pref=unified split=0   cli=unified
+刷新                              pref=unified split=0
+ERRORS []
+```
+
+**取舍**:
+
+- 面板只共享 `view`;`wrap` / `tree` / `single` / `source` 仍只在 TUI。面板没有对应按钮,
+  硬把 `wrap:none` 搬过来还会把 §8.58 的折行弄丢。
+- 写的是本机文件:面板与 TUI 得在同一台机器 / 同一个 `OPENCODE_CONFIG_DIR` 下。不跨设备
+  同步,也不跨浏览器标签页(每个标签页自己轮询 health)。
+- 面板与 TUI 同时写时靠原子 rename 保证不出现半截文件,最后一次 rename 赢;没有跨进程锁。
+  极端情况下 TUI 的格式保留写入与面板的整文件重写会互相覆盖,但字段级只是最后一次赢。
+- 如果 TUI 是用 `OPENCODE_CLI_CONFIG_CONTENT` 启动的(环境里直接给配置内容),它不看
+  `cli.json`;这时面板的写回对它无效。正常安装不会这样。
+- `cli.json` 有注释 / 尾逗号时面板拒绝写(不猜),TUI 侧仍可照常用自己的解析器读。
+
+**回归**:`smoke.sh` 338 → **343**(5 项),`ui-tools` 308 → **316**(8 项),
+新增 `config-e2e-run.js` **40** 项;其余套件计数不变;全量回归 **0 失败**,
+日志 `/tmp/ocsm-probe/perf/regress-860.log`。
+
+---
+
 ---
 
 ## 9. 取舍与理由
@@ -3020,6 +3086,7 @@ tab 栏放在**聊天区顶部**,**左列表保留**,手机竖屏也显示。其
 | 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
 | 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
 | diff 统一视图无条件折行 | 照 TUI 的 `wrapMode="char"`；393px 上不用左右拖着读 | 超长单 token 会断在任意字符；Markdown 代码块仍横向滚（§8.58）|
+| diff 偏好与 TUI 共用 `cli.json` 的 `diffs.view` | 两边一本账，不会「TUI 并排、面板统一」；面板本来只有 view 这一项偏好 | 只共享 view；写本机文件，需同一 `OPENCODE_CONFIG_DIR`；`wrap/tree/single/source` 仍只在 TUI；同时写靠 rename 最后一次赢（§8.60）|
 
 ---
 

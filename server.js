@@ -11,6 +11,7 @@
  *   5. 流式透传 SSE(text/event-stream)
  *   6. 提供 GET /__health 供前端显示连接状态(并告知附件的暂存目录)
  *   7. 维护附件暂存目录(建目录 + 定期清理旧文件)
+ *   8. 提供 /__config/diffs 读写 TUI 的 cli.json diffs.view(§8.60,与 TUI 共用偏好)
  *
  * 仅使用 Node 标准库,零依赖。
  */
@@ -31,6 +32,7 @@ const PANEL_AUTH = process.env.OCS_AUTH || ''; // 形如 "user:pass";设置后�
 const CONFIG_DIR =
   process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), '.config', 'opencode');
 const SERVICE_FILE = path.join(CONFIG_DIR, 'service.json');
+const CLI_CONFIG_FILE = path.join(CONFIG_DIR, 'cli.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 // 面板的「附件粘贴区」:浏览器里选的文件没有服务端路径,而 prompt 的 files[].uri 只认
 // file: URI(服务端自己去读文件),所以先把字节挪到磁盘上。落盘这一步用的是 OpenCode 自带的
@@ -129,6 +131,104 @@ function readRequestBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+/* --------------------- TUI diff 偏好(cli.json,§8.60) ---------------------
+ * TUI 把 diff 展示偏好记在 ~/.config/opencode/cli.json 的 diffs.view;面板要和
+ * TUI 共用同一本账,所以只读写这一个字段。其它键、键顺序、文件权限都保留。
+ * 写文件用同目录临时文件 + rename:TUI 的 watcher 永远读不到半截 JSON。
+ */
+const DIFF_VIEWS = new Set(['auto', 'split', 'unified']);
+const CONFIG_BODY_MAX = 64 * 1024;
+
+function readCliConfig() {
+  try {
+    const stat = fs.statSync(CLI_CONFIG_FILE);
+    const raw = fs.readFileSync(CLI_CONFIG_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      return { ok: false, error: 'cli.json 顶层不是对象' };
+    }
+    return { ok: true, obj, mode: stat.mode & 0o777, mtime: stat.mtimeMs };
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: true, missing: true, obj: null, mtime: 0 };
+    return { ok: false, error: '读不了 cli.json:' + String((e && e.message) || e) };
+  }
+}
+
+function readDiffView() {
+  const r = readCliConfig();
+  if (!r.ok) return { view: null, mtime: 0, error: r.error };
+  const d = r.obj && r.obj.diffs;
+  if (d != null && (typeof d !== 'object' || Array.isArray(d))) {
+    return { view: null, mtime: r.mtime || 0, error: 'cli.json 的 diffs 不是对象' };
+  }
+  const v = d ? d.view : undefined;
+  if (v != null && !DIFF_VIEWS.has(v)) {
+    return { view: null, mtime: r.mtime || 0, error: 'cli.json 的 diffs.view 不是 auto / split / unified' };
+  }
+  return { view: v || null, mtime: r.mtime || 0 };
+}
+
+function writeDiffView(view) {
+  if (!DIFF_VIEWS.has(view)) return { ok: false, status: 400, error: 'view 只能是 auto / split / unified' };
+  const cur = readCliConfig();
+  if (!cur.ok) return { ok: false, status: 500, error: cur.error };
+  const obj = cur.missing ? {} : cur.obj;
+  if (obj.diffs == null) obj.diffs = {};
+  else if (typeof obj.diffs !== 'object' || Array.isArray(obj.diffs)) {
+    return { ok: false, status: 500, error: 'cli.json 的 diffs 不是对象,未写入' };
+  }
+  obj.diffs.view = view;
+  const text = JSON.stringify(obj, null, 2) + '\n';
+  const mode = cur.missing ? 0o600 : (cur.mode || 0o600);
+  const dir = path.dirname(CLI_CONFIG_FILE);
+  const tmp = path.join(dir, '.cli.json.' + process.pid + '.' + crypto.randomBytes(4).toString('hex') + '.tmp');
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmp, text, { mode });
+    fs.chmodSync(tmp, mode);
+    fs.renameSync(tmp, CLI_CONFIG_FILE);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    return { ok: false, status: 500, error: '写 cli.json 失败:' + String((e && e.message) || e) };
+  }
+  let mtime = 0;
+  try { mtime = fs.statSync(CLI_CONFIG_FILE).mtimeMs; } catch (_) {}
+  return { ok: true, view, mtime };
+}
+
+async function configDiffs(req, res) {
+  res.setHeader('cache-control', 'no-store');
+  if (req.method === 'GET') {
+    const r = readDiffView();
+    if (r.error) return sendJson(res, 500, { view: null, mtime: 0, error: r.error });
+    return sendJson(res, 200, { view: r.view, mtime: r.mtime });
+  }
+  if (req.method !== 'PATCH') {
+    res.setHeader('allow', 'GET, PATCH');
+    return sendJson(res, 405, { error: '只支持 GET / PATCH' });
+  }
+  let buf;
+  try {
+    buf = await readRequestBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { error: '没读完请求体:' + String((e && e.message) || e) });
+  }
+  if (buf.length > CONFIG_BODY_MAX) return sendJson(res, 413, { error: '请求体太大' });
+  let body;
+  try {
+    body = JSON.parse(buf.toString('utf8'));
+  } catch (_) {
+    return sendJson(res, 400, { error: '请求体不是合法 JSON' });
+  }
+  const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
+  if (keys.length !== 1 || keys[0] !== 'view' || !DIFF_VIEWS.has(body.view)) {
+    return sendJson(res, 400, { error: '只收 {"view":"auto|split|unified"}' });
+  }
+  const w = writeDiffView(body.view);
+  if (!w.ok) return sendJson(res, w.status || 500, { error: w.error });
+  return sendJson(res, 200, { view: w.view, mtime: w.mtime });
 }
 
 /* ------------------------- 来源地址白名单 ------------------------- */
@@ -658,6 +758,8 @@ function pruneUploads(force) {
 }
 
 async function health(res) {
+  // §8.60:这里带着 TUI 的 diffs.view,必须是实时值;别让浏览器/代理把它缓存住。
+  res.setHeader('cache-control', 'no-store');
   await ensureDiscovered(true);
   ensureUploadDir();
   pruneUploads(false);
@@ -676,6 +778,7 @@ async function health(res) {
   } else {
     detail = state.error || '未发现服务或缺失密码';
   }
+  const dv = readDiffView();
   sendJson(res, 200, {
     ok,
     base: state.base,
@@ -683,6 +786,10 @@ async function health(res) {
     configDir: CONFIG_DIR,
     uploadDir: UPLOAD_DIR,
     home: os.homedir(), // 提示栏把工程路径缩成 ~/...(照 TUI 的 cm(path, home))
+    // §8.60:健康检查本来就每 15s 一次,顺手把 TUI 的 diffs.view 带回来,
+    // 面板不必为「TUI 那边改了偏好」再单开一条轮询/SSE。
+    diffView: dv.view,
+    diffMtime: dv.mtime,
     detail,
   });
 }
@@ -711,6 +818,12 @@ const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
   if (url === '/__health') {
     health(res).catch((e) => sendJson(res, 500, { error: String(e) }));
+    return;
+  }
+  if (url === '/__config/diffs') {
+    configDiffs(req, res).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { error: String(e) });
+    });
     return;
   }
   if (url.startsWith('/api/')) {

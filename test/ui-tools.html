@@ -58,10 +58,26 @@
     window.SERVER = { 'ses_a': [] };
     window.__realFetch = window.fetch.bind(window);
     var json = function (obj) { return { ok: true, status: 200, text: async function () { return JSON.stringify(obj); } }; };
+    window.__prefPatches = [];
+    window.__prefServerView = null;
+    window.__prefServerMtime = 0;
+    window.__prefMtime = 100;
+    window.__prefFail = false;
     window.fetch = async function (url, opts) {
       var u = String(url);
       var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
       if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/__config/diffs') === 0) {
+        if (opts && opts.method === 'PATCH') {
+          var pb = {};
+          try { pb = JSON.parse(opts.body || '{}'); } catch (_) {}
+          window.__prefPatches.push(pb);
+          if (window.__prefFail) throw new Error('config write failed');
+          window.__prefMtime++;
+          return json({ view: pb.view, mtime: window.__prefMtime });
+        }
+        return json({ view: window.__prefServerView, mtime: window.__prefServerMtime });
+      }
       if (u.indexOf('/api/session/active') === 0) return json({ data: {} });
       if (u.indexOf('/api/agent') === 0) return json({ data: AGENTS });
       if (u.indexOf('/api/model') === 0) return json({ data: MODELS });
@@ -1083,6 +1099,7 @@
       var realWide = window.diffWide;
       window.diffWide = function () { return true; };
       try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
+      diffPrefCache = null;
       T('并排:没记过偏好时是 auto,够宽即分栏',
         diffViewPref() === 'auto' && diffHtml(spFiles, { pid: 'p1' }).indexOf('diff split') >= 0);
       var sp = diffHtml(spFiles, { pid: 'p1' });
@@ -1133,6 +1150,7 @@
       store.selected = 'ses_v';
       store.messages = new Map([['v1', { id: 'v1', type: 'assistant', time: { created: 1 }, content: spParts }]]);
       try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
+      diffPrefCache = null;
       setupDiffView();
       renderMessages();
       T('并排:两张卡片各有一个切换按钮', qa('#messages .dswap').length === 2, qa('#messages .dswap').length);
@@ -1177,7 +1195,58 @@
         wrapDl.querySelector('.ln.o').textContent === '');
       wrapBox.remove();
 
+      /* ================= §8.60 TUI diff 偏好共享(cli.json diffs.view) ================= */
+      // 前面几处 diffViewSet 都是 fire-and-forget;先把它们的微任务放干净,
+      // 否则 diffPrefWriting 还没归零,下面 applyServerDiffPref 会被「正在写」挡住。
+      for (var pi = 0; pi < 20; pi++) await Promise.resolve();
+      window.diffWide = function () { return true; };
+      window.__prefPatches = [];
+      await diffViewSet('split');
+      redrawDiffCards('');
+      T('共享:面板切并排会把 {view:"split"} PATCH 给 /__config/diffs',
+        window.__prefPatches.length === 1 && window.__prefPatches[0].view === 'split' &&
+        diffViewPref() === 'split' && localStorage.getItem(DIFF_VIEW_KEY) === 'split',
+        window.__prefPatches);
+      T('共享:切并排后卡片真的分栏', qa('#messages .diff.split').length === 2,
+        qa('#messages .diff.split').length);
+
+      T('共享:TUI 那边改成 unified,health 带来的值会改偏好并重画',
+        applyServerDiffPref('unified', 500) === true &&
+        diffViewPref() === 'unified' && qa('#messages .diff.split').length === 0,
+        { pref: diffViewPref(), split: qa('#messages .diff.split').length });
+      T('共享:比已应用更旧的 mtime 不会把偏好打回去',
+        applyServerDiffPref('split', 400) === false && diffViewPref() === 'unified');
+      T('共享:非法值不动偏好',
+        applyServerDiffPref('sideways', 600) === false && diffViewPref() === 'unified');
+
+      window.__prefServerView = 'split';
+      window.__prefServerMtime = 700;
+      await loadDiffPref();
+      T('共享:首屏 GET /__config/diffs 读回 split', diffViewPref() === 'split' &&
+        localStorage.getItem(DIFF_VIEW_KEY) === 'split', diffViewPref());
+
+      // cli.json 里还没有 view(旧版):面板 localStorage 的旧偏好迁过去一次
+      window.__prefServerView = null;
+      window.__prefServerMtime = 0;
+      window.__prefPatches = [];
+      diffPrefMigrated = false;
+      diffPrefCache = null;
+      try { localStorage.setItem(DIFF_VIEW_KEY, 'unified'); } catch (_) {}
+      await loadDiffPref();
+      T('共享:cli.json 没记过时,把旧 localStorage 偏好迁移一次',
+        diffPrefMigrated === true && diffPrefCache === 'unified' &&
+        window.__prefPatches.length === 1 && window.__prefPatches[0].view === 'unified',
+        window.__prefPatches);
+
+      window.__prefFail = true;
+      await diffViewSet('split');
+      T('共享:写 cli.json 失败会提示,但本页仍按刚点的值工作',
+        diffViewPref() === 'split' && q('#toast').textContent.indexOf('cli.json') >= 0,
+        { pref: diffViewPref(), toast: q('#toast').textContent });
+      window.__prefFail = false;
+
       try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
+      diffPrefCache = null;
       window.diffWide = realWide;
       diffWideSeen = diffCanSplit();
 

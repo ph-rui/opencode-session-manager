@@ -179,6 +179,11 @@ async function health() {
       store.home = j.home; // 提示栏把工程路径缩成 ~/...(照 TUI 的 cm)
       if (store.selected) paintContextUsage();
     }
+    // §8.60:TUI 在 cli.json 里改了 diffs.view,借现成的 15s health 轮询同步;
+    // 没有这个字段的旧代理(或读失败)就不动本地偏好。
+    if (j && Object.prototype.hasOwnProperty.call(j, 'diffView')) {
+      applyServerDiffPref(j.diffView, j.diffMtime);
+    }
     if (j.ok) {
       el.className = 'status ok';
       el.textContent = '已连接 ' + (j.base || '');
@@ -3068,17 +3073,81 @@ function diffCounts(files) {
  */
 const DIFF_VIEW_KEY = 'ocs.diffView';
 const DIFF_SPLIT_MIN_PX = 760;
+let diffPrefCache = null;
+let diffPrefMtime = 0;
+let diffPrefWriting = 0;
+let diffPrefSeq = 0;
+let diffPrefMigrated = false;
 
-function diffViewPref() {
+function readLocalDiffPref() {
   try {
     const v = localStorage.getItem(DIFF_VIEW_KEY);
-    if (v === 'split' || v === 'unified') return v;
+    if (v === 'auto' || v === 'split' || v === 'unified') return v;
   } catch (_) {} // 隐私模式下当「没记过」
-  return 'auto';
+  return null;
 }
 
+function diffViewPref() {
+  if (!diffPrefCache) diffPrefCache = readLocalDiffPref() || 'auto';
+  return diffPrefCache;
+}
+
+/* §8.60 TUI 在 cli.json 里改了 diffs.view → /__health 每 15s 带回来。
+ * 只在「值变了」时重画;正在写回时先让本地乐观值站住,免得旧 health 响应把它打回去。 */
+function applyServerDiffPref(view, mtime) {
+  if (diffPrefWriting > 0) return false;
+  if (view !== 'auto' && view !== 'split' && view !== 'unified') return false;
+  const at = Number(mtime) || 0;
+  if (at && at < diffPrefMtime) return false;
+  const changed = view !== diffViewPref();
+  diffPrefCache = view;
+  if (at) diffPrefMtime = at;
+  try { localStorage.setItem(DIFF_VIEW_KEY, view); } catch (_) {}
+  if (changed && document.querySelector('#messages .dswap')) redrawDiffCards('');
+  return true;
+}
+
+/* 面板里点「⇆ 并排」→ 立即按本地值重画,同时把 diffs.view 写回 cli.json。
+ * 写失败只提示一句;下一次 health 会把 TUI 那本账重新同步回来。 */
 function diffViewSet(v) {
-  try { localStorage.setItem(DIFF_VIEW_KEY, v); } catch (_) {}
+  const next = (v === 'auto' || v === 'split' || v === 'unified') ? v : 'auto';
+  diffPrefCache = next;
+  try { localStorage.setItem(DIFF_VIEW_KEY, next); } catch (_) {}
+  const seq = ++diffPrefSeq;
+  diffPrefWriting++;
+  return api('/__config/diffs', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ view: next }),
+  }).then((j) => {
+    if (seq !== diffPrefSeq) return;
+    if (j && (j.view === 'auto' || j.view === 'split' || j.view === 'unified')) {
+      diffPrefCache = j.view;
+      try { localStorage.setItem(DIFF_VIEW_KEY, j.view); } catch (_) {}
+      if (Number(j.mtime)) diffPrefMtime = Number(j.mtime);
+    }
+  }).catch((e) => {
+    if (seq === diffPrefSeq) flash('并排偏好没写进 cli.json:' + ((e && e.message) || e), 'bad');
+  }).then(() => {
+    diffPrefWriting--;
+  });
+}
+
+/* 首屏先读服务端那本账;cli.json 里还没有 view(旧版)时,把面板以前记在
+ * localStorage 里的偏好迁过去一次 —— 之后两边就以 cli.json 为准。 */
+async function loadDiffPref() {
+  let j;
+  try { j = await api('/__config/diffs'); } catch (_) { return; }
+  if (!j) return;
+  if (j.view === 'auto' || j.view === 'split' || j.view === 'unified') {
+    applyServerDiffPref(j.view, j.mtime);
+    return;
+  }
+  const local = readLocalDiffPref();
+  if (!j.error && !diffPrefMigrated && (local === 'split' || local === 'unified')) {
+    diffPrefMigrated = true;
+    await diffViewSet(local);
+  }
 }
 
 // 面板(聊天区)够不够宽放两栏;量 #messages,拿不到就退回窗口宽度
@@ -7648,6 +7717,7 @@ function init() {
   renderTabs();
   health();
   setInterval(health, 15000);
+  loadDiffPref(); // §8.60 首屏读 TUI 的 cli.json diffs.view(旧本地偏好会迁过去一次)
   setupFilters(); // 先回填顶栏筛选/排序/搜索,再拉列表(否则会按默认值白拉一次)
   // 恢复顺序:先让列表落地(会话标题/目录要能取到),再回到 hash 里那个会话
   loadSessions({ reset: true }).then(restoreFromHash);
