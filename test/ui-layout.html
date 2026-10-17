@@ -538,10 +538,12 @@
       T('还原后锚点被消费掉(只还原一次)', store.restoreScroll === null, store.restoreScroll);
       T('还原走的是同一套渲染(消息都在)', q('#messages').textContent.indexOf('第 0 条消息') >= 0);
 
-      /* 从列表点进会话:仍然跳到底部看最新消息 */
-      box.scrollTop = 10;
+      /* 从列表切走再切回来:也恢复上次读到的位置,不再跳到底部 */
+      await selectSession('ses_a');
       await selectSession('ses_long');
-      T('从列表点进来还是跳到底部', box.scrollTop + box.clientHeight >= box.scrollHeight - 2,
+      T('从列表切回来恢复到上次读到的位置', Math.abs(box.scrollTop - want) <= 2,
+        box.scrollTop + ' vs ' + want);
+      T('切回来后确实不在底部', box.scrollTop + box.clientHeight < box.scrollHeight - 2,
         box.scrollTop + '+' + box.clientHeight + ' vs ' + box.scrollHeight);
 
       /* 锚点消息已不在(被删/掉出这一页):退回像素值,不白屏不报错 */

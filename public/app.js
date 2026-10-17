@@ -59,7 +59,7 @@ const store = {
   delivery: DEFAULT_DELIVERY, // 运行中消息的投递方式(默认插话,见 DEFAULT_DELIVERY)
   ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
   showArchived: false, // 列表是否显示已归档会话
-  restoreScroll: null, // 刷新恢复时要还原的滚动锚点(只由 restoreFromHash 设置,renderMessages 消费)
+  restoreScroll: null, // 本次进入会话要还原的滚动锚点(由 selectSession / restoreFromHash 设置,renderMessages 消费)
   live: new Map(), // assistantMessageID -> 流式本地缓冲(见「逐 token 流式」)
   uploadDir: '', // 附件暂存目录(来自 /__health)
   home: '', // 机器 home 目录(来自 /__health),提示栏拿它把路径缩成 ~/...(照 TUI 的 cm)
@@ -2456,7 +2456,8 @@ async function restoreFromHash() {
  * 加载更早的消息(或字号/宽度变了)会让绝对像素错位,锚到消息上才稳。
  * 存 sessionStorage 而不是 localStorage —— 这是「本标签页刚才读到哪」,
  * 不该跨标签串味,关掉标签就丢,正好符合直觉。
- * 只在【刷新恢复】时还原;从列表点进某个会话仍然跳到底部(看最新消息)。 */
+ * 每次进入会话都还原;没有存档(第一次打开)才跳到底部看最新消息。
+ * 这样刷新、点列表、点标签、深链前后退走的是同一条路。 */
 
 const SCROLL_KEY = 'ocs.scroll';
 const SCROLL_MAX = 20;
@@ -2959,12 +2960,15 @@ function setupHistoryNav() {
 
 async function selectSession(id) {
   const prev = store.selected;
-  // 离开上一个会话前,先把它读到哪记下来(H 组 3)
-  if (prev && prev !== id) saveScrollAnchor();
+  // 离开上一个会话前,先把它读到哪记下来(H 组 3);重复打开当前会话也先记,
+  // 免得下面清空消息区时把用户刚滚到的位置丢掉。
+  if (prev) saveScrollAnchor();
   // §8.55 切走的这一份先留在内存里,切回来时先用它顶上(再后台对账)
   if (prev && prev !== id) cacheCurrentMessages();
-  // 只有「刷新恢复」会先塞 store.restoreScroll;从列表点进来一律跳到底部看最新消息
-  const rs = store.restoreScroll && store.restoreScroll.sid === id ? store.restoreScroll.anchor : null;
+  // 深链恢复可能已经塞了一个显式锚点;其它入口(列表 / 标签 / 前后退)按
+  // sessionStorage 里这个会话上次读到的位置还原。没有存档才落到底部。
+  const explicit = store.restoreScroll && store.restoreScroll.sid === id ? store.restoreScroll.anchor : null;
+  const rs = explicit || savedAnchor(id);
   store.restoreScroll = rs;
   store.selected = id;
   persistSelected(id);

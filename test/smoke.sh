@@ -1210,10 +1210,12 @@ if has "$APPJS" 'new ResizeObserver(' && has "$APPJS" 'if (store.nearBottom) pin
 else
   echo "FAIL: 容器变矮后要等下一次渲染才贴回去(没消息再来就永远差一截)"; fail=$((fail + 1))
 fi
-if has "$APPJS" 'if (saved) store.restoreScroll = { sid: id, anchor: saved };'; then
-  echo "PASS: 深链里没有存档时不再塞 pending(不再拦住 forceBottom 停在最上面)"; pass=$((pass + 1))
+if has "$APPJS" 'const explicit = store.restoreScroll && store.restoreScroll.sid === id ? store.restoreScroll.anchor : null;' &&
+   has "$APPJS" 'const rs = explicit || savedAnchor(id);' &&
+   has "$APPJS" 'store.forceBottom = !rs;'; then
+  echo "PASS: 进入任何会话都先找存档(刷新 / 列表 / 标签 / 前后退同一条路);没有存档才落到底部"; pass=$((pass + 1))
 else
-  echo "FAIL: 没有存档的深链又会被 pending 拦成「停在最上面」"; fail=$((fail + 1))
+  echo "FAIL: 进入会话没有统一找滚动存档,或没有存档仍会被 pending 拦成「停在最上面」"; fail=$((fail + 1))
 fi
 if has "$RENDER_FN_O" 'updateJumpLatest(' && has "$DELTA_FN_O" 'updateJumpLatest('; then
   echo "PASS: 内容变长之后按钮的显隐会跟着重算"; pass=$((pass + 1))

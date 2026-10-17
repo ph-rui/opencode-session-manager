@@ -696,6 +696,8 @@
       T('有 repinUntilStable,收手条件是「高度稳定」+ 一道自保上限(§8.46:不再盯时间)',
         typeof repinUntilStable === 'function' && REPIN_STABLE_FRAMES >= 2 && REPIN_MAX_MS >= 1000,
         typeof repinUntilStable + '/' + REPIN_STABLE_FRAMES + '/' + REPIN_MAX_MS);
+      // §8.66 起进入会话会恢复上次阅读位置;这一组要先造出「第一次打开」的落底状态。
+      sessionStorage.removeItem('ocs.scroll');
       await selectSession('ses_long'); // 60 条 → cvmany 挂着
       await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
       T('(前置)长会话挂着 cvmany', box.classList.contains('cvmany'));
