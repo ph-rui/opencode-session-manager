@@ -2250,14 +2250,142 @@ function parsePatch(patch) {
   return out;
 }
 
+/* ---------- §8.49 diff 行内高亮:成对的 -行/+行里,只有真正变了的字被点亮 ----------
+ * 照 TUI 的 diffHighlightAdded / diffHighlightRemoved:统一视图里相邻的删段与增段
+ * 按位置配对,先剥掉公共前后缀,中段按字符做 LCS,对不上的字才包 <span class="hl">。
+ * 纯函数,离线断言在 test/ui-tools.html。
+ */
+const HL_MAX_CHARS = 400;    // 剥掉公共前后缀后,单侧还长于这个数就不做 LCS(整段点亮)
+const HL_MAX_CELLS = 160000; // 两侧剩余长度的乘积上限(400 × 400)
+const HL_MAX_PAIRS = 2000;   // 一张卡片最多算这么多对(超出的整行着色,免得大补丁卡住)
+const HL_SURROGATE = /[\uD800-\uDFFF]/; // 代理对按字符切会切坏,直接退回整段
+
+// 把「变了的字符下标」并成升序区间:[[start, end), ...]
+function hlFold(idx, off) {
+  const out = [];
+  for (let i = 0; i < idx.length; i++) {
+    const s = off + idx[i];
+    const last = out[out.length - 1];
+    if (last && last[1] === s) last[1] = s + 1;
+    else out.push([s, s + 1]);
+  }
+  return out;
+}
+
+// 两侧「变了」的区间。没有变化时两边都是空数组。
+function hlRanges(a, b) {
+  a = String(a == null ? '' : a);
+  b = String(b == null ? '' : b);
+  if (a === b) return { del: [], add: [] };
+  // 含代理对(emoji 等)的行按 code unit 切会切坏一对,直接整行点亮
+  if (HL_SURROGATE.test(a) || HL_SURROGATE.test(b)) {
+    return { del: a.length ? [[0, a.length]] : [], add: b.length ? [[0, b.length]] : [] };
+  }
+  const la = a.length;
+  const lb = b.length;
+  const lim = Math.min(la, lb);
+  let pre = 0;
+  while (pre < lim && a.charCodeAt(pre) === b.charCodeAt(pre)) pre++;
+  let suf = 0;
+  while (suf < lim - pre && a.charCodeAt(la - 1 - suf) === b.charCodeAt(lb - 1 - suf)) suf++;
+  const am = a.slice(pre, la - suf);
+  const bm = b.slice(pre, lb - suf);
+  const whole = () => ({
+    del: am.length ? [[pre, pre + am.length]] : [],
+    add: bm.length ? [[pre, pre + bm.length]] : [],
+  });
+  // 纯增 / 纯删,或中段太长:不细算,整段点亮
+  if (!am.length || !bm.length) return whole();
+  if (am.length > HL_MAX_CHARS || bm.length > HL_MAX_CHARS ||
+      am.length * bm.length > HL_MAX_CELLS) return whole();
+
+  // LCS:dp[i][j] = am[i..] 与 bm[j..] 的最长公共子序列长度(倒着算,好回溯)
+  const n = am.length;
+  const m = bm.length;
+  const W = m + 1;
+  const dp = new Uint32Array((n + 1) * W);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * W + j] = am.charCodeAt(i) === bm.charCodeAt(j)
+        ? dp[(i + 1) * W + j + 1] + 1
+        : Math.max(dp[(i + 1) * W + j], dp[i * W + j + 1]);
+    }
+  }
+  const di = [];
+  const ai = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (am.charCodeAt(i) === bm.charCodeAt(j)) { i++; j++; }
+    else if (dp[(i + 1) * W + j] >= dp[i * W + j + 1]) di.push(i++);
+    else ai.push(j++);
+  }
+  while (i < n) di.push(i++);
+  while (j < m) ai.push(j++);
+  return { del: hlFold(di, pre), add: hlFold(ai, pre) };
+}
+
+// 带变更点亮(和语法着色,§8.50)的源码片。ranges/spans 都可缺省。
+function paintHtml(text, ranges, spans) {
+  text = String(text == null ? '' : text);
+  const hl = ranges || [];
+  const tk = spans || [];
+  if (!hl.length && !tk.length) return esc(text);
+  const cuts = [0, text.length];
+  for (let k = 0; k < hl.length; k++) { cuts.push(hl[k][0], hl[k][1]); }
+  for (let k = 0; k < tk.length; k++) { cuts.push(tk[k].s, tk[k].e); }
+  cuts.sort((x, y) => x - y);
+  let html = '';
+  let hi = 0;
+  let ti = 0;
+  for (let k = 0; k < cuts.length - 1; k++) {
+    const s = cuts[k];
+    const e = cuts[k + 1];
+    if (e <= s) continue;
+    while (hi < hl.length && hl[hi][1] <= s) hi++;
+    while (ti < tk.length && tk[ti].e <= s) ti++;
+    const on = hi < hl.length && hl[hi][0] <= s;
+    const cls = ti < tk.length && tk[ti].s <= s && s < tk[ti].e ? tk[ti].cls : '';
+    let piece = esc(text.slice(s, e));
+    if (cls) piece = '<span class="tk ' + cls + '">' + piece + '</span>';
+    if (on) piece = '<span class="hl">' + piece + '</span>';
+    html += piece;
+  }
+  return html;
+}
+
+// 每个 hunk 里连续的删段 + 紧随的增段按位置配对(第 i 个 - 对第 i 个 +)。
+// 落单的增删不点亮(整行底色已经说了它是新加的 / 去掉的)。
+function pairDiffRows(rows) {
+  let paired = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].k !== 'del') continue;
+    let j = i;
+    while (j < rows.length && rows[j].k === 'del') j++;
+    let k = j;
+    while (k < rows.length && rows[k].k === 'add') k++;
+    const n = Math.min(j - i, k - j);
+    for (let x = 0; x < n; x++) {
+      if (paired++ >= HL_MAX_PAIRS) continue;
+      const d = hlRanges(rows[i + x].text, rows[j + x].text);
+      rows[i + x].hl = d.del;
+      rows[j + x].hl = d.add;
+    }
+    i = k - 1;
+  }
+  return rows;
+}
+
 function diffRowHtml(r) {
   const ln =
     '<span class="ln o">' + (r.oldNo == null ? '' : r.oldNo) + '</span>' +
     '<span class="ln n">' + (r.newNo == null ? '' : r.newNo) + '</span>';
   const sign = r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' ';
+  // 只有增删行有点亮;上下文与 hunk 行照旧(它们本来就是同一行原样)
+  const src = r.k === 'add' || r.k === 'del' ? paintHtml(r.text, r.hl) : esc(r.text);
   return '<div class="dl ' + r.k + '">' + ln +
     '<span class="sign">' + (r.k === 'hunk' || r.k === 'meta' ? '' : sign) + '</span>' +
-    '<span class="src">' + esc(r.text) + '</span></div>';
+    '<span class="src">' + src + '</span></div>';
 }
 
 function diffBadge(status) {
@@ -2285,7 +2413,7 @@ function diffHtml(files) {
   let html = '';
   for (const f of files || []) {
     const b = diffBadge(f && f.status);
-    const rows = parsePatch(f && f.patch);
+    const rows = pairDiffRows(parsePatch(f && f.patch));
     const adds = typeof (f && f.additions) === 'number' ? f.additions : rows.filter((r) => r.k === 'add').length;
     const dels = typeof (f && f.deletions) === 'number' ? f.deletions : rows.filter((r) => r.k === 'del').length;
     html +=

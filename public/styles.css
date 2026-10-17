@@ -23,6 +23,9 @@
   --diff-hunk-bg: #ddf4ff;
   --diff-hunk-fg: #0550ae;
   --diff-rule: #e3e3e3;
+  /* §8.49 行内高亮:比整行底色再深一档(照 GitHub 的 word diff) */
+  --hl-add-bg: #abf2bc;
+  --hl-del-bg: #ffc0c0;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   /* 会话区字号旋钮:只改这两个数,会话界面(消息/工具卡片/diff/问询/输入区)所有文字等比缩放。
      区内的字号一律写成相对 em,基准是这里的 --chat-fs。 */
@@ -631,6 +634,9 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
 .dl.hunk .ln, .dl.hunk .sign { background: transparent; }
 .dl.meta .src { color: var(--muted); font-style: italic; }
 .dl.meta .ln, .dl.meta .sign { background: transparent; }
+/* §8.49 行内高亮:同一处改动里真正变了的那几个字 */
+.dl.add .hl { background: var(--hl-add-bg); border-radius: 2px; }
+.dl.del .hl { background: var(--hl-del-bg); border-radius: 2px; }
 /* write 的正文只有一列行号 */
 .diff.code .dl .ln.o { display: none; }
 

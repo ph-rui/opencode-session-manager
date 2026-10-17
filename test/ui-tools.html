@@ -153,6 +153,54 @@
       T('diffHtml:没有 patch 的删除文件退化为「-N lines」', dh2.indexOf('dnote') >= 0 && dh2.indexOf('-3 lines') >= 0, dh2);
       T('diffHtml:空数组返回空串', diffHtml([]) === '' && diffHtml(null) === '');
 
+      /* ================= §8.49 diff 行内高亮 ================= */
+      var J = function (v) { return JSON.stringify(v); };
+      T('行内高亮:改一个字只点亮那一个字',
+        J(hlRanges('abc', 'abd')) === '{"del":[[2,3]],"add":[[2,3]]}', hlRanges('abc', 'abd'));
+      T('行内高亮:两处改动各自成段(中间的公共段不亮)',
+        J(hlRanges('x1 y2 z3', 'x9 y2 z9')) === '{"del":[[1,2],[7,8]],"add":[[1,2],[7,8]]}',
+        hlRanges('x1 y2 z3', 'x9 y2 z9'));
+      T('行内高亮:纯插入只有增侧有段',
+        J(hlRanges('ab', 'axb')) === '{"del":[],"add":[[1,2]]}', hlRanges('ab', 'axb'));
+      T('行内高亮:纯删除只有删侧有段',
+        J(hlRanges('axb', 'ab')) === '{"del":[[1,2]],"add":[]}', hlRanges('axb', 'ab'));
+      T('行内高亮:相同的行两边都不亮', J(hlRanges('same', 'same')) === '{"del":[],"add":[]}');
+      T('行内高亮:公共前后缀不点亮',
+        J(hlRanges('foo(a, b)', 'foo(a, c)')) === '{"del":[[7,8]],"add":[[7,8]]}',
+        hlRanges('foo(a, b)', 'foo(a, c)'));
+      T('行内高亮:空值不炸',
+        J(hlRanges('', '')) === '{"del":[],"add":[]}' && J(hlRanges(null, 'x')) === '{"del":[],"add":[[0,1]]}');
+      var bigA = new Array(501).join('a');
+      var bigB = new Array(501).join('b');
+      T('行内高亮:中段超上限就整段点亮(不做 LCS)',
+        J(hlRanges(bigA, bigB)) === '{"del":[[0,500]],"add":[[0,500]]}',
+        hlRanges(bigA, bigB).del);
+      T('行内高亮:含代理对的行整行点亮(不会切坏一对)',
+        J(hlRanges('a\uD83D\uDE00b', 'a\uD83D\uDE01b')) === '{"del":[[0,4]],"add":[[0,4]]}',
+        hlRanges('a\uD83D\uDE00b', 'a\uD83D\uDE01b'));
+
+      /* 真补丁:REAL_PATCH 只在 fetch="." 后面插了 review="gerrit" */
+      var hlRows = pairDiffRows(parsePatch(REAL_PATCH));
+      var hlD = hlRows.filter(function (r) { return r.k === 'del'; })[0];
+      var hlA = hlRows.filter(function (r) { return r.k === 'add'; })[0];
+      T('真补丁:删侧没被删字就不点亮', J(hlD.hl) === '[]', hlD.hl);
+      T('真补丁:增侧只点亮插入的那一段',
+        J(hlA.hl) === '[[33,49]]', hlA.hl);
+      T('行内高亮:行号与正文一个字没动',
+        hlD.text === '\t<remote name="origin" fetch="." />' && hlD.oldNo === 4 && hlA.newNo === 4);
+      var hlBox = document.createElement('div');
+      hlBox.innerHTML = diffHtml(files);
+      var hlSrc = hlBox.querySelector('.dl.add .src');
+      T('行内高亮:点亮之后整行文字还是原文(textContent 一字不差)',
+        hlSrc.textContent === '\t<remote name="origin" fetch="." review="gerrit" />', hlSrc.textContent);
+      T('行内高亮:只包 <span class="hl">,不引入别的结构',
+        hlSrc.querySelectorAll('span.hl').length === 1 &&
+        hlSrc.querySelectorAll('span.hl')[0].textContent === 'review="gerrit" ',
+        hlSrc.innerHTML);
+      var evil = diffHtml([{ file: 'x', status: 'modified', patch: '@@ -1 +1 @@\n-a\n+a<i onerror="x">' }]);
+      T('行内高亮:变了的那段照样转义(<i> 不会变成标签)',
+        evil.indexOf('&lt;i onerror=&quot;x&quot;&gt;') >= 0 && evil.indexOf('<i onerror') < 0, evil);
+
       /* ================= codeHtml(write 正文) ================= */
       var ch = codeHtml('a\nb\nc\n');
       T('codeHtml:去掉末尾换行带来的空行', qaOf(ch, 'dl') === 3, qaOf(ch, 'dl'));

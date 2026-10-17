@@ -193,6 +193,13 @@ if has "$CSS" '.dfile' && has "$CSS" '.diff '; then
 else
   echo "FAIL: styles.css 缺 .dfile/.diff 样式"; fail=$((fail + 1))
 fi
+# §8.49 行内高亮:比整行底色深一档的那层必须存在(否则点亮了也看不出来)
+if has "$CSS" '--hl-add-bg' && has "$CSS" '--hl-del-bg' &&
+   has "$CSS" '.dl.add .hl' && has "$CSS" '.dl.del .hl'; then
+  echo "PASS: styles.css 有行内高亮(§8.49 的 --hl-add-bg/--hl-del-bg 与 .dl.add .hl)"; pass=$((pass + 1))
+else
+  echo "FAIL: styles.css 缺行内高亮配色(§8.49 点亮了也看不出来)"; fail=$((fail + 1))
+fi
 # H 组 1:会话区字号由一个变量统管,区内字号一律相对 em(整块等比缩放,不是只有正文变大)
 if has "$CSS" '--chat-fs: 14px' && has "$CSS" 'font-size: var(--chat-fs)' &&
    has "$CSS" 'font-size: 0.92em' && has "$CSS" 'font-size: 0.88em'; then
@@ -230,6 +237,13 @@ fi
 # 前端逻辑:折叠记忆只认 sessionStorage —— 刷新(F5)保持收起,新开标签页则是展开的(§8.38)。
 # 老键 localStorage['ocs.listHidden'] 谁也不许再读写(§8.13 那次「打开网页就是收起的」就是它)
 APPJS=$(curl -s "${AUTH[@]}" "$PROXY/app.js")
+# §8.49 行内高亮:配对 + 按字符 LCS 的两个纯函数必须在,而且 diff 渲染要走配对
+if has "$APPJS" 'function hlRanges(' && has "$APPJS" 'function pairDiffRows(' &&
+   has "$APPJS" 'pairDiffRows(parsePatch(' && has "$APPJS" 'HL_MAX_PAIRS'; then
+  echo "PASS: app.js 有行内高亮(§8.49:hlRanges / pairDiffRows 接到 diff 渲染上)"; pass=$((pass + 1))
+else
+  echo "FAIL: app.js 缺行内高亮(§8.49 的配对与 LCS 没接上)"; fail=$((fail + 1))
+fi
 if has "$APPJS" "const LIST_KEY = 'ocs.listHiddenTab';" && has "$APPJS" 'function listCollapsed()' &&
    has "$APPJS" 'paint(listCollapsed());' && has "$APPJS" 'sessionStorage.getItem(LIST_KEY)' &&
    has "$APPJS" "sessionStorage.setItem(LIST_KEY, '1')" && has "$APPJS" 'sessionStorage.removeItem(LIST_KEY)' &&
