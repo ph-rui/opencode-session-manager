@@ -2232,6 +2232,35 @@ else
   echo "FAIL: test/ui-capabilities.html 缺工作树管理的关键断言"; fail=$((fail + 1))
 fi
 
+# ---- R20 组:重画 diff 只换正文(§8.62)----
+if has "$APPJS" 'function diffToolHtml(p, files)' &&
+   has "$APPJS" "'<div class=\"diffwrap\">' + diffHtml(files, { pid: p.id }) + '</div>'" &&
+   has "$APPJS" 'diffToolHtml(p, files) + diagHtml(md, path)' &&
+   has "$CSS" '.toolbody > .diffwrap:first-child > .dfile:first-child { margin-top: 0; }'; then
+  echo "PASS: diff 卡片把正文单独包进 .diffwrap,诊断块仍在它外面;首块文件头贴顶由 CSS 补"; pass=$((pass + 1))
+else
+  echo "FAIL: diff 卡片没有单独的正文层,或诊断块被包进去了"; fail=$((fail + 1))
+fi
+SMOKE_REDRAW=$(printf '%s' "$APPJS" | sed -n '/^function redrawDiffCards(pid) {/,/^}/p' 2>/dev/null)
+if [ -n "$SMOKE_REDRAW" ] && has "$SMOKE_REDRAW" 'wrap.innerHTML = diffHtml(files' &&
+   has "$SMOKE_REDRAW" 'body.scrollTop = scroll' &&
+   has "$SMOKE_REDRAW" 'preventScroll: true' &&
+   ! has "$SMOKE_REDRAW" 'card.replaceWith' &&
+   ! has "$SMOKE_REDRAW" 'toolHtml(p)'; then
+  echo "PASS: redrawDiffCards 只换 .diffwrap 正文(不再整卡 toolHtml + replaceWith),正文滚动与焦点都留住"; pass=$((pass + 1))
+else
+  echo "FAIL: redrawDiffCards 还在整卡重造,或丢了正文滚动 / 焦点"; fail=$((fail + 1))
+fi
+SMOKE_TOOLS="$(dirname "$0")/ui-tools.html"
+if [ -f "$SMOKE_TOOLS" ] && has "$(cat "$SMOKE_TOOLS")" '§8.62 重画只换 diff 正文' &&
+   has "$(cat "$SMOKE_TOOLS")" '重画:不重造 details / summary / 正文容器' &&
+   has "$(cat "$SMOKE_TOOLS")" '重画:只换 .diffwrap 里的 diff 正文,诊断块原样留着' &&
+   has "$(cat "$SMOKE_TOOLS")" '重画:正文自己的滚动位置保留'; then
+  echo "PASS: test/ui-tools.html 里有节点身份 / 诊断块 / 折叠 / 正文滚动 / 焦点的重画断言"; pass=$((pass + 1))
+else
+  echo "FAIL: test/ui-tools.html 缺 §8.62 的重画断言"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

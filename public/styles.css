@@ -674,6 +674,8 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   font-size: 0.92em;
 }
 .toolbody > .dfile:first-child { margin-top: 0; }
+/* §8.62 diff 正文单独一层,重画时只换它;首块文件头仍贴住正文顶部 */
+.toolbody > .diffwrap:first-child > .dfile:first-child { margin-top: 0; }
 .dbadge { flex: none; padding: 0 5px; border-radius: 3px; font-size: 0.84em; color: #fff; }
 .dbadge.add { background: var(--diff-add-fg); }
 .dbadge.del { background: var(--diff-del-fg); }

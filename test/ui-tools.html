@@ -1147,6 +1147,9 @@
             metadata: { files: [{ file: 'a.js', status: 'modified', additions: 1, deletions: 1,
               patch: '@@ -1 +1 @@\n-const a = 1;\n+const a = 2;' }] } } };
       });
+      spParts[0].state.metadata.diagnostics = {
+        'a.js': [{ message: 'probe diag', range: { start: { line: 1, character: 2 } } }],
+      };
       store.selected = 'ses_v';
       store.messages = new Map([['v1', { id: 'v1', type: 'assistant', time: { created: 1 }, content: spParts }]]);
       try { localStorage.removeItem(DIFF_VIEW_KEY); } catch (_) {}
@@ -1156,6 +1159,40 @@
       T('并排:两张卡片各有一个切换按钮', qa('#messages .dswap').length === 2, qa('#messages .dswap').length);
       T('并排:没记过偏好 + 够宽 = 两张都是两栏', qa('#messages .diff.split').length === 2,
         qa('#messages .diff.split').length);
+
+      /* ================= §8.62 重画只换 diff 正文 =================
+       * 节点身份、折叠、正文滚动、焦点都要留住 */
+      var redrawCard = q('#messages details.tool');
+      var redrawSum = redrawCard.querySelector('summary');
+      var redrawBody = redrawCard.querySelector('.toolbody');
+      var redrawWrap = redrawCard.querySelector('.diffwrap');
+      var redrawDiag = redrawCard.querySelector('.ddiag');
+      var redrawFile = redrawWrap.querySelector('.dfile');
+      redrawCard.open = false;
+      redrawDiffCards('part_v1');
+      T('重画:不重造 details / summary / 正文容器',
+        q('#messages details.tool') === redrawCard &&
+        redrawCard.querySelector('summary') === redrawSum &&
+        redrawCard.querySelector('.toolbody') === redrawBody);
+      T('重画:只换 .diffwrap 里的 diff 正文,诊断块原样留着',
+        redrawCard.querySelector('.diffwrap') === redrawWrap &&
+        redrawWrap.querySelector('.dfile') !== redrawFile &&
+        redrawCard.querySelector('.ddiag') === redrawDiag &&
+        !!redrawWrap.querySelector('.diff.split'));
+      T('重画:折叠状态不丢', redrawCard.open === false);
+      redrawCard.open = true;
+      redrawBody.style.maxHeight = '30px';
+      redrawBody.scrollTop = 8;
+      redrawDiffCards('part_v1');
+      T('重画:正文自己的滚动位置保留', redrawBody.scrollTop === 8, redrawBody.scrollTop);
+      redrawCard.querySelector('.dswap').focus();
+      redrawDiffCards('part_v1');
+      T('重画:焦点留在同一张卡片的切换按钮上',
+        document.activeElement === redrawCard.querySelector('.dswap') &&
+        document.activeElement.getAttribute('data-pid') === 'part_v1');
+      redrawBody.style.maxHeight = '';
+      redrawBody.scrollTop = 0;
+
       q('#messages .dswap').click();
       T('并排:点一下两张一起回统一视图', qa('#messages .diff.split').length === 0 &&
         diffViewPref() === 'unified', diffViewPref());

@@ -3485,29 +3485,49 @@ function findToolPart(pid) {
   return null;
 }
 
-// §8.53 重画消息里所有带切换按钮的 diff 卡片(只动这些卡片,别的 details 不搬)。
-// pid 非空时把那张卡片当锚点,高度变了就补滚动,让它留在原处。
+// §8.53 重画消息里所有带切换按钮的 diff 卡片。
+// §8.62 只换卡片里的 .diffwrap(真正的 diff 正文),不重造 details / summary / 诊断块,
+// 还要把每张卡片的正文滚动位置和焦点留在原处。pid 非空时把那张卡片当锚点,
+// 高度变了就补滚动,让它留在原处。
 function redrawDiffCards(pid) {
   const box = $('#messages');
   if (!box) return null;
   const tops = new Map();
   let anchor = null;
+  // 切换按钮点下去之后马上会被换掉;先记下是哪一张卡片的按钮,重画完再把焦点还回去。
+  const active = document.activeElement;
+  const focusPid = active && active.classList && active.classList.contains('dswap')
+    ? active.getAttribute('data-pid') || ''
+    : '';
   for (const card of Array.from(box.querySelectorAll('details.tool'))) {
     const b = card.querySelector('.dswap');
     if (!b) continue;
     const id = b.getAttribute('data-pid') || '';
     const p = findToolPart(id);
     if (!p) continue;
-    const open = card.open;
+    const st = p.state || {};
+    const files = st.metadata && Array.isArray(st.metadata.files) ? st.metadata.files : [];
+    const wrap = card.querySelector('.diffwrap');
+    if (!files.length || !wrap) continue;
+    const body = card.querySelector('.toolbody');
+    const scroll = body ? body.scrollTop : 0;
     const top = card.getBoundingClientRect().top;
-    const tmp = document.createElement('div');
-    tmp.innerHTML = toolHtml(p);
-    const fresh = tmp.firstElementChild;
-    if (!fresh) continue;
-    fresh.open = open;
-    card.replaceWith(fresh);
-    tops.set(fresh, top);
-    if (id === pid) anchor = fresh;
+    wrap.innerHTML = diffHtml(files, { pid: p.id });
+    if (body) body.scrollTop = scroll;
+    tops.set(card, top);
+    if (id === pid) anchor = card;
+  }
+  if (focusPid) {
+    const next = Array.from(box.querySelectorAll('.dswap')).find(
+      (b) => b.getAttribute('data-pid') === focusPid
+    );
+    if (next) {
+      try {
+        next.focus({ preventScroll: true });
+      } catch (_) {
+        next.focus();
+      }
+    }
   }
   if (anchor && tops.has(anchor)) {
     const delta = anchor.getBoundingClientRect().top - tops.get(anchor);
@@ -3742,6 +3762,12 @@ function toolCard(p, line, counts, body, open) {
   );
 }
 
+/* §8.62 diff 卡片把 diff 正文单独包一层:切换并排 / 统一视图时只换这一层,
+ * 摘要、details 的展开状态、诊断块和正文滚动位置都不动。 */
+function diffToolHtml(p, files) {
+  return '<div class="diffwrap">' + diffHtml(files, { pid: p.id }) + '</div>';
+}
+
 /* 工具输出统一拼进 <pre>(shell 与通用工具共用)。 */
 function toolOutputHtml(st) {
   if (!Array.isArray(st.content)) return '';
@@ -3761,7 +3787,7 @@ function toolHtml(p) {
   // edit / patch:服务端算好的多文件 unified diff(TUI 的 BlockTool:edit 是「← Edit <路径>」)
   if (kind === 'edit' || kind === 'patch') {
     if (files.length) {
-      return toolCard(p, line, diffCounts(files), diffHtml(files, { pid: p.id }) + diagHtml(md, path), true);
+      return toolCard(p, line, diffCounts(files), diffToolHtml(p, files) + diagHtml(md, path), true);
     }
     // 还在跑:服务端尚未给出 files,只显示目标(与服务端 TUI 的「← Edit <path>」一致)
     return '<div class="toolrow">' + toolHead(p, line) + '</div>';

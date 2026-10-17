@@ -2622,8 +2622,8 @@ TUI 在那边改了,面板借 15s 一次的 `/__health` 跟上。`localStorage` 
 跨两栏的 hunk / 上下文行(`.dl.ctx`、`.dl.hunk`)还是 `white-space: pre`,一条长上下文就能把整块顶出去。
 补 `.diff.split .dl { white-space: pre-wrap; overflow-wrap: anywhere; }` 之后归零。
 
-一次切换几十张卡片约 340~490ms(每张都要重新生成整卡 HTML)。并排/统一是低频操作,先不为此加
-「只换 diff 正文」的分支;真嫌慢再优化。
+一次切换几十张卡片当时约 340~490ms(每张都要重新生成整卡 HTML)。并排/统一是低频操作,当时
+先没加「只换 diff 正文」的分支;§8.62 已经补上。
 
 分栏正文折行后,左右两栏的行高由较长的那一侧决定;`pre-wrap` 保留缩进,`overflow-wrap: anywhere`
 把超长 token 断开(终端里就是 `wrapMode="char"` 的效果)。
@@ -3116,6 +3116,49 @@ ERRORS []
 
 ---
 
+### 8.62 切 diff 视图只重画正文,不再整卡重造
+
+**起因**:上一批 1–4 的第 4 项。§8.53 切并排 / 统一时 `redrawDiffCards()` 对每张 diff 卡片
+调 `toolHtml(p)` 生成整卡,再 `card.replaceWith(fresh)`。切换一次会把 summary、diff 正文、
+诊断块、`details` 的展开状态和正文滚动位置全部重造;卡片一多,既慢,也会把用户正在看的位置
+和焦点弄丢。§8.53 当时实测几十张要 340~490ms,留了一句「真嫌慢再优化」。
+
+**结论**:diff 卡片把 diff 正文单独包一层 `.diffwrap`,摘要和诊断块留在外面。切换时只做
+`wrap.innerHTML = diffHtml(files, {pid})`;`details` / `summary` / `.toolbody` / `.ddiag`
+节点都不换,并顺手保住正文滚动与焦点。
+
+**改动**:
+
+| 位置 | 行为 |
+|---|---|
+| `diffToolHtml(p, files)` | `edit` / `patch` 的卡片正文 = `<div class="diffwrap">diffHtml(...)</div>` + `diagHtml(...)`;诊断块在 wrapper 外面,重画不碰 |
+| `redrawDiffCards(pid)` | 只找带 `.dswap` 的卡片,按 `findToolPart()` 拿最新 files,替换 `.diffwrap` 的 innerHTML;不再 `toolHtml()` + `replaceWith()` |
+| 滚动 / 焦点 | 每张卡片先记 `.toolbody.scrollTop`,替换后写回;被点按钮的 `data-pid` 记下来,重画完把焦点还给同一 pid 的新按钮;锚点卡片的 `getBoundingClientRect().top` 差值仍补到 `#messages.scrollTop` |
+| CSS | `.toolbody > .diffwrap:first-child > .dfile:first-child { margin-top: 0; }`,首块文件头仍贴住正文顶部,桌面 / 手机布局不变 |
+
+**实测**(真页面 1366×900,40 张 `modified` diff 卡片、每张 20 行 patch,同一轮 30 次,
+中位数;旧实现用当时的 `toolHtml` + `replaceWith` 逻辑在同一页对照):
+
+```
+整卡重造  270.9 ms
+只换正文  166.6 ms   (约 -38%)
+```
+
+**取舍**:
+
+- 仍会重新跑一遍 `diffHtml` / `parsePatch`(每张卡片的 diff 都重新生成行 DOM);这次只省掉
+  summary、诊断块、`details` 和滚动状态的重造,不是把 diff 行也缓存起来。要再快得给
+  `parsePatch` 结果做缓存,牵动内存与失效规则,收益不如这次直接。
+- 替换 `.diffwrap` 会丢掉用户正在 diff 正文里的文本选区;切换视图本来就会换行布局,选区
+  留不住是预期内的。
+- 焦点只在「活动元素正好是 `.dswap`」时还原;点在别处触发的重画(窗口缩放)不抢焦点。
+- 诊断块不参与重画,所以切视图不会把刚到的诊断行刷掉;诊断更新仍走消息级重绘。
+
+**回归**:`smoke.sh` 348 → **351**(3 项:正文层与 CSS、`redrawDiffCards` 不再整卡重造且
+保住滚动 / 焦点、`ui-tools.html` 的重画断言在);`ui-tools` 316 → **321**(5 项:节点身份 /
+诊断块 / 折叠 / 正文滚动 / 焦点);其余套件计数不变;全量回归 **0 失败**,
+日志 `/tmp/ocsm-probe/perf/regress-862.log`。
+
 ---
 
 ## 9. 取舍与理由
@@ -3136,6 +3179,7 @@ ERRORS []
 | 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
 | diff 统一视图无条件折行 | 照 TUI 的 `wrapMode="char"`；393px 上不用左右拖着读 | 超长单 token 会断在任意字符；Markdown 代码块仍横向滚（§8.58）|
 | diff 偏好与 TUI 共用 `cli.json` 的 `diffs.view` | 两边一本账，不会「TUI 并排、面板统一」；面板本来只有 view 这一项偏好 | 只共享 view；写本机文件，需同一 `OPENCODE_CONFIG_DIR`；`wrap/tree/single/source` 仍只在 TUI；同时写靠 rename 最后一次赢（§8.60）|
+| 切 diff 视图只换 `.diffwrap` 正文 | 不重造 summary / 诊断 / `details`，展开状态、正文滚动与焦点都留住；40 张卡片实测约 -38% | 仍重跑 `diffHtml` / `parsePatch`；正文里的文本选区会随替换丢失（§8.62）|
 
 ---
 
