@@ -1103,6 +1103,27 @@
           !!rafNode && rafNode.textContent.indexOf('AB') >= 0;
       })());
 
+      /* ---------------- 收尾对账(§8.84):事件先到、消息后落盘 / 后台拉取失败 ---------------- */
+      store.selected = 'ses_a';
+      store.live.clear();
+      store.messages.clear();
+      store.messages.set('m_u9', { id: 'm_u9', type: 'user', time: { created: 9000 }, text: '最后一问' });
+      T('收尾判定:最后一条是用户消息 → 还没收完', turnLooksUnsettled() === true);
+      store.messages.set('m_a9', {
+        id: 'm_a9', type: 'assistant', time: { created: 9001, completed: 9001 }, content: [],
+      });
+      T('收尾判定:最后一条助手消息已经 completed → 不用再拉', turnLooksUnsettled() === false);
+      store.live.set('m_live9', {
+        id: 'm_live9', sid: 'ses_a', open: true, parts: [], byKey: {},
+      });
+      T('收尾判定:本地流式缓冲还没被权威版本替换 → 还要拉', turnLooksUnsettled() === true);
+      store.live.clear();
+
+      window.__timeouts.length = 0;
+      handleEvent(ev('session.idle', { sessionID: 'ses_a' }));
+      T('session.idle 排一次 1.5s 的延迟收尾对账(不跟 150ms 那次抢)',
+        window.__pending(1500) === 1, window.__timeouts);
+
       /* 取消选中 → 收起 */
       store.live.clear();
       store.messages.clear();

@@ -1557,6 +1557,55 @@ if has "$(cat "$(dirname "$0")/ui-tools.html")" '懒渲染:一帧最多补一张
 else
   echo "FAIL: ui-tools 缺工具正文懒渲染的行为断言"; fail=$((fail + 1))
 fi
+# §8.84 断流后的收尾对账:请求超时 + 后台失败退避 + 运行→空闲补拉 + 延迟收尾 + SSE 看门狗。
+if has "$APPJS" 'const MSG_FETCH_TIMEOUT_MS = 30000;' &&
+   has "$APPJS" 'const MSG_FETCH_TIMEOUT_SLOW_MS = 120000;' &&
+   has "$APPJS" 'function msgFetchTimeout()' &&
+   has "$APPJS" 'const MSG_QUIET_RETRY_MS = [2000, 5000, 10000, 20000];' &&
+   has "$APPJS" 'function scheduleQuietRetry()' &&
+   has "$APPJS" 'if (retryable) scheduleQuietRetry();' &&
+   has "$APPJS" 'e.status >= 400 && e.status < 500'; then
+  echo "PASS: 消息请求超时 / 后台失败退避重试 / 4xx 不重试都在"; pass=$((pass + 1))
+else
+  echo "FAIL: 消息请求超时或后台失败重试不完整"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const justIdle = sel && wasRunning && !next.has(sel) && !compactionRunning(sel);' &&
+   has "$APPJS" 'loadMessages({ older: false, auto: true, now: true });' &&
+   has "$APPJS" '(msgStale && !isRunning(sel)' &&
+   has "$(cat "$(dirname "$0")/ui-controls.html")" '运行→空闲:loadActive 立刻补拉一次消息(不等刷新)'; then
+  echo "PASS: loadActive 把「运行→空闲」当成收工信号,立刻补拉并继续兜失败"; pass=$((pass + 1))
+else
+  echo "FAIL: loadActive 的运行→空闲收尾补拉缺失"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const MSG_SETTLE_MS = 1500;' &&
+   has "$APPJS" 'function turnLooksUnsettled()' &&
+   has "$APPJS" 'function settleReconcile(sid)' &&
+   has "$APPJS" 'function scheduleSettle(sid)' &&
+   has "$APPJS" "t === 'session.execution.succeeded' || t === 'session.execution.failed'" &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '最后是用户消息 → 收尾再补拉一次' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" 'session.idle 排一次 1.5s 的延迟收尾对账'; then
+  echo "PASS: 收工事件后延迟收尾,只在画面还像没跑完时补拉"; pass=$((pass + 1))
+else
+  echo "FAIL: 延迟收尾对账的判定或接线缺失"; fail=$((fail + 1))
+fi
+if has "$APPJS" 'const SSE_STALE_MS = 45000;' &&
+   has "$APPJS" 'const SSE_WATCH_MS = 15000;' &&
+   has "$APPJS" 'function sseBusy()' &&
+   has "$APPJS" 'function sseWatchdog()' &&
+   has "$APPJS" 'function openEvents()' &&
+   has "$APPJS" 'sseWatchTimer = setInterval(sseWatchdog, SSE_WATCH_MS);' &&
+   has "$(cat "$(dirname "$0")/ui-controls.html")" '有活跃会话且 45s 没事件:关掉旧连接并重开'; then
+  echo "PASS: SSE 半开时按最后事件时间主动重连(空闲不误判)"; pass=$((pass + 1))
+else
+  echo "FAIL: SSE 看门狗或浏览器断言缺失"; fail=$((fail + 1))
+fi
+if has "$(cat "$(dirname "$0")/ui-jump.html")" '后台对账连败三次后自动再排一次' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '4xx 不排自动重试' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '请求悬挂会超时并按失败重试'; then
+  echo "PASS: ui-jump 锁失败重试 / 4xx 分流 / 悬挂超时"; pass=$((pass + 1))
+else
+  echo "FAIL: ui-jump 缺断流重试的行为断言"; fail=$((fail + 1))
+fi
 
 # ---- R 组:探索类工具行的分组(照 TUI 的 exploration 分组) ----
 # TUI 的 explorationTools 就是 read/glob/grep/webfetch/websearch 这五类

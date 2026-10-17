@@ -73,6 +73,7 @@
       else if (u.indexOf('/api/agent') === 0) data = { data: AGENTS };
       else if (u.indexOf('/api/model') === 0) data = { data: MODELS };
       else if (/\/interrupt(\?|$)/.test(u)) data = { interrupted: true };
+      else if (/^\/api\/session\/[^/?]+\/message/.test(u)) data = { data: [], cursor: {} };
       else if (u.indexOf('/api/session/') === 0 && u.indexOf('/inbox') >= 0) data = { data: window.INBOX || [] };
       else if (u.indexOf('/api/session?') === 0) data = { data: [SESSION], cursor: {} };
       else data = {};
@@ -424,6 +425,54 @@
       ACTIVE_DATA = {};
       await loadActive();
       T('loadActive 反映空闲', store.active.size === 0, store.active.size);
+
+      /* loadActive 是 SSE 断流时唯一的兜底:它看到「运行中 → 空闲」时不能只熄状态条,
+         还必须补拉一次消息;否则最后一轮内容会一直停在断流前的快照里,直到用户刷新。 */
+      var msgReq = function () { return reqs(/\/message/).length; };
+      store.active.clear();
+      store.messages.clear();
+      store.msgError = '';
+      msgStale = false;
+      msgLoadBusy = false;
+      msgAutoQueued = false;
+      msgLastDone = Date.now(); // 先压住「运行中每 12s 对账一次」那条路
+      ACTIVE_DATA = { ses_t: { type: 'running' } };
+      await loadActive();
+      var m0 = msgReq();
+      ACTIVE_DATA = {};
+      await loadActive();
+      T('运行→空闲:loadActive 立刻补拉一次消息(不等刷新)',
+        msgReq() === m0 + 1, { before: m0, after: msgReq() });
+      var m1 = msgReq();
+      await loadActive();
+      T('一直空闲:不会每次轮询都重复补拉', msgReq() === m1, { before: m1, after: msgReq() });
+
+      /* SSE 半开(浏览器以为连接还活着,其实一条事件都收不到)时,看门狗要主动重连。 */
+      var made = [];
+      window.EventSource = class {
+        constructor(url) { this.url = url; this.closed = false; made.push(this); }
+        close() { this.closed = true; }
+      };
+      store.active.set('ses_t', 'busy');
+      setupEvents();
+      T('setupEvents 建一条事件流连接', made.length === 1 && made[0].url === '/api/event', made.length);
+      lastSseAt = 0;
+      sseWatchdog();
+      T('有活跃会话且 45s 没事件:关掉旧连接并重开',
+        made.length === 2 && made[0].closed === true, { n: made.length, closed: made[0] && made[0].closed });
+      T('重连也把「最后事件时间」往后推,不会连续空转',
+        lastSseAt > 0, lastSseAt);
+      store.active.clear();
+      store.pending = false;
+      store.running = false;
+      store.live.clear();
+      store.compacting.clear();
+      lastSseAt = 0;
+      var nIdle = made.length;
+      sseWatchdog();
+      T('没有活跃会话时不为了空转重连', made.length === nIdle, made.length);
+      if (made[1]) made[1].close();
+      window.EventSource = class { constructor() {} close() {} };
 
       /* ---------------- 轻量提示 ---------------- */
       flash('提示内容', 'bad');

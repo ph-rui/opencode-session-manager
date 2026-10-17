@@ -93,6 +93,25 @@
          *   window.BROKEN = { sid: 次数 } 回 200 但正文是半截(JSON.parse 会失败)
          *   window.SHAPE  = { sid: 次数 } 回 200 合法 JSON,但没有 data 数组 */
         if (window.GATE) await window.GATE;
+        if (window.HANG && window.HANG[sid] > 0) {
+          window.HANG[sid]--;
+          return new Promise(function (_, reject) {
+            var sig = opts && opts.signal;
+            var die = function () {
+              var e = new Error('aborted');
+              e.name = 'AbortError';
+              reject(e);
+            };
+            if (sig) {
+              if (sig.aborted) die();
+              else sig.addEventListener('abort', die);
+            }
+          });
+        }
+        if (window.DENY && window.DENY[sid] > 0) {
+          window.DENY[sid]--;
+          return { ok: false, status: 403, text: async function () { return JSON.stringify({ message: '没有权限' }); } };
+        }
         if (window.FAIL && window.FAIL[sid] > 0) {
           window.FAIL[sid]--;
           return { ok: false, status: 500, text: async function () { return JSON.stringify({ message: '模拟打回' }); } };
@@ -494,15 +513,21 @@
        * 这一段要控住定时器(重试退避 + 「慢到 250ms 才露」都走 setTimeout;
        * 本页的 setTimeout 是被钉住不触发的),这里换成「排队等我手动放」的假定时器。 */
       var savedTO = window.setTimeout, savedCTO = window.clearTimeout;
-      var q8 = [];
-      window.setTimeout = function (fn) { q8.push(fn); return q8.length; };
-      window.clearTimeout = function (id) { if (id) q8[id - 1] = null; };
+      /* 定时器用「只增不减的 id + 表」,和浏览器一样不会把同一个 id 发给下一条 ——
+         数组按下标复用 id 时,旧代码手里的 clearTimeout(1) 会误杀后来新建的那条。 */
+      var q8 = {};
+      var q8seq = 0;
+      window.setTimeout = function (fn) { q8[++q8seq] = fn; return q8seq; };
+      window.clearTimeout = function (id) { if (id) delete q8[id]; };
       /* 放一轮定时器 + 把微任务抽干(重试是个 await 链,得让它跑起来) */
       var pump = async function (rounds) {
         for (var i = 0; i < (rounds || 8); i++) {
-          var t = q8; q8 = [];
-          t.forEach(function (fn) { if (fn) fn(); });
-          await Promise.resolve(); await Promise.resolve();
+          /* 真事件循环里 promise 微任务先于定时器回调。先把这一拍已经就绪的
+             fetch/await 链抽干,再放定时器 —— 否则「请求超时」的那只表会在
+             本就能立刻回来的 fetch 前面抢跑。 */
+          for (var m = 0; m < 12; m++) await Promise.resolve();
+          var batch = q8; q8 = {};
+          Object.keys(batch).forEach(function (k) { if (batch[k]) batch[k](); });
         }
       };
       var stateEl = q('#msgState');
@@ -602,6 +627,68 @@
       T('取消选中 → 失败话撤掉、状态行收起', stateEl.hidden === true && !store.msgError);
       T('而且 #msgState 还在 DOM 里(没被 innerHTML 一起抹掉)',
         stateEl.isConnected && stateEl.parentElement === box);
+
+      /* 8h. 后台对账失败:会话已经空闲、不会再有事件叫醒时,还得自己退避重试。
+       * 老写法在 quiet 失败后直接 return,最后一轮就永远停在旧快照里。 */
+      store.selected = 'ses_a';
+      store.messages.clear();
+      store.msgError = '';
+      msgLoadBusy = false;
+      msgAutoQueued = false;
+      msgLastDone = 0;
+      msgStale = false;
+      msgQuietRetry = 0;
+      clearTimeout(msgQuietTimer);
+      q8 = {};
+      window.FAIL = { ses_a: 3 };
+      var nq = msgCalls();
+      var pq = loadMessages({ older: false, auto: true, now: true });
+      await pump(40); await pq; await pump(20);
+      T('后台对账连败三次后自动再排一次(首发 3 次 + 收尾重试 1 次)',
+        msgCalls() - nq === 4, msgCalls() - nq);
+      T('重试成功 → 内容回来了、错误不亮', box.textContent.indexOf('会话 A 的第一问') >= 0 && !store.msgError);
+      T('重试成功 → stale 标记清掉', msgStale === false);
+
+      /* 4xx 是配置/权限问题,重试再多次也没用,别拿请求打服务器。 */
+      window.FAIL = null;
+      clearTimeout(msgQuietTimer); msgQuietTimer = null; msgQuietRetry = 0; msgStale = false;
+      q8 = {}; clearTimeout(msgAutoTimer); msgAutoQueued = false;
+      window.DENY = { ses_a: 3 };
+      nq = msgCalls();
+      var pd = loadMessages({ older: false, auto: true, now: true });
+      await pump(40); await pd; await pump(20);
+      T('4xx 不排自动重试(只发首发的 3 次)', msgCalls() - nq === 3, msgCalls() - nq);
+      T('4xx 也不留 stale 标记', msgStale === false);
+      window.DENY = null;
+
+      /* 消息请求悬挂时必须有超时,否则 msgLoadBusy 永远不复位,后面所有对账都被合并掉。 */
+      clearTimeout(msgQuietTimer); msgQuietTimer = null; msgQuietRetry = 0; msgStale = false;
+      q8 = {}; clearTimeout(msgAutoTimer); msgAutoQueued = false;
+      window.HANG = { ses_a: 3 };
+      nq = msgCalls();
+      var ph = loadMessages({ older: false, auto: true, now: true });
+      await pump(80); await ph; await pump(20);
+      T('请求悬挂会超时并按失败重试(3 次超时 + 1 次收尾重试)',
+        msgCalls() - nq === 4, msgCalls() - nq);
+      T('超时收工后 msgLoadBusy 复位(不堵住下一次对账)', msgLoadBusy === false, msgLoadBusy);
+      window.HANG = null;
+
+      /* 收尾对账只在「看起来还没跑完」时补拉,避免每个回合都白拉一整页。 */
+      store.messages.clear();
+      store.messages.set('mu9', { id: 'mu9', type: 'user', time: { created: 9000 }, text: '问' });
+      msgLoadBusy = false;
+      msgLastDone = 0;
+      var ns = msgCalls();
+      settleReconcile('ses_a');
+      await Promise.resolve(); await Promise.resolve();
+      T('最后是用户消息 → 收尾再补拉一次', msgCalls() === ns + 1, msgCalls() - ns);
+      store.messages.set('ma9', {
+        id: 'ma9', type: 'assistant', time: { created: 9001, completed: 9001 }, content: [],
+      });
+      ns = msgCalls();
+      settleReconcile('ses_a');
+      await Promise.resolve(); await Promise.resolve();
+      T('最后一条助手已经 completed → 收尾不再多拉', msgCalls() === ns, msgCalls() - ns);
 
       window.setTimeout = savedTO;
       window.clearTimeout = savedCTO;

@@ -378,16 +378,29 @@ async function loadActive() {
       }
     }
   }
+  const sel = store.selected;
+  const wasRunning = !!sel && prev.has(sel);
   store.active = next;
   if (changed) {
     renderSessions();
     updateChatStatus();
   }
   updateComposerControls();
-  const sel = store.selected;
+  /* SSE 静默断流时这趟 8s 轮询是唯一还在走的眼睛:只熄状态条不补消息,内容就会
+   * 一直停在断流前的快照里(用户看到「空闲了但内容不是最新」,只能刷新)。
+   * 运行中 → 空闲是权威收工信号,立刻绕过间隔补拉一次;再排一次延迟收尾,
+   * 兜住「事件先到、消息稍后才落盘」。压缩中途 active 会空一拍,别误判成收工。 */
+  const justIdle = sel && wasRunning && !next.has(sel) && !compactionRunning(sel);
+  if (justIdle) {
+    loadMessages({ older: false, auto: true, now: true });
+    scheduleSettle(sel);
+  }
   // §8.54:SSE 一直在推,这个 8s 轮询只当「SSE 哑了」的兜底 —— 最近 12s 内已经对过账
   // 就跳过(否则在看一个正在跑的会话时,它会每 8s 再白拉一次 MB 级消息列表)。
-  if (sel && isRunning(sel) && Date.now() - msgLastDone > 12000) {
+  // msgStale:后台对账失败过,空闲时也别停,直到成功拉回一页为止。
+  if (sel && !justIdle &&
+      ((isRunning(sel) && Date.now() - msgLastDone > 12000) ||
+       (msgStale && !isRunning(sel) && Date.now() - msgLastDone > 12000))) {
     loadMessages({ older: false, auto: true });
   }
 }
@@ -2733,6 +2746,9 @@ function clearSelection() {
   msgEls.clear();
   resetLazyToolWatch();
   if (id) dropAsksFor(id);
+  msgStale = false;
+  clearQuietRetry(true);
+  cancelSettle();
   $('#messages').innerHTML = ''; // 里面的「跳到最新」按钮由 updateJumpLatest() 自己搬回来
   /* 「加载更旧消息」跟着选中会话走:游标和那一格都清掉 —— 只清 store.messages 的话,这一格
    * 会一直露在头部(没选中会话时点了也没用,loadMessages 会直接返回),而且下一个会话的第一页
@@ -3360,6 +3376,9 @@ async function selectSession(id) {
   resetLazyToolWatch();
   $('#messages').innerHTML = '';
   store.msgError = ''; // 切会话了:上一个会话的失败/加载状态都不该跟过来
+  msgStale = false;
+  clearQuietRetry(true);
+  cancelSettle();
   store.msgSeq++; // 这一下就把在途的响应与重试作废(下面 loadMessages 还会再记一代)
   repinSeq++; // 上一会话「贴完底再跟几帧」那一轮也作废
   setMsgLoading(false);
@@ -3434,6 +3453,20 @@ const MSG_TRIES = 3; // 首发 + 2 次重试
 const MSG_RETRY_MS = [800, 2500];
 const MSG_LOADING_DELAY_MS = 250; // 这么快就回来了就不闪「正在加载消息…」这一下
 
+/* 一次消息请求最多等多久。没有超时的话,一条挂在半路的请求会一直占着
+ * msgLoadBusy,后面事件驱动的对账全被合并/排队,看起来就是「跑完了但内容不更新」。
+ * 慢链路首屏实测有十几 MB 的量级,给足时间;内网正常 40ms 就回来了,30s 足够兜底。 */
+const MSG_FETCH_TIMEOUT_MS = 30000;
+const MSG_FETCH_TIMEOUT_SLOW_MS = 120000;
+
+/* 后台对账失败后的补拉。收工后 SSE 通常不再有事件,失败一次就永远旧着 ——
+ * 这里退避重试几轮;仍然不行就留给 8s 的 loadActive 继续兜(见 msgStale)。 */
+const MSG_QUIET_RETRY_MS = [2000, 5000, 10000, 20000];
+
+/* 服务端可能先发 session.idle、稍后才把最终消息落盘。150ms 那次对账会拉早;
+ * 再等 1.5s 看一眼「是不是还像没跑完」,是就补拉一次,不是就一个字都不发。 */
+const MSG_SETTLE_MS = 1500;
+
 /* 一页拉多少条:手机的用法是「看一眼」,而首屏体量差得很远 —— 实测某个会话
  * 100 条 = 12.9MB、最新 30 条 = 2.1MB(大头是 tool part 里带回的整份文件与截图,
  * 见 §8.34)。所以窄屏按 30 条一页,桌面照旧 100。翻旧仍然走「加载更旧消息」的游标,
@@ -3469,6 +3502,10 @@ function msgPageSize() {
   return (document.documentElement.classList.contains('narrow') || slowLink())
     ? MSG_PAGE_NARROW
     : MSG_PAGE_WIDE;
+}
+
+function msgFetchTimeout() {
+  return slowLink() ? MSG_FETCH_TIMEOUT_SLOW_MS : MSG_FETCH_TIMEOUT_MS;
 }
 
 /* §8.55 内存缓存:只缓存成功拿到过的消息页(失败的空壳不缓存)。
@@ -3526,11 +3563,24 @@ async function loadMessages(opts) {
     autoOlderArmed = true; // 新的一页(切会话/重拉首屏)重新上膛:下一回到顶又能自动拉
   }
   if (!quiet) setMsgLoading(true);
+  if (!quiet) {
+    // 用户主动来拉了:上一轮失败留下的后台补拉先停掉,别跟这条抢。
+    msgStale = false;
+    clearQuietRetry(true);
+  }
   const url = '/api/session/' + encodeURIComponent(id) + '/message?' + q.toString();
   const seq = ++store.msgSeq; // 这一代请求;再有别的请求进来,这一代(含它的重试)就地作废
   const gen = ++msgLoadGen;
-  const ac = new AbortController();
-  msgAbort = ac;
+  /* 每条请求单独一个 AbortController:超时只掐当前这一次,后面的重试还能继续发。
+   * msgAbort 对外仍是「能叫停这一代」的把手,前台请求 / now 对账会用它顶掉旧请求。 */
+  let cancelled = false;
+  let attemptAc = null;
+  msgAbort = {
+    abort() {
+      cancelled = true;
+      try { if (attemptAc) attemptAc.abort(); } catch (_) {}
+    },
+  };
   msgLoadBusy = true;
   try {
     for (let attempt = 0; attempt < MSG_TRIES; attempt++) {
@@ -3538,8 +3588,15 @@ async function loadMessages(opts) {
         await sleep(MSG_RETRY_MS[attempt - 1] || 2500);
         if (seq !== store.msgSeq || store.selected !== id || gen !== msgLoadGen) return;
       }
+      if (cancelled) return;
+      attemptAc = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { attemptAc.abort(); } catch (_) {}
+      }, msgFetchTimeout());
       try {
-        const j = await api(url, { signal: ac.signal });
+        const j = await api(url, { signal: attemptAc.signal });
         /* 等待期间可能已经切走了(SSE 事件驱动的防抖对账正好压在一次切换上):这份响应属于
          * 上一个会话,写进去就会让新会话显示别人的消息,连头部那枚上下文用量也跟着错。
          * store.messages 只有当前会话一份,所以这里按 id 复查一次再写。 */
@@ -3550,22 +3607,45 @@ async function loadMessages(opts) {
         store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
         pruneLive();
         store.msgError = '';
+        if (!opts.older) {
+          msgStale = false;
+          clearQuietRetry(true);
+        }
         setMsgLoading(false);
         renderMessages();
         return;
       } catch (e) {
-        if (e && (e.name === 'AbortError' || ac.signal.aborted)) return; // 被新一轮取代,静默收工
+        const wasTimeout = timedOut;
+        if (wasTimeout) {
+          const te = new Error('消息请求超时');
+          te.timeout = true;
+          e = te;
+        }
+        // 被新一轮请求顶掉:静默收工,别把上一代的失败画到新会话上。
+        if (!wasTimeout && e && e.name === 'AbortError') return;
+        if (cancelled) return;
         console.error('loadMessages', e);
         if (seq !== store.msgSeq || store.selected !== id || gen !== msgLoadGen) return;
         if (attempt < MSG_TRIES - 1) continue;
-        if (quiet) return; // 后台对账失败不打扰画面:下一次事件/轮询会再试
+        if (quiet) {
+          /* 收工后通常不会再有事件叫醒我们;网络 / 超时 / 5xx 都值得退避再试。
+           * 4xx 是权限或参数问题,反复打服务器没有意义。 */
+          const retryable = !(e && e.status >= 400 && e.status < 500);
+          msgStale = retryable;
+          if (retryable) scheduleQuietRetry();
+          return; // 后台对账失败不打扰画面
+        }
+        msgStale = false;
         store.msgError = (e && e.message) || String(e);
         setMsgLoading(false);
         paintMsgState(); // 空着也要把话说清楚:加载失败:<原因> + 一个「重试」
+      } finally {
+        clearTimeout(timer);
       }
     }
   } finally {
     if (gen === msgLoadGen) {
+      msgAbort = null;
       msgLoadBusy = false;
       msgLastDone = Date.now();
       if (msgAutoQueued) {
@@ -9102,12 +9182,27 @@ let msgAbort = null;
 let msgAutoQueued = false;
 let msgLastDone = 0;
 let msgAutoTimer = null;
+/* 后台对账失败过 / 收尾还可能没落全:给 loadActive 一个继续补拉的记号。
+ * 成功一次就清掉;4xx 不置位(重试也没用)。 */
+let msgStale = false;
+let msgQuietRetry = 0;
+let msgQuietTimer = null;
+let msgSettleTimer = null;
 let sessionLoadBusy = false;
 let sessionLoadGen = 0;
 let sessionAutoQueued = false;
 let sessionLastDone = 0;
 let sessionAutoTimer = null;
 let sseConnectedOnce = false;
+let sseSource = null;
+let lastSseAt = 0;
+let sseWatchTimer = null;
+let sseWatchWired = false;
+/* EventSource 在「TCP 还开着、但已经收不到任何字节」时不会触发 onerror,浏览器也就
+ * 不会自动重连。有活跃会话却 45s 一条事件都没有(心跳注释在 JS 里看不见),就主动
+ * 关掉重开;重连后的 server.connected 会走已有的补拉逻辑。 */
+const SSE_STALE_MS = 45000;
+const SSE_WATCH_MS = 15000;
 
 function scheduleAutoMsg(delay) {
   clearTimeout(msgAutoTimer);
@@ -9116,6 +9211,61 @@ function scheduleAutoMsg(delay) {
     if (!store.selected) return;
     loadMessages({ older: false, auto: true });
   }, delay);
+}
+
+function clearQuietRetry(resetCount) {
+  clearTimeout(msgQuietTimer);
+  msgQuietTimer = null;
+  if (resetCount) msgQuietRetry = 0;
+}
+
+function scheduleQuietRetry() {
+  if (msgQuietRetry >= MSG_QUIET_RETRY_MS.length) return;
+  const delay = MSG_QUIET_RETRY_MS[msgQuietRetry++];
+  clearTimeout(msgQuietTimer);
+  msgQuietTimer = setTimeout(() => {
+    msgQuietTimer = null;
+    if (!store.selected) return;
+    // now:true:绕过对账间隔,也把可能还挂着的旧请求顶掉。
+    loadMessages({ older: false, auto: true, now: true });
+  }, delay);
+}
+
+/* 当前画面看起来「这一轮还没收干净」吗?
+ * 服务端已经给出完整助手消息时,收尾那趟就是白拉一整页;只在真缺内容时补。 */
+function turnLooksUnsettled() {
+  if (!store.selected) return false;
+  if (liveForSid(store.selected)) return true;
+  const msgs = currentMessages();
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (!m || m.type === 'idle') continue;
+    if (m.type === 'user') return true;
+    if (m.type === 'assistant') return !(m.time && m.time.completed);
+    return !!compactionRunning(store.selected, msgs);
+  }
+  return false;
+}
+
+/* 延迟收尾对账的实体(定时器到点后调用;测试也可直接调用)。 */
+function settleReconcile(sid) {
+  if (!sid || store.selected !== sid) return;
+  if (!turnLooksUnsettled()) return;
+  loadMessages({ older: false, auto: true, now: true });
+}
+
+function scheduleSettle(sid) {
+  if (!sid || sid !== store.selected) return;
+  clearTimeout(msgSettleTimer);
+  msgSettleTimer = setTimeout(() => {
+    msgSettleTimer = null;
+    settleReconcile(sid);
+  }, MSG_SETTLE_MS);
+}
+
+function cancelSettle() {
+  clearTimeout(msgSettleTimer);
+  msgSettleTimer = null;
 }
 
 function scheduleAutoSessions(delay) {
@@ -9311,6 +9461,12 @@ function handleEvent(e) {
   const t = e.type || '';
   const evSid = d.sessionID || (d.info && d.info.id) || '';
   const mine = !evSid || evSid === store.selected; // 没带会话 id 的按「可能是」处理,宁可多拉一次
+  /* 收工事件可能比最终消息落盘早:先按老规矩 150ms 对账一次,再排一个 1.5s 的收尾。
+   * 收尾只在画面还像「没跑完」时真发请求(见 turnLooksUnsettled)。 */
+  if (mine &&
+      (t === 'session.idle' || t === 'session.execution.succeeded' || t === 'session.execution.failed')) {
+    scheduleSettle(evSid || store.selected);
+  }
   // §8.54 消息对账:只认当前会话 + 真会改消息的事件。
   // provider/model 之类的全局事件、别的会话的流事件、tools 的高频增量,都不值得拉。
   const msgWorthy =
@@ -9339,21 +9495,58 @@ function handleEvent(e) {
   }
 }
 
-function setupEvents() {
+function openEvents() {
+  if (sseSource) {
+    try { sseSource.close(); } catch (_) {}
+  }
+  lastSseAt = Date.now();
   const es = new EventSource('/api/event');
+  sseSource = es;
   es.onmessage = (ev) => {
+    lastSseAt = Date.now();
     let e = null;
     try {
       e = JSON.parse(ev.data);
     } catch (_) {}
     handleEvent(e);
   };
-  es.onopen = () => health();
+  es.onopen = () => {
+    lastSseAt = Date.now();
+    health();
+  };
   es.onerror = () => {
     const el = $('#status');
+    if (!el) return;
     el.className = 'status bad';
     el.textContent = '事件流断开,重连中…';
   };
+}
+
+function sseBusy() {
+  if (store.pending || store.active.size) return true;
+  const sel = store.selected;
+  if (!sel) return false;
+  return isRunning(sel) || store.running || compactionRunning(sel) || !!liveForSid(sel);
+}
+
+function sseWatchdog() {
+  if (!sseSource) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (!sseBusy()) return; // 空闲时本来就没有事件,不能拿「安静」当断线
+  if (Date.now() - lastSseAt < SSE_STALE_MS) return;
+  openEvents();
+}
+
+function setupEvents() {
+  openEvents();
+  if (sseWatchTimer) clearInterval(sseWatchTimer);
+  sseWatchTimer = setInterval(sseWatchdog, SSE_WATCH_MS);
+  if (!sseWatchWired && typeof document !== 'undefined') {
+    sseWatchWired = true;
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) sseWatchdog();
+    });
+  }
 }
 
 /* ----------------------------- 分栏拖拽 ----------------------------- */
