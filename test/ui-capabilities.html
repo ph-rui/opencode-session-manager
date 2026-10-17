@@ -19,6 +19,7 @@
     <section id="chatpane">
       <nav id="sessionTabs" aria-label="最近打开的会话" hidden>
         <div id="tabStrip"></div>
+        <button type="button" id="tabReopen" title="重开刚关闭的标签" aria-label="重开刚关闭的标签" hidden>↺</button>
         <button type="button" id="tabNew" title="新建会话" aria-label="新建会话">
           <span class="tnFull">+ 新建</span><span class="tnShort" aria-hidden="true">+</span>
         </button>
@@ -910,6 +911,7 @@
         try { localStorage.removeItem('ocs.tabs'); } catch (_) {}
         store.tabs = [];
         store.selected = null;
+        closedTabs.length = 0; // §8.75:测试页自己把「最近关闭」也清掉
         tabsSig = '';
         tabsActiveSeen = null;
         renderTabs();
@@ -972,6 +974,15 @@
         store.sessions.has('ses_b') && store.selected === 'ses_a', store.tabs);
       T('关闭标签不发 DELETE',
         window.calls.filter(function (c) { return c.method === 'DELETE'; }).length === delBefore);
+      T('关闭非当前标签后进「最近关闭」栈',
+        closedTabs.length === 1 && closedTabs[0].id === 'ses_b', closedTabs);
+
+      await reopenTab();
+      T('↺ / /tab-reopen:重开最近关闭的标签并切过去',
+        store.tabs.map(function (t) { return t.id; }).join(',') === 'ses_a,ses_b' &&
+        store.selected === 'ses_b' && closedTabs.length === 0,
+        { tabs: store.tabs, sel: store.selected, closed: closedTabs });
+      T('重开后 ↺ 自己藏起来', q('#tabReopen').hidden === true);
 
       await selectSession('ses_b');
       strip.querySelector('.tab[data-id="ses_b"] .tabx').click();
@@ -980,8 +991,43 @@
         { tabs: store.tabs, sel: store.selected });
 
       strip.querySelector('.tab[data-id="ses_a"] .tabx').click();
-      T('关掉最后一个标签:回到未选择、整条收起',
-        store.tabs.length === 0 && store.selected === null && nav.hidden === true);
+      T('关掉最后一个标签:回到未选择,但重开入口还在',
+        store.tabs.length === 0 && store.selected === null && nav.hidden === false &&
+        q('#tabReopen').hidden === false && q('#tabReopen').title.indexOf('活动会话') >= 0,
+        { nav: nav.hidden, reopen: q('#tabReopen').hidden, title: q('#tabReopen').title });
+
+      await reopenTab();
+      T('重开最后关掉的那个:栏和会话一起回来',
+        store.tabs.length === 1 && store.tabs[0].id === 'ses_a' &&
+        store.selected === 'ses_a' && closedTabs.length === 1 && closedTabs[0].id === 'ses_b',
+        { tabs: store.tabs, sel: store.selected, closed: closedTabs });
+      await reopenTab();
+      T('再重开一个:按关闭的倒序恢复',
+        store.tabs.map(function (t) { return t.id; }).join(',') === 'ses_a,ses_b' &&
+        store.selected === 'ses_b' && closedTabs.length === 0,
+        { tabs: store.tabs, sel: store.selected, closed: closedTabs });
+
+      window.calls.length = 0;
+      var noReopen = await reopenTab();
+      T('没有可重开的标签时只提示、不建标签',
+        noReopen === false && q('#toast').textContent.indexOf('没有可重开的标签') >= 0 &&
+        store.tabs.length === 2,
+        [noReopen, q('#toast').textContent, store.tabs]);
+      T('命令面板:有 /tab-reopen',
+        PANEL_COMMANDS.some(function (c) { return c.name === 'tab-reopen'; }));
+
+      closedTabs.length = 0;
+      for (var tc = 0; tc < 10; tc++) rememberClosedTab('ses_c' + tc, 'C' + tc);
+      T('最近关闭最多留 8 个、最近的在前',
+        closedTabs.length === 8 && closedTabs[0].id === 'ses_c9' && closedTabs[7].id === 'ses_c2',
+        closedTabs.map(function (t) { return t.id; }));
+      rememberClosedTab('ses_c5', 'C5');
+      T('同一个标签重复关闭只留一条、并挪到最前',
+        closedTabs.length === 8 && closedTabs[0].id === 'ses_c5' &&
+        closedTabs.filter(function (t) { return t.id === 'ses_c5'; }).length === 1,
+        closedTabs.map(function (t) { return t.id; }));
+      closedTabs.length = 0;
+      renderTabs();
 
       /* 最多 8 个,丢最旧的;写盘 */
       store.tabs = [];

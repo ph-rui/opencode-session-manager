@@ -303,6 +303,22 @@ table#list { width: 100%; border-collapse: collapse; }
 }
 #tabNew:hover { background: var(--bg); }
 #tabNew .tnShort { display: none; }
+/* §8.75 重开刚关闭的标签:窄屏也放在标签栏右侧,不占 tab 区的横向空间 */
+#tabReopen {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1.15em;
+  line-height: 1;
+  cursor: pointer;
+}
+#tabReopen[hidden] { display: none; }
+#tabReopen:hover { background: var(--bg); color: var(--accent); }
 
 #chatHeader { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .chline { display: flex; align-items: center; gap: 10px; }
@@ -1731,6 +1747,7 @@ html.narrow .tab .tabx { display: none; }
 html.narrow .tab.active .tabx { display: flex; }
 html.narrow #tabNew { min-width: 40px; justify-content: center; padding: 0 8px; font-size: 12px; }
 html.narrow #tabNew .tnFull { display: none; }
+html.narrow #tabReopen { min-width: 34px; justify-content: center; padding: 0 6px; font-size: 14px; }
 html.narrow #tabNew .tnShort { display: inline; }
 html.narrow.short #sessionTabs { height: 30px; }
 /* 横屏宽度够,别把每格都压成 150px;竖屏仍收窄给后面的 tab 留位置 */

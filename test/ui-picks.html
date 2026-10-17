@@ -510,9 +510,10 @@
       T('列表行分叉:仍只刷新列表,不切走', store.selected === 'ses_a' && hadCall(/\/fork$/),
         [store.selected, hadCall(/\/fork$/)]);
 
-      T('命令面板:有 /timeline 与 /fork',
+      T('命令面板:有 /timeline、/fork 与 /tab-reopen',
         PANEL_COMMANDS.some(function (c) { return c.name === 'timeline'; }) &&
-        PANEL_COMMANDS.some(function (c) { return c.name === 'fork'; }));
+        PANEL_COMMANDS.some(function (c) { return c.name === 'fork'; }) &&
+        PANEL_COMMANDS.some(function (c) { return c.name === 'tab-reopen'; }));
 
       /* ================= 每会话输入草稿(§8.71) ================= */
       try { sessionStorage.removeItem('ocs.drafts'); } catch (_) {}

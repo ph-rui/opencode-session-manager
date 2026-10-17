@@ -2318,6 +2318,10 @@ function visibleSessions() {
  * 刻意不做:TUI 的拖拽排序 / 未读脉冲 / Ctrl+数字 / global-cwd 分域。 */
 const TABS_KEY = 'ocs.tabs';
 const TABS_MAX = 8;
+/* §8.75 照 TUI 的 session.tab.reopen:最近关掉的标签留在内存里(不写 localStorage),
+ * 最多 8 个;最近关的排最前。刷新页面就清空 —— 关标签本身只是移出栏,不是持久状态。 */
+const CLOSED_MAX = 8;
+const closedTabs = [];
 let tabsSig = '';
 let tabsActiveSeen = null;
 
@@ -2347,9 +2351,54 @@ function saveTabs() {
   } catch (_) {}
 }
 
+/* §8.75 关标签时记一笔(最近的在最前);同一个会话重复关 / 重开只留一条。 */
+function rememberClosedTab(id, title) {
+  if (!id) return;
+  const at = closedTabs.findIndex((t) => t.id === id);
+  if (at >= 0) closedTabs.splice(at, 1);
+  const s = store.sessions.get(id);
+  closedTabs.unshift({ id: id, title: (s && s.title) || title || id });
+  while (closedTabs.length > CLOSED_MAX) closedTabs.pop();
+}
+
+/* 标签栏右侧那枚 ↺:没有可重开的就藏起来;条数/标题进 title,手机上也能长按看。 */
+function renderTabReopen() {
+  const b = document.getElementById('tabReopen');
+  if (!b) return;
+  b.hidden = closedTabs.length === 0;
+  if (b.hidden) {
+    b.removeAttribute('title');
+    b.setAttribute('aria-label', '重开刚关闭的标签');
+    return;
+  }
+  const t = closedTabs[0];
+  const title = t.title || t.id;
+  b.title = '重开:' + title + (closedTabs.length > 1 ? '(还有 ' + (closedTabs.length - 1) + ' 个)' : '');
+  b.setAttribute('aria-label', '重开刚关闭的标签:' + title);
+}
+
+/* /tab-reopen 与标签栏 ↺ 共用:取最近关掉的一个,加回栏并切过去。
+ * 返回 true / false 方便命令面板与测试知道到底有没有可重开的。 */
+async function reopenTab() {
+  while (closedTabs.length) {
+    const t = closedTabs.shift();
+    if (store.tabs.some((x) => x.id === t.id)) continue; // 已经通过列表/深链回来了,别重复
+    renderTabs(); // 先把 ↺ 的可用状态与空栏收起/露出算准,再进会话
+    await selectSession(t.id);
+    return true;
+  }
+  flash('没有可重开的标签', 'warn');
+  renderTabs();
+  return false;
+}
+
 /* 选中一个会话时调用:没有就追加,有就只更新标题(重复选中不会多一个 tab)。 */
 function touchTab(id, title) {
   if (!id) return;
+  /* §8.75:这个会话已经通过列表/深链重新打开了,就把它从「最近关闭」里划掉,
+   * 否则 /tab-reopen 会以为它还在关着,白弹一次。 */
+  const ci = closedTabs.findIndex((t) => t.id === id);
+  if (ci >= 0) closedTabs.splice(ci, 1);
   const s = store.sessions.get(id);
   const next = title != null ? String(title || '') : (s && s.title) || '';
   const tab = store.tabs.find((t) => t.id === id);
@@ -2387,7 +2436,10 @@ function renderTabs() {
     }
   }
   if (changed) saveTabs();
-  nav.hidden = store.tabs.length === 0;
+  /* §8.75 没有标签、但还有「最近关闭」时栏不能整条收起 —— 否则刚关掉最后一个就再也没有
+   * ↺ 可点(手机上尤其明显)。两样都空时才真的 hidden。 */
+  nav.hidden = store.tabs.length === 0 && closedTabs.length === 0;
+  renderTabReopen();
   if (!store.tabs.length) {
     strip.innerHTML = '';
     tabsSig = '';
@@ -2440,6 +2492,7 @@ function closeTab(id) {
   const i = store.tabs.findIndex((t) => t.id === id);
   if (i < 0) return;
   const wasActive = store.selected === id;
+  rememberClosedTab(id, store.tabs[i] && store.tabs[i].title); // §8.75:留给 /tab-reopen
   store.tabs.splice(i, 1);
   saveTabs();
   if (wasActive) {
@@ -2464,6 +2517,10 @@ function setupSessionTabs() {
       e.stopPropagation();
       const tab = x.closest('.tab');
       if (tab) closeTab(tab.dataset.id);
+      return;
+    }
+    if (e.target.closest('#tabReopen')) {
+      reopenTab();
       return;
     }
     if (e.target.closest('#tabNew')) {
@@ -7133,6 +7190,7 @@ const HISTORY_LIMIT = 50;
 // 与服务端命令同名时以服务端为准(见 mergedCommands)。
 const PANEL_COMMANDS = [
   { name: 'new', description: '新建会话', run: () => openNew() },
+  { name: 'tab-reopen', description: '重开最近关闭的标签', run: () => reopenTab() },
   { name: 'compact', description: '压缩当前会话的上下文', run: (sid) => runCompact(sid) },
   { name: 'interrupt', description: '中断当前正在执行的回合', run: () => interrupt() },
   { name: 'undo', description: '撤销到最后一条用户消息(含该轮文件改动)', run: (sid) => runUndo(sid) },
@@ -7168,6 +7226,7 @@ const HELP_KEYS = [
   { k: '/fork', d: '从完整会话或某条用户消息分叉' },
   { k: '/copy', d: '复制当前会话转录(纯文本,不含思考)' },
   { k: '/copyid', d: '复制当前会话 ID' },
+  { k: '/tab-reopen', d: '重开最近关闭的标签(对应 TUI session.tab.reopen)' },
   { k: '/subagents', d: '选择并打开当前会话的子会话' },
   { k: '/parent', d: '回到父会话' },
   { sec: '会话' },
