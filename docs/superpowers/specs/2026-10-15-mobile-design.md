@@ -3231,6 +3231,56 @@ ERRORS []
 
 ---
 
+### 8.64 /diff 文件树与逐文件 reviewed
+
+**起因**:§8.63 接上四档后,多文件 diff 只能一整条往下滚;TUI 的 diff viewer 左边还有
+文件树,能点文件跳过去,并给每个文件勾「已看」。
+
+**结论**:`#diffBody` 外面包一层 `.diffmain`,左边新增 `#diffTree`。只有**两个及以上文件**
+才露树;第一项默认高亮,点文件滚正文;每项右边一个 `○ / ✓` 的 reviewed 按钮。reviewed
+只在本页内存里,切来源 / 刷新 / 重新载入后归零,不写 `localStorage`。
+
+**改动**:
+
+| 位置 | 行为 |
+|---|---|
+| 布局 | `.diffmain` 桌面 `display:flex`;`#diffTree` 固定 220px,`#diffBody` 占余下宽度并 `min-width:0`;单文件 / 空结果 / 要选基线 / 失败时树 `hidden` |
+| 列表项 | 状态徽标 `~ / + / -`、缩写路径(目录灰、文件名亮)、右边 `○ / ✓` reviewed 按钮;`title` 给完整路径 + 状态 |
+| 跳转 | 点文件名不重画正文,按 `.dfile` 的 `getBoundingClientRect()` 差值改 `#diffBody.scrollTop`,并把树里 active 换到该项 |
+| reviewed | `toggleDiffReviewed(i)` 只改 `.dtree-item.reviewed`、`aria-pressed`、按钮文案和 `N/M 已看`;不碰 `#diffBody`,正在读的补丁 DOM 原样留着 |
+| 重置 | `renderDiffTree(files)` 每次载入都清空 reviewed;切来源、点刷新、重新开框都会重来 |
+| CSS | 新样式全部在普通规则 + `html.narrow` 下;窄屏 `.diffmain` 改块级、`.difftree { display:none }`,不写第二份 `@media` |
+
+**实测**(真页面 1366×900 + 393×894,临时 git 工程 / 临时会话;3 个文件时):
+
+```
+单文件      文件树 hidden,不占左栏
+多文件      3 项:a.txt / b.txt / c.txt;第一项 active;0/3 已看
+点第三个    树 active = c.txt;正文 scrollTop 140(人为把正文压到 120px 高)
+勾第一个    1/3 已看;item.reviewed = true;aria-pressed = true;正文首节点身份不变
+窄屏        文件树 computed display:none;来源行 221px;正文 339px;docScrollWidth == innerWidth
+ERRORS []
+```
+
+**取舍**:
+
+- **窄屏不显示文件树**。393px 上树和 diff 并排会把正文压到不可读;手机仍是一整条往下滚,
+  文件树只在桌面 / 宽屏出现。
+- **平铺列表,不画 TUI 那种目录树**。文件不多时平铺更好扫;目录只在路径前缀里灰显。
+  真要做深层目录折叠,得再引入树模型,收益不值。
+- **reviewed 不持久化**。它是「这一轮我看到哪了」的临时标记,和 TUI viewer 的内存状态一致;
+  写 `localStorage` 反而会跨会话 / 跨 diff 误标。
+- **加载不自动滚到第一个文件**。树默认高亮第一个,但正文保持用户原来的滚动位置;刷新时
+  不突然把人从中间拽回顶部。
+- **勾已看不重画正文**。只改树节点,避免把正在读的 diff 行 DOM、滚动和选区全部重建。
+
+**回归**:`smoke.sh` 352 → **353**(1 项:文件树 / 跳转 / reviewed / 窄屏静态锁),
+`ui-capabilities` 160 → **167**(7 项:多文件树与徽标、点文件滚动并高亮、勾已看不重造正文、
+再点取消、切来源归零、单文件不占左栏、空结果收起);其余套件计数不变;全量回归 **0 失败**,
+日志 `/tmp/ocsm-probe/perf/regress-864.log`。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
@@ -3244,7 +3294,7 @@ ERRORS []
 | 应用层来源白名单（而非改绑定）| 保住本机访问，且不依赖网卡启动顺序 | `server.js` 多几行；需要维护一个环境变量 |
 | PWA 不做 | `http://` 私有 IP 拿不到安全上下文，做了装不上 | 没图标/没全屏/没离线（必要时以后套 APK 再补）|
 | worktree 管理补到列出 / 删除 / 移入 | 复用 `#dlgPick` 和现有 `+ 新建`，不新造对话框；把 TUI `Worktrees` 最常用的后半段补齐 | 只列工程根目录，不拆子目录；删除前不展示文件变更预览，用原生 `confirm`；入口只在 `/worktrees` 命令（§8.61）|
-| 变更总览接四档 | `turn` 按 turn 快照算净变更；`branch` / `working` / `committed` 走 `vcs.diff`，与 TUI 的 diff viewer 同名同义 | 对比基线不猜 `branch.default`，没 base 时先让用户选；文件树 / 逐文件 reviewed 仍待做（§8.63）|
+| 变更总览接四档 + 文件树 | `turn` / `branch` / `working` / `committed` 与 TUI 同名同义；多文件时左侧平铺文件树，点文件跳正文，逐文件 reviewed 只在本页内存 | 对比基线不猜 `branch.default`，没 base 时先让用户选；窄屏不显示文件树，reviewed 不持久化（§8.63 / §8.64）|
 | 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
 | 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
 | diff 统一视图无条件折行 | 照 TUI 的 `wrapMode="char"`；393px 上不用左右拖着读 | 超长单 token 会断在任意字符；Markdown 代码块仍横向滚（§8.58）|

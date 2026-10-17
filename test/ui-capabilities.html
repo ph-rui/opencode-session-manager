@@ -88,7 +88,10 @@
       </div>
       <button type="button" class="chip diffbase" id="diffBase" hidden></button>
     </div>
-    <div class="diffbody" id="diffBody"></div>
+    <div class="diffmain">
+      <div class="difftree" id="diffTree" role="group" aria-label="变更文件" hidden></div>
+      <div class="diffbody" id="diffBody"></div>
+    </div>
     <p class="dlgerr" id="diffErr" hidden></p>
     <div class="dlgacts"><button type="button" data-close>关闭</button><button type="button" id="diffReload">刷新</button></div>
   </div></dialog>
@@ -529,6 +532,7 @@
       seed();
       store.selected = 'ses_a';
       reset();
+      setupDiff();
       window.diffFail = false;
       window.diffEmpty = false;
       await openDiff();
@@ -657,6 +661,58 @@
         reqs(/^\/api\/vcs\/diff\?/).length === 0 &&
         reqs(/^\/api\/session\/ses_a\/diff\?context=3$/).length === 1 &&
         q('#diffSub').textContent === '最近一轮' && q('#diffBase').hidden === true);
+
+      T('文件树:多文件时列出、第一项高亮、徽标分修改/新增',
+        q('#diffTree').hidden === false && qa('#diffTree .dtree-item').length === 2 &&
+        q('#diffTree .dtree-item[data-fi="0"]').classList.contains('active') &&
+        q('#diffTree .dtree-item[data-fi="1"] .dtree-base').textContent === 'new.txt' &&
+        q('#diffTree .dtree-item[data-fi="0"] .dtree-badge').textContent === '~' &&
+        q('#diffTree .dtree-item[data-fi="0"] .dtree-badge').classList.contains('mod') &&
+        q('#diffTree .dtree-item[data-fi="1"] .dtree-badge').textContent === '+' &&
+        q('#diffTree .dtree-item[data-fi="1"] .dtree-badge').classList.contains('add'),
+        qa('#diffTree .dtree-item').map(function (x) { return x.textContent; }));
+
+      q('#diffBody').style.height = '80px';
+      q('#diffBody').style.maxHeight = '80px';
+      q('#diffTree button[data-dtree-jump="1"]').click();
+      T('文件树:点第二个文件会滚动正文并改成高亮它',
+        q('#diffTree .dtree-item[data-fi="1"]').classList.contains('active') &&
+        q('#diffBody').scrollTop > 0, q('#diffBody').scrollTop);
+      q('#diffBody').style.height = '';
+      q('#diffBody').style.maxHeight = '';
+
+      var firstDfile = q('#diffBody .dfile');
+      var review0 = q('#diffTree button[data-dtree-review="0"]');
+      review0.click();
+      T('文件树:勾已看只改树和计数,不重造 diff 正文',
+        q('#diffTree .dtree-item[data-fi="0"]').classList.contains('reviewed') &&
+        review0.getAttribute('aria-pressed') === 'true' &&
+        q('#dtreeReviewed').textContent === '1/2 已看' &&
+        q('#diffBody .dfile') === firstDfile, q('#dtreeReviewed').textContent);
+      review0.click();
+      T('文件树:再点一下取消已看',
+        !q('#diffTree .dtree-item[data-fi="0"]').classList.contains('reviewed') &&
+        review0.getAttribute('aria-pressed') === 'false' &&
+        q('#dtreeReviewed').textContent === '0/2 已看');
+
+      review0.click();
+      await setDiffMode('working');
+      T('文件树:切来源后 reviewed 归零',
+        qa('#diffTree .dtree-item.reviewed').length === 0 &&
+        q('#dtreeReviewed').textContent === '0/2 已看');
+
+      window.vcsDiffFiles = [DIFF_FILES[0]];
+      await setDiffMode('working');
+      T('文件树:只有一个文件时不占左栏',
+        q('#diffTree').hidden === true && qa('#diffTree .dtree-item').length === 0 &&
+        qa('#diffBody .dfile').length === 1);
+      window.vcsDiffFiles = DIFF_FILES;
+
+      window.vcsDiffEmpty = true;
+      await setDiffMode('working');
+      T('文件树:空结果时一起收起',
+        q('#diffTree').hidden === true && qa('#diffTree .dtree-item').length === 0);
+      window.vcsDiffEmpty = false;
 
       q('#dlgDiff').close();
       store.selected = null;

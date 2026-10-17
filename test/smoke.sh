@@ -2095,7 +2095,7 @@ fi
 if has "$APPJS" 'let diffSeq = 0;' && has "$APPJS" 'seq !== diffSeq' &&
    has "$APPJS" 'diffSeq++' &&
    has "$APPJS" "name: 'diff', description: '查看最近一轮变更" &&
-   has "$APPJS" "diffReload').addEventListener('click', loadDiff)" &&
+   has "$APPJS" "reload.addEventListener('click', loadDiff)" &&
    has "$APPJS" 'isRunning(sid)' && has "$APPJS" '最近一轮还在跑'; then
   echo "PASS: /diff 进了面板命令;刷新/切会话用序号挡旧响应;轮次在跑时空结果说清「结束后点刷新」"; pass=$((pass + 1))
 else
@@ -2275,6 +2275,23 @@ if has "$APPJS" 'const DIFF_SOURCES = {' &&
   echo "PASS: /diff 有最近一轮/全部/未提交/已提交四档、对比分支选择与窄屏横滑"; pass=$((pass + 1))
 else
   echo "FAIL: /diff 缺四档来源、对比分支选择或窄屏样式"; fail=$((fail + 1))
+fi
+
+# ---- R22 组:/diff 文件树 + 逐文件 reviewed(§8.64)----
+if has "$HOME_HTML" 'class="diffmain"' && has "$HOME_HTML" 'id="diffTree"' &&
+   has "$APPJS" 'function renderDiffTree(files)' &&
+   has "$APPJS" 'if (diffTreeFiles.length < 2)' &&
+   has "$APPJS" 'tree.hidden = false' &&
+   has "$APPJS" 'function scrollDiffToFile(i)' &&
+   has "$APPJS" 'function toggleDiffReviewed(i)' &&
+   has "$APPJS" 'paintDiffTreeReviewed();' &&
+   has "$CSS" '.difftree {' && has "$CSS" 'html.narrow .difftree { display: none; }' &&
+   has "$CSS" '.dtree-item.reviewed .dtree-path' &&
+   has "$(cat "$SMOKE_CAP")" '文件树:多文件时列出' &&
+   has "$(cat "$SMOKE_CAP")" '文件树:勾已看只改树和计数,不重造 diff 正文'; then
+  echo "PASS: /diff 文件树按多文件露出、点文件跳正文、逐文件勾已看不重造正文,窄屏收起"; pass=$((pass + 1))
+else
+  echo "FAIL: /diff 文件树 / 跳转 / reviewed / 窄屏样式缺了一块"; fail=$((fail + 1))
 fi
 
 echo

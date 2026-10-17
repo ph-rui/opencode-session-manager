@@ -1387,7 +1387,96 @@ dialog.dlg.dlgdiff {
   white-space: nowrap;
 }
 .diffbase.need { border-color: var(--accent); color: var(--accent); }
+.diffmain {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.difftree {
+  flex: 0 0 220px;
+  min-width: 0;
+  max-height: min(62vh, 680px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.difftree[hidden] { display: none; }
+.dtree-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82em;
+}
+.dtree-item {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+.dtree-item:last-child { border-bottom: none; }
+.dtree-jump {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 8px;
+  color: var(--fg);
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.9em;
+  text-align: left;
+  cursor: pointer;
+}
+.dtree-jump:hover { background: var(--panel2); }
+.dtree-item.active .dtree-jump {
+  background: var(--panel2);
+  box-shadow: inset 3px 0 var(--accent);
+}
+.dtree-badge {
+  flex: none;
+  width: 1em;
+  font-family: var(--mono);
+  text-align: center;
+}
+.dtree-badge.add { color: var(--diff-add-fg, #137333); }
+.dtree-badge.del { color: var(--diff-del-fg, #a50e0e); }
+.dtree-badge.mod { color: var(--muted); }
+.dtree-path {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dtree-dir { color: var(--muted); }
+.dtree-base { color: var(--fg); }
+.dtree-review {
+  flex: none;
+  width: 30px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  font: inherit;
+  cursor: pointer;
+}
+.dtree-review:hover { color: var(--accent); background: var(--panel2); }
+.dtree-review[aria-pressed="true"] { color: var(--accent); }
+.dtree-item.reviewed .dtree-path { opacity: 0.55; text-decoration: line-through; }
 .diffbody {
+  min-width: 0;
+  flex: 1 1 auto;
   min-height: 80px;
   max-height: min(62vh, 680px);
   overflow: auto;
@@ -1660,6 +1749,8 @@ html.narrow .diffbar { gap: 6px; }
 html.narrow .diffsources { flex: 1 1 auto; }
 html.narrow .diffsources button { min-height: 40px; padding: 0 8px; }
 html.narrow .diffbase { min-height: 40px; max-width: 42%; }
+html.narrow .diffmain { display: block; }
+html.narrow .difftree { display: none; }
 html.narrow .diffbody { max-height: max(120px, calc(100vh - 272px)); }
 html.narrow .fldrow { flex-direction: column; }
 html.narrow .chkfld { min-height: 44px; }

@@ -1492,6 +1492,9 @@ const DIFF_SOURCES = {
 let diffMode = 'turn';
 const diffBaseByDir = new Map(); // directory -> { ref, label }
 let diffSeq = 0;
+let diffTreeFiles = []; // 当前框里的文件列表(文件树与 reviewed 用)
+const diffReviewed = new Set(); // 已看文件路径;只在本页 / 本次载入里有效
+let diffActiveFile = -1;
 
 function diffModeValid(mode) {
   return Object.prototype.hasOwnProperty.call(DIFF_SOURCES, mode);
@@ -1545,7 +1548,114 @@ function renderDiffNeedBase(sid) {
       '<p class="dlghint">这一档要先选对比分支。点上面「选择对比分支…」,选完会自动加载。</p>';
   }
   if (stat) stat.textContent = '';
+  renderDiffTree([]);
   paintDiffHead(sid);
+}
+
+/* 文件树:照 TUI 的 diff viewer 把多文件列在左边。窄屏由 html.narrow 收掉,
+ * 不另写 @media;reviewed 也只存在内存里,刷新 / 切来源后重来。 */
+
+function diffReviewedKey(i) {
+  const f = diffTreeFiles[i];
+  return f ? (f.file || '#' + i) : '#' + i;
+}
+
+function diffTreeStatus(f) {
+  const st = f && ['added', 'deleted', 'modified'].indexOf(f.status) >= 0 ? f.status : 'modified';
+  return {
+    cls: st === 'added' ? 'add' : st === 'deleted' ? 'del' : 'mod',
+    char: st === 'added' ? '+' : st === 'deleted' ? '-' : '~',
+    label: st === 'added' ? '新增' : st === 'deleted' ? '删除' : '修改',
+  };
+}
+
+function renderDiffTree(files) {
+  diffTreeFiles = Array.isArray(files) ? files.slice() : [];
+  diffReviewed.clear();
+  diffActiveFile = diffTreeFiles.length ? 0 : -1;
+  const tree = $('#diffTree');
+  if (!tree) return;
+  tree.innerHTML = '';
+  tree.scrollTop = 0;
+  if (diffTreeFiles.length < 2) {
+    tree.hidden = true;
+    return;
+  }
+  let html =
+    '<div class="dtree-head"><span>文件</span><span id="dtreeReviewed">' +
+    '0/' + diffTreeFiles.length + ' 已看</span></div>';
+  diffTreeFiles.forEach((f, i) => {
+    const path = abbrevPath(f.file || '') || '(未知文件)';
+    const slash = path.lastIndexOf('/');
+    const dir = slash >= 0 ? path.slice(0, slash + 1) : '';
+    const base = slash >= 0 ? path.slice(slash + 1) : path;
+    const st = diffTreeStatus(f);
+    html +=
+      '<div class="dtree-item' + (i === diffActiveFile ? ' active' : '') + '" data-fi="' + i + '">' +
+      '<button type="button" class="dtree-jump" data-dtree-jump="' + i + '"' +
+      ' title="' + esc((f.file || '') + ' · ' + st.label) + '">' +
+      '<span class="dtree-badge ' + st.cls + '">' + st.char + '</span>' +
+      '<span class="dtree-path">' +
+      (dir ? '<span class="dtree-dir">' + esc(dir) + '</span>' : '') +
+      '<span class="dtree-base">' + esc(base) + '</span></span></button>' +
+      '<button type="button" class="dtree-review" data-dtree-review="' + i + '"' +
+      ' aria-pressed="false" title="标记已看" aria-label="标记已看 ' +
+      esc(f.file || '') + '">○</button>' +
+      '</div>';
+  });
+  tree.innerHTML = html;
+  tree.hidden = false;
+}
+
+function paintDiffTreeActive() {
+  const tree = $('#diffTree');
+  if (!tree) return;
+  tree.querySelectorAll('.dtree-item').forEach((it) => {
+    it.classList.toggle('active', Number(it.dataset.fi) === diffActiveFile);
+  });
+}
+
+function paintDiffTreeReviewed() {
+  const tree = $('#diffTree');
+  if (!tree) return;
+  let n = 0;
+  tree.querySelectorAll('.dtree-item').forEach((it) => {
+    const i = Number(it.dataset.fi);
+    const on = diffReviewed.has(diffReviewedKey(i));
+    if (on) n++;
+    it.classList.toggle('reviewed', on);
+    const b = it.querySelector('.dtree-review');
+    if (b) {
+      const file = (diffTreeFiles[i] && diffTreeFiles[i].file) || '';
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.title = on ? '取消已看' : '标记已看';
+      b.setAttribute('aria-label', (on ? '取消已看 ' : '标记已看 ') + file);
+      b.textContent = on ? '✓' : '○';
+    }
+  });
+  const cnt = $('#dtreeReviewed');
+  if (cnt) cnt.textContent = n + '/' + diffTreeFiles.length + ' 已看';
+}
+
+function scrollDiffToFile(i) {
+  const body = $('#diffBody');
+  if (!body) return;
+  const el = body.querySelectorAll('.dfile')[i];
+  if (!el) return;
+  diffActiveFile = i;
+  paintDiffTreeActive();
+  const br = body.getBoundingClientRect();
+  const fr = el.getBoundingClientRect();
+  body.scrollTop = Math.max(0, body.scrollTop + fr.top - br.top);
+}
+
+function toggleDiffReviewed(i) {
+  if (!diffTreeFiles[i]) return;
+  const key = diffReviewedKey(i);
+  if (diffReviewed.has(key)) diffReviewed.delete(key);
+  else diffReviewed.add(key);
+  // 只改文件树自己的类 / 文案,不重画 diff 正文 —— 勾已看不该把正在读的补丁重造一遍。
+  paintDiffTreeReviewed();
 }
 
 // 先问服务端记着的 review base;没有(503 Choose a review base)就返回 null,
@@ -1646,6 +1756,7 @@ function openDiff() {
   if (stat) stat.textContent = '';
   const body = $('#diffBody');
   if (body) body.innerHTML = '<p class="dlghint">正在加载变更…</p>';
+  renderDiffTree([]);
   const dlg = $('#dlgDiff');
   if (!dlg) return; // 老测试页没有这个框
   paintDiffHead(sid);
@@ -1660,6 +1771,7 @@ function renderDiffFiles(files, sid) {
   if (!files.length) {
     body.innerHTML = '<p class="dlghint">' + esc(diffEmptyHint(sid)) + '</p>';
     if (stat) stat.textContent = '0 个文件';
+    renderDiffTree([]);
     paintDiffHead(sid);
     return;
   }
@@ -1672,6 +1784,7 @@ function renderDiffFiles(files, sid) {
   // 不传 pid:框里不出「并排 / 统一」按钮,视图跟消息卡片共享同一个全局偏好。
   body.innerHTML = diffHtml(files);
   if (stat) stat.textContent = files.length + ' 个文件 · +' + adds + ' -' + dels;
+  renderDiffTree(files);
   paintDiffHead(sid);
 }
 
@@ -1710,9 +1823,43 @@ async function loadDiff() {
     if (body) body.innerHTML = '';
     const stat = $('#diffStat');
     if (stat) stat.textContent = '';
+    renderDiffTree([]);
     paintDiffHead(sid);
   } finally {
     if (seq === diffSeq) setBusy(btn, false);
+  }
+}
+
+function setupDiff() {
+  const reload = $('#diffReload');
+  if (reload) reload.addEventListener('click', loadDiff);
+  const sources = $('#diffSources');
+  if (sources) {
+    sources.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-diffmode]');
+      if (b) setDiffMode(b.dataset.diffmode);
+    });
+  }
+  const base = $('#diffBase');
+  if (base) base.addEventListener('click', openDiffBasePick);
+  const tree = $('#diffTree');
+  if (tree) {
+    tree.addEventListener('click', (e) => {
+      const rev = e.target.closest('button[data-dtree-review]');
+      if (rev) {
+        toggleDiffReviewed(Number(rev.dataset.dtreeReview));
+        return;
+      }
+      const jump = e.target.closest('button[data-dtree-jump]');
+      if (jump) scrollDiffToFile(Number(jump.dataset.dtreeJump));
+    });
+  }
+  const dlg = $('#dlgDiff');
+  if (dlg) {
+    // 关框就让在途请求作废,别在后台把结果写回已关掉的框
+    dlg.addEventListener('close', () => {
+      diffSeq++;
+    });
   }
 }
 
@@ -8198,20 +8345,7 @@ function init() {
   $('#importOk').addEventListener('click', submitImport);
   $('#exportOk').addEventListener('click', submitExport);
   $('#tuiCopy').addEventListener('click', copyTui);
-  $('#diffReload').addEventListener('click', loadDiff);
-  const diffSources = $('#diffSources');
-  if (diffSources) {
-    diffSources.addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-diffmode]');
-      if (b) setDiffMode(b.dataset.diffmode);
-    });
-  }
-  const diffBase = $('#diffBase');
-  if (diffBase) diffBase.addEventListener('click', openDiffBasePick);
-  // 关框就让在途请求作废,别在后台把结果写回已关掉的框
-  $('#dlgDiff').addEventListener('close', () => {
-    diffSeq++;
-  });
+  setupDiff();
   document.querySelectorAll('dialog.dlg [data-close]').forEach((b) =>
     b.addEventListener('click', () => closeDlg(b.closest('dialog')))
   );
