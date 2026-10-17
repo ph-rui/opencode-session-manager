@@ -2490,6 +2490,34 @@ markdown、html、两套高亮叠加的嵌套顺序、hunk 不上色、`write` �
 
 ---
 
+### 8.51 逐文件 revert:API 没有这个口子,不做假按钮
+
+**起因**:同一批的第 3 项。原计划是「先探 API,不支持就只保留现有的整轮撤销并说明」。
+
+**探到的**(`@opencode-ai/sdk@1.17.18` 的生成类型,`dist/v2/gen/types.gen.d.ts`):
+
+| 端点 | 请求体 | 说明 |
+|---|---|---|
+| `POST /api/session/:id/revert/stage` | `{ messageID: string, files?: boolean }` | 暂存一个可回退的会话边界,`files` 表示顺带还原该轮文件改动 |
+| `POST /api/session/:id/revert/clear` | 无 | 清掉暂存的撤销 |
+| `POST /api/session/:id/revert/commit` | 无 | 提交暂存的撤销 |
+
+`RevertState` 里虽然有 `partID` 字段,但**请求体只收 `messageID` + `files`** ——
+没有任何「只还原某个文件」的参数。也就是说,逐文件 revert 不是面板没画,是服务端没有这个动作。
+
+**所以**:不加假按钮、不发夹带 `partID` 的请求去赌 zod 会放过未知字段。面板保持现状:
+
+- 整轮撤销:`/undo`(=`revert/stage {messageID, files:true}`,回退对话边界 + 还原该轮文件改动);
+- 重做:`/redo`(`DELETE /api/session/:id/revert`,409 当作「没有可重做的撤销」)。
+
+**顺带记一笔**:`GET /api/session/:id/diff?from=&to=&context=` 能按轮次给出结构化的逐文件 diff
+(TUI 的「变更」面板就建在它上面)。面板没做独立面板,是因为**每张 `edit`/`patch` 卡片已经是按文件的**,
+再开一页只是把同样的内容重新列一遍;等真需要「跨多条消息汇总这一轮改了什么」时再说。
+
+**回归**:纯文档,无代码改动;全量回归照跑(基线 312 / 282 / 249 / …)。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
