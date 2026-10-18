@@ -1060,6 +1060,51 @@
       T('home 未知时不缩写', (function () { const h = store.home; store.home = ''; const r = abbrevHome('/home/u/x'); store.home = h; return r === '/home/u/x'; })());
       store.home = '';
 
+      /* §8.85:usage.updated 是【整个会话】的累计用量,不是当前这一步的。
+       * 以前它被写进 live 消息,思考阶段最后一条带 tokens 的消息就是它,
+       * 百分比会随回合越加越大、超过 100%。现在只并进会话对象,ctx 仍看上一轮。 */
+      store.messages.clear();
+      msgEls.clear();
+      store.live.clear();
+      q('#messages').innerHTML = '';
+      store.sessions.get('ses_a').cost = 0;
+      store.sessions.get('ses_a').tokens = { input: 10, output: 5 };
+      store.messages.set('m_ctx_prev', {
+        id: 'm_ctx_prev', type: 'assistant', time: { created: 700, completed: 701 },
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+        tokens: { input: 1000, output: 0, reasoning: 0, cache: { read: 99000, write: 0 } },
+        content: [{ type: 'text', text: '上一轮' }],
+      });
+      renderMessages();
+      T('(前置)上一轮 100K 显示 50%',
+        q('#ctxInfo .ctxFull').textContent === '100.0K (50%)', q('#ctxInfo .ctxFull').textContent);
+      feed('session.step.started', {
+        sessionID: 'ses_a', assistantMessageID: 'msg_ctx_live', started: 800,
+        model: { providerID: 'company', id: 'deepseek-v4-flash' },
+      });
+      T('思考中的新 step 还没 tokens 时,ctx 仍看上一轮已完成消息',
+        q('#ctxInfo .ctxFull').textContent === '100.0K (50%)', q('#ctxInfo .ctxFull').textContent);
+      feed('session.usage.updated', {
+        sessionID: 'ses_a', cost: 0.99,
+        tokens: { input: 400000, output: 100000, reasoning: 0, cache: { read: 0, write: 0 } },
+      });
+      T('累计 usage.updated 不写进 live 消息的 tokens',
+        view('msg_ctx_live').tokens === null, view('msg_ctx_live').tokens);
+      T('累计 usage.updated 不会把 ctx 顶过 100%(仍是上一轮的 50%)',
+        q('#ctxInfo .ctxFull').textContent === '100.0K (50%) · $0.99', q('#ctxInfo .ctxFull').textContent);
+      T('会话级累计费用/用量仍更新(会话列表与提示栏用)',
+        store.sessions.get('ses_a').cost === 0.99 &&
+        store.sessions.get('ses_a').tokens.input === 400000,
+        JSON.stringify(store.sessions.get('ses_a')));
+      feed('session.step.ended', {
+        sessionID: 'ses_a', assistantMessageID: 'msg_ctx_live', finish: 'stop',
+        tokens: { input: 1000, output: 0, reasoning: 0, cache: { read: 149000, write: 0 } },
+      });
+      T('step.ended 到了仍按每步用量更新 ctx(150K / 75%)',
+        q('#ctxInfo .ctxFull').textContent === '150.0K (75%) · $0.99', q('#ctxInfo .ctxFull').textContent);
+      store.sessions.get('ses_a').cost = 0;
+      store.sessions.get('ses_a').tokens = { input: 10, output: 5 };
+
       /* 流式那一轮:step.ended 把 tokens 打上,不必等服务端把消息落盘 */
       store.messages.clear();
       msgEls.clear();

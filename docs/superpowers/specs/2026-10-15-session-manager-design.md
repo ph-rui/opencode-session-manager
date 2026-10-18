@@ -193,8 +193,8 @@ opencode-session-manager/
     | `session.tool.progress` | `{sessionID, assistantMessageID, id, metadata}` |
     | `session.tool.success` | `{sessionID, assistantMessageID, id, content, metadata}` |
     | `session.tool.failed` | `{sessionID, assistantMessageID, id, error?}` |
-    | `session.step.ended` | `{sessionID, assistantMessageID, finish, cost, tokens}` |
-    | `session.usage.updated` | `{sessionID, cost, tokens}`(**无 location**) |
+    | `session.step.ended` | `{sessionID, assistantMessageID, finish, cost, tokens}`（这一步的用量） |
+    | `session.usage.updated` | `{sessionID, cost, tokens}`（**整个会话的累计用量**，无 location；不写 live 消息，§8.85） |
   - 三条关键语义:
     (a) **一个 step 就是一条助手消息** —— 多 step 回合(先调工具再总结)里 `assistantMessageID` 每 step 都不同,因此不会跨 step 撞序号;
     (b) **`ordinal` 是「同一类型内的序号」而非 `content` 下标** —— content 为 `[reasoning, text]` 时两者的 `ordinal` 都是 0,

@@ -1462,6 +1462,15 @@ if has "$CTX_LAST_FN" "m.type === 'compaction' && m.status === 'completed'" &&
 else
   echo "FAIL: contextUsage()/lastUsageMessage() 的算法不对"; fail=$((fail + 1))
 fi
+# §8.85:usage.updated 的 tokens 是【整个会话】的累计值,不能写进 live 消息 ——
+# 否则思考阶段 contextUsage() 会拿累计值当当前上下文,越跑越大甚至超过 100%。
+USAGE_STREAM=$(printf '%s' "$APPJS" | awk "/if \\(t === 'session.usage.updated'\\)/{f=1} f{print} f&&/^  }$/{exit}")
+if has "$USAGE_STREAM" 'return false;' && ! has "$USAGE_STREAM" 'L.tokens' &&
+   has "$APPJS" 'patch.tokens = d.tokens' && has "$APPJS" 'patch.cost = d.cost'; then
+  echo "PASS: usage.updated 只并进会话累计值,不写 live 消息(§8.85)"; pass=$((pass + 1))
+else
+  echo "FAIL: usage.updated 仍可能把会话累计 tokens 写进 live 消息(§8.85)"; fail=$((fail + 1))
+fi
 if has "$APPJS" 'function fmtSize(' && has "$APPJS" "(n / 1e6).toFixed(1) + 'M'" &&
    has "$APPJS" "(n / 1000).toFixed(1) + 'K'"; then
   echo "PASS: fmtSize 是 TUI 的 zN(155600 → 155.6K)"; pass=$((pass + 1))

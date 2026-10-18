@@ -370,6 +370,31 @@
       T('session.execution.succeeded → 不误报运行中', !store.active.has('ses_y'));
       store.active.clear();
 
+      /* §8.85:usage.updated 的 tokens/cost 是【整个会话】的累计值,
+       * 只并进会话对象;live 消息的每步 tokens/cost 留给 step.ended。 */
+      store.sessions.set('ses_usage', {
+        id: 'ses_usage', title: 'U', projectID: 'pj1',
+        location: { directory: '/proj' }, time: { created: 1, updated: 1 },
+        cost: 0, tokens: { input: 1, output: 2 },
+      });
+      store.live.set('msg_live_u', {
+        id: 'msg_live_u', sid: 'ses_usage', open: true, parts: [], byKey: {},
+        tokens: null, cost: null,
+      });
+      handleControlEvent({ type: 'session.usage.updated', data: {
+        sessionID: 'ses_usage', cost: 1.25,
+        tokens: { input: 300, output: 40, reasoning: 0, cache: { read: 50, write: 0 } },
+      } });
+      T('usage.updated 把累计费用/用量并进会话对象',
+        store.sessions.get('ses_usage').cost === 1.25 &&
+        store.sessions.get('ses_usage').tokens.input === 300,
+        JSON.stringify(store.sessions.get('ses_usage')));
+      T('usage.updated 不碰 live 消息的每步 tokens/cost',
+        store.live.get('msg_live_u').tokens === null && store.live.get('msg_live_u').cost === null,
+        JSON.stringify(store.live.get('msg_live_u')));
+      store.live.delete('msg_live_u');
+      store.sessions.delete('ses_usage');
+
       /* session.updated:兼容「带 info」与「只有 sessionID」两种载荷 */
       store.selected = 'ses_t';
       store.sessions.set('ses_t', Object.assign({}, SESSION));

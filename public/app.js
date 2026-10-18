@@ -8817,8 +8817,8 @@ async function send() {
 //   session.tool.progress       {assistantMessageID, id, metadata}
 //   session.tool.success        {assistantMessageID, id, content, metadata}
 //   session.tool.failed         {assistantMessageID, id, ...}
-//   session.step.ended          {assistantMessageID, finish, cost, tokens}
-//   session.usage.updated       {sessionID, cost, tokens}
+//   session.step.ended          {assistantMessageID, finish, cost, tokens}  ← 这一步的用量
+//   session.usage.updated       {sessionID, cost, tokens}                   ← 整个会话的累计用量
 //
 // 注意 `ordinal` 是「同一类型里的第几个」,不是 content 下标:
 // 一条消息里 reasoning 与 text 的 ordinal 都会从 0 开始(实测 content=[reasoning, text] 时两者都是 0)。
@@ -8988,14 +8988,11 @@ function handleStreamEvent(e) {
   }
 
   if (t === 'session.usage.updated') {
-    let any = false;
-    for (const L of store.live.values()) {
-      if (L.sid !== d.sessionID || !L.open) continue;
-      if (d.tokens) L.tokens = d.tokens;
-      if (typeof d.cost === 'number') L.cost = d.cost;
-      any = true;
-    }
-    return any;
+    /* 载荷是【整个会话】的累计用量(服务端把每一步的 tokens 加到 session 行再发),
+     * 不是这一步的用量。写进 live 消息会被 contextUsage() 当成当前上下文,
+     * 多步以后越加越大,百分比能超过 100%。这里只让 handleControlEvent() 把它
+     * 并进 store.sessions(会话列表 / 提示栏费用);live 消息的 tokens 只认 step.ended。 */
+    return false;
   }
 
   if (t.indexOf('session.execution.') === 0) {
@@ -9305,6 +9302,19 @@ function handleControlEvent(e) {
     if (sid) {
       store.active.delete(sid);
       dirty = true;
+    }
+  } else if (t === 'session.usage.updated') {
+    /* 这是【整个会话】的累计用量,只并进会话对象(会话列表的 tokens / 提示栏费用)。
+     * live 消息的每步 tokens 由 session.step.ended 负责,别把累计值写进去 ——
+     * 否则 contextUsage() 会拿它当当前上下文,多步以后超过 100%。 */
+    if (sid && store.sessions.has(sid)) {
+      const patch = {};
+      if (d.tokens) patch.tokens = d.tokens;
+      if (typeof d.cost === 'number') patch.cost = d.cost;
+      if (Object.keys(patch).length) {
+        patchSession(sid, patch);
+        dirty = true;
+      }
     }
   } else if (t.indexOf('session.execution.') === 0) {
     if (sid) {

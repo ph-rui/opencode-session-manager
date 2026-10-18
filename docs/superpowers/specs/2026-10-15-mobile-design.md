@@ -4220,6 +4220,39 @@ diff / write 正文。100 条消息、75 张 edit 卡（每张 3 个文件、每
 135 → **144**，`ui-stream` 260 → **264**；`ui-tools` 368、`ui-layout` 189 不变。
 全量回归 **0 失败，1 跳过**。
 
+### 8.85 思考阶段上下文百分比超过 100%
+
+**现象**：多步回合里，第二段思考开始后，输入框下面的 `N% ctx` 会超过 100%，
+回合结束又回落。
+
+**根因**：`session.usage.updated` 的 `tokens` 是服务端 session 行里的**累计用量**
+（每步 `input/output/reasoning/cache.read/cache.write` 都用 `+` 累加），不是当前
+这一步的用量。面板原先把这条事件写进所有 open 的 live 消息；`contextUsage()` 又取
+最后一条带 `tokens` 的助手消息，于是拿整个会话的累计值去除以 `limit.context`，
+多步后必然越界。`session.step.ended` 才是每一步的用量。
+
+**修法**：
+
+- `handleStreamEvent()` 不再处理 `usage.updated` 的 `tokens/cost`（返回 false，
+  不触发 live 重绘）。
+- `handleControlEvent()` 把累计 `tokens/cost` 并进 `store.sessions`，只用于会话列表
+  与提示栏费用；不新建未知会话，避免子会话被塞进主列表。
+- live 消息的 `tokens/cost` 只认 `session.step.ended`；思考阶段 ctx 继续显示上一条
+  已完成 step 的值，没有就收起。
+
+**验证**：
+
+- `ui-stream.html` 新增 6 项：上一轮 50% 基线、思考中仍看上一条、累计
+  `usage.updated` 不写 live、ctx 不被顶过 100%、会话级累计值仍更新、
+  `step.ended` 后按每步 75% 更新。
+- `ui-controls.html` 新增 2 项：累计值并进会话对象、live 消息不被碰。
+- `smoke.sh` 新增 1 项静态锁：`usage.updated` 分支只 `return false`，控制分支写
+  `patch.tokens/cost`。
+
+**回归**：`smoke.sh` 380 → **381**，`ui-controls` 108 → **110**，`ui-stream`
+264 → **270**；`ui-jump` 144、`ui-tools` 368、`ui-layout` 189 不变。全量回归
+**0 失败，1 跳过**（可选真实模型 E2E）。
+
 ---
 
 ## 9. 取舍与理由
