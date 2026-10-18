@@ -1211,11 +1211,21 @@ else
 fi
 # 「贴不贴底」= 用户意图,不是一次几何读数:容器变矮(状态条 / 底板展开 / #asks / 软键盘)
 # 与内容变长都会把「离底还有多远」撑大,直接采信那一次读数就会把跟随关掉 —— 表现就是
-# 「明明一直贴在底,忽然不跟了,动不动就要点一下跳到最新」。
-if has "$UPD_FN_O" 'store.lastTop' && has "$UPD_FN_O" 'top < store.lastTop - 1'; then
-  echo "PASS: 只有 scrollTop 往回走(用户自己往上滚)才关掉跟随"; pass=$((pass + 1))
+# 「明明一直贴在底,忽然不跟了,动不动就要点一下跳到最新」。但上滑必须优先:80px 容差
+# 内的小幅上滑也算让路,否则串口这类持续输出会一直把手机用户拽回最新。
+if has "$UPD_FN_O" 'store.lastTop' && has "$UPD_FN_O" 'top < store.lastTop - 1' &&
+   has "$UPD_FN_O" 'top > store.lastTop + 1' && has "$UPD_FN_O" 'atBottom(box)'; then
+  echo "PASS: 上滑优先(scrollTop 一变回就关),只有下滚回底才恢复跟随"; pass=$((pass + 1))
 else
-  echo "FAIL: 跟随又被一次几何读数直接决定了"; fail=$((fail + 1))
+  echo "FAIL: 跟随仍可能被 80px 容差或一次几何读数重新打开"; fail=$((fail + 1))
+fi
+# 手机手指向下 = 内容往上翻。touchmove 必须在 scroll 事件之前把跟随关掉,否则串口这类
+# 持续输出会在一次拖动中间就增量重绘 / ResizeObserver,用户刚滑上去就被拉回最新。
+if has "$APPJS" 'touchmove' && has "$APPJS" 'touchBaseY + 2' &&
+   has "$APPJS" 'updateJumpLatest(false);'; then
+  echo "PASS: 手机手指下滑(内容上翻)在 touchmove 里先停止跟随,不等 scroll 事件"; pass=$((pass + 1))
+else
+  echo "FAIL: 手机下拖仍可能在 scroll 事件前被串口输出抢先贴底"; fail=$((fail + 1))
 fi
 if has "$APPJS" 'function pinBottom(box)' && has "$APPJS" 'store.lastTop = box.scrollTop;'; then
   echo "PASS: 「贴底」只有 pinBottom() 一个实现(顺带记下这次看到的 scrollTop)"; pass=$((pass + 1))

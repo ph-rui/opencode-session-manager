@@ -271,11 +271,64 @@
       T('就在底部时新内容进来 → 自动跟随(仍在底部)', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
       T('自动跟随时按钮不冒出来', btn.hidden === true);
 
+      /* §8.86:上滑 30px 仍在 BOTTOM_SLACK 内,但已经是用户让路。串口会话持续输出时
+         不能借这 80px 容差把人拽回最新(手机手指下滑查看上面的内容就是这条路)。 */
+      box.scrollTop = box.scrollHeight;
+      await tick();
+      box.scrollTop = Math.max(0, maxTop() - 30);
+      await waitUntil(function () { return store.nearBottom === false; });
+      T('上滑 30px(仍在 BOTTOM_SLACK 内)→ 立刻停止跟随',
+        store.nearBottom === false && btn.hidden === false, store.nearBottom + '/' + btn.hidden);
+      var heldSmall = box.scrollTop;
+      window.SERVER['ses_long'].push({ id: 'msg_lsmall', type: 'user', time: { created: 10001 }, text: '小上滑后的新内容' });
+      await loadMessages();
+      T('小上滑后新内容进来 → 不拽回最新', box.scrollTop === heldSmall, box.scrollTop + ' vs ' + heldSmall);
+      T('小上滑后按钮仍露着', btn.hidden === false);
+
+      /* 手机手指向下 = 内容往上翻;touchmove 要抢在 scroll 事件之前让路。 */
+      jumpToLatest();
+      var ts = new Event('touchstart', { bubbles: true });
+      Object.defineProperty(ts, 'touches', { value: [{ clientY: 300 }] });
+      box.dispatchEvent(ts);
+      var tm = new Event('touchmove', { bubbles: true });
+      Object.defineProperty(tm, 'touches', { value: [{ clientY: 340 }] });
+      box.dispatchEvent(tm);
+      T('手指下滑(内容上翻)不等 scroll 就先停止跟随',
+        store.nearBottom === false && btn.hidden === false, store.nearBottom + '/' + btn.hidden);
+
+      /* 串口输出:手指已经下滑让路之后,增量重绘不许再把人贴回最新。 */
+      jumpToLatest();
+      store.live.set('live_scroll', {
+        id: 'live_scroll', sid: store.selected, started: Date.now(),
+        agent: null, model: null, byKey: {}, tokens: null, cost: null,
+        finish: null, open: true,
+        parts: [{ kind: 'block', type: 'text', ordinal: 0, text: '串口输出' }],
+      });
+      renderMessages();
+      box.scrollTop = Math.max(0, maxTop() - 30);
+      var ts2 = new Event('touchstart', { bubbles: true });
+      Object.defineProperty(ts2, 'touches', { value: [{ clientY: 300 }] });
+      box.dispatchEvent(ts2);
+      var tm2 = new Event('touchmove', { bubbles: true });
+      Object.defineProperty(tm2, 'touches', { value: [{ clientY: 340 }] });
+      box.dispatchEvent(tm2);
+      T('(前置)手指下滑后已让路', store.nearBottom === false);
+      var heldLive = box.scrollTop;
+      store.live.get('live_scroll').parts[0].text += ' ……又一段';
+      paintLiveDelta();
+      T('串口输出式增量到达也不抢先贴底', box.scrollTop === heldLive, box.scrollTop + ' vs ' + heldLive);
+      T('增量绘制后跟随仍关着', store.nearBottom === false, store.nearBottom);
+      store.live.delete('live_scroll');
+      renderMessages();
+      jumpToLatest();
+      await tick();
+
       /* ============ 4b. 什么才算「用户往上滚」 ============
        * 「贴不贴底」是【用户意图】,不是一次几何测量。容器变矮(状态条出现 / 底板展开 /
        * #asks 弹出 / 软键盘顶起)与内容变长都会把「离底还有多远」撑大,可那都不是用户
        * 往回翻 —— 老写法直接采信那一次几何读数,于是「明明一直贴在底,忽然就不跟了,
-       * 得点一下跳到最新」。判据只认两条:离底够近,或者 scrollTop 比上次记下的变小了。 */
+       * 得点一下跳到最新」。判据是【上滑优先】:scrollTop 比上次记下的变小了 →
+       * 立刻让路,哪怕还在 BOTTOM_SLACK 里;只有自己往下滚回底部才恢复。其余维持原样。 */
       pinBottom(box);
       T('pinBottom() 记下贴底时的 scrollTop(下次才分得清用户往上滚)',
         Math.abs(box.scrollTop - maxTop()) < 2 && store.lastTop === box.scrollTop,

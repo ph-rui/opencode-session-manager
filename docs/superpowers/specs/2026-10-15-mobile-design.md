@@ -4253,6 +4253,39 @@ diff / write 正文。100 条消息、75 张 edit 卡（每张 3 个文件、每
 264 → **270**；`ui-jump` 144、`ui-tools` 368、`ui-layout` 189 不变。全量回归
 **0 失败，2 个可选真实模型用例跳过**。
 
+### 8.86 手机上滑查看旧内容时被持续输出拽回最新
+
+**现象**：手机浏览器里手指向下滑，想查看上面的会话内容；在串口工具这类持续输出
+的会话里，有时滑不动，滑上去又自动跳回最新。
+
+**根因**：`updateJumpLatest()` 原先把 `atBottom()` 放在前面。`BOTTOM_SLACK = 80`，
+所以离底 30px 的小幅上滑仍被判定为「在底部」；串口输出每次到达又走
+`renderMessages()` / 增量贴底，把人拉回底部。即使一次滑过 80px，下一次渲染只要
+还在容差内也会重新判成跟随。触摸的 `scroll` 事件还可能晚于输出的重绘，单靠
+`scroll` 来不及让路。
+
+**修法**：
+
+- `updateJumpLatest()` 改成上滑优先：`scrollTop` 比 `store.lastTop` 小就立即停止
+  跟随，哪怕还在 `BOTTOM_SLACK` 内；只有真正回到底部（`BOTTOM_EXACT = 2`）或用户
+  向下滚回底部附近才恢复。内容变长 / 容器变矮仍维持原状态。
+- 给 `#messages` 补 `touchstart` / `touchmove`：手指向下（`clientY` 增大）累计
+  超过 2px 时立刻 `updateJumpLatest(false)`，不等 `scroll` 事件；滚轮 `deltaY < 0`
+  同理。反向滑动不拦，交给 `scroll` 事件。
+- 增量重绘 / `ResizeObserver` 继续只认 `store.nearBottom` 缓存，不再每帧读
+  `scrollHeight`；手势已经把缓存关掉，串口输出到达时自然不会再贴底。
+
+**验证**：
+
+- `ui-jump.html` 新增 7 项：上滑 30px（仍在 80px 内）立即让路、随后新内容不拽回、
+  按钮仍露着、手指下滑在 `touchmove` 里先让路、串口式增量不抢先贴底、增量后仍
+  不跟随，以及原有贴底 / 容器变矮行为不变。
+- `smoke.sh` 新增 1 项静态锁：上滑优先 + 下滚回底恢复；触摸下拖的早让路接线在。
+
+**回归**：`smoke.sh` 381 → **382**，`ui-jump` 144 → **151**；`ui-controls` 110、
+`ui-stream` 270、`ui-tools` 368、`ui-layout` 189 不变。全量回归 **0 失败，2 个可选
+真实模型用例跳过**。
+
 ---
 
 ## 9. 取舍与理由

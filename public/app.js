@@ -36,6 +36,9 @@ const store = {
   running: false,
   // 消息区【跟随中】的状态 —— 含义是「跟着最新输出走」这个意图,不是一次几何测量。
   // 只有【用户自己往上滚】才关掉它;内容变长、容器变矮都不算(见 updateJumpLatest)。
+  // 一旦关掉,只有用户自己往下滚回底部(或点「跳到最新」/End)才恢复 —— 不能因为还在
+  // BOTTOM_SLACK 里就重新判成跟随,否则手机手指下滑翻旧内容时,串口这类持续输出会
+  // 一直把位置拽回最新。
   // atBottom() 读 scrollHeight,文档一脏就强制整篇重排版(实测 100 条消息 / 7800 节点:
   // 干净时 0.95ms,脏了 23~29ms)。滚动事件、每次 renderMessages 收尾都会刷新它,
   // 增量重绘只认这个缓存,不再自己去读。
@@ -51,7 +54,7 @@ const store = {
   })(),
   // 「上一次看到的 scrollTop」。光看离底多远分不出「用户往上滚了」和「容器变矮 / 内容
   // 变长了」—— 后两者也会让离底距离变大,却完全不该关掉跟随。两次 scrollTop 一比,
-  // 只有变小才是用户自己往回翻。只在滚动事件与贴底动作里刷(见 pinBottom)。
+  // 只有变小才是用户自己往回翻。只在滚动事件、触摸/滚轮手势与贴底动作里刷(见 pinBottom)。
   lastTop: 0,
   asks: new Map(), // key -> { kind:'form'|'permission', id, sessionID, data, busy, error }
   active: new Map(), // sessionID -> 'busy'|'retry'(来自 /api/session/active 与事件)
@@ -341,7 +344,8 @@ function paintCompactBody(sid) {
   host.innerHTML = md(body);
   host.dataset.cbodyLen = String(body.length);
   // 只有本来就贴着底时才跟一下 —— 贴底时这一次读已经在上面那次 innerHTML 之后欠下了,
-  // 省不掉;不贴底就一次布局都不读。
+  // 省不掉;不贴底就一次布局都不读。手机手指下滑 / 滚轮上滚会先在手势监听里把
+  // nearBottom 关掉,所以这里只认缓存。
   if (store.nearBottom) pinBottom(box);
   return true;
 }
@@ -2942,6 +2946,9 @@ function setupAutoOlder() {
  * 按钮却还杵在那儿」。往上翻着的时候新内容进来,自动跟随会让路,按钮则露出来。
  */
 const BOTTOM_SLACK = 80;
+/* 真正贴底(1px 内)。只用来分清「用户上滑 30px」和「容器变矮后 scrollTop 反而变小、
+ * 但人已经落到新底部」—— 前者必须让路,后者必须继续跟随。 */
+const BOTTOM_EXACT = 2;
 
 /* 「跳到最新」按钮的引用。#messages 在切会话(selectSession)与取消选中(clearSelection)时会被
  * innerHTML 清空,按钮作为它的子元素会被一起抹掉 —— 所以引用得留在外面,
@@ -2969,8 +2976,13 @@ function pinBottom(box) {
  * 现量这一次不能把 atBottom() 的结果直接当结论:容器变矮(#状态条出现、底板展开、
  * #asks 弹出、软键盘顶起)与内容变长都会让「离底距离」变大,而那【不是】用户往上滚 ——
  * 直接采信就会把跟随关掉,表现成「明明一直贴在底,忽然不跟了,得点一下跳到最新」。
- * 所以只认两条:离底够近 → 跟随;scrollTop 比上次记下的变小了 → 用户自己往上滚了,让路。
- * 其余(内容变长 / 容器变矮)维持原样,跟随中就把底部重新贴住。 */
+ * 所以只认两条:scrollTop 比上次记下的变小了 → 先看是不是已经真正贴底(容器变矮后人
+ * 落到新底部就继续跟随,否则就是用户上滑,让路);用户自己往下滚回底部 → 恢复跟随。
+ * 其余(内容变长 / 容器变矮)维持原样,跟随中就把底部重新贴住。
+ *
+ * 注意「上滑」必须先判,不能先看 atBottom():BOTTOM_SLACK 是 80px,小幅上滑仍会被
+ * 当成在底部;串口会话每次输出再一贴底,就成了「滑不上去 / 滑上去又弹回最新」。
+ * 一旦让路也要保持,不能下一次渲染因为还在 80px 内又自己恢复。 */
 function updateJumpLatest(atB) {
   const box = $('#messages');
   if (box) {
@@ -2978,8 +2990,14 @@ function updateJumpLatest(atB) {
       store.nearBottom = atB;
     } else {
       const top = box.scrollTop;
-      if (atBottom(box)) store.nearBottom = true;
-      else if (top < store.lastTop - 1) store.nearBottom = false;
+      if (top < store.lastTop - 1) {
+        // scrollTop 变小:先分清是「用户上滑」还是「容器变矮后真正回到底部」。
+        // 真正贴底就恢复跟随;否则哪怕还在 BOTTOM_SLACK 里,也立刻停止跟随。
+        store.nearBottom = box.scrollHeight - top - box.clientHeight < BOTTOM_EXACT;
+      } else if (top > store.lastTop + 1 && atBottom(box)) {
+        // 只有用户自己往下滚回底部才恢复;内容变长 / 容器变矮不动状态。
+        store.nearBottom = true;
+      }
       store.lastTop = top;
     }
   }
@@ -3112,6 +3130,31 @@ function setupJumpLatest() {
   btn.addEventListener('click', jumpToLatest);
   // 手滚 / 惯性 / 拖滚动条都走这一条。不节流:一次减法加一次 hidden 赋值
   box.addEventListener('scroll', updateJumpLatest, { passive: true });
+  /* 手机手指【向下】滑 = 内容往上翻,要看更早的消息。必须抢在 scroll 事件前面把跟随
+   * 关掉:串口这类持续输出会在一次拖动中间就触发增量重绘 / ResizeObserver,等 scroll
+   * 事件到了再让路就已经被贴回最新了。只认方向,不读布局;反向滑动不拦,交给 scroll。 */
+  let touchY = null;
+  let touchBaseY = null;
+  box.addEventListener('touchstart', (e) => {
+    const t = e.touches && e.touches[0];
+    touchY = touchBaseY = t ? t.clientY : null;
+  }, { passive: true });
+  box.addEventListener('touchmove', (e) => {
+    const t = e.touches && e.touches[0];
+    if (!t || touchY == null || touchBaseY == null) return;
+    const y = t.clientY;
+    const down = y > touchY; // 这一下手指在向下走(不是反向回滑)
+    touchY = y;
+    // 累计向下超过 2px 才算翻旧内容,避免 1px 抖动;scrollTop 0 时本来就没得翻,
+    // 不把短会话也显示成「不在底部」。
+    if (down && y > touchBaseY + 2 && box.scrollTop > 0 && store.nearBottom) {
+      updateJumpLatest(false);
+    }
+  }, { passive: true });
+  // 触控板 / 鼠标滚轮往上滚同理;拖滚动条仍由 scroll 事件兜底。
+  box.addEventListener('wheel', (e) => {
+    if (e.deltaY < 0 && box.scrollTop > 0 && store.nearBottom) updateJumpLatest(false);
+  }, { passive: true });
   // 容器变矮(状态条出现 / 底板展开 / #asks 弹出 / 软键盘顶起)会把底部顶出可视区 ——
   // 跟随状态没变,可是得【立刻】重新贴住,不能等下一次渲染(一条消息都不再来的话就永远贴着不动了)。
   // 只在跟随时贴;用户往上翻着的时候一动不动。
