@@ -370,6 +370,44 @@
       T('session.execution.succeeded → 不误报运行中', !store.active.has('ses_y'));
       store.active.clear();
 
+      /* 面板自己发的消息会把 store.pending 置上;收工事件必须把它清掉并重算
+       * store.running,否则进度条会一直转(用户报「对话都完成了,进度条还在动」)。 */
+      store.selected = SESSION.id;
+      store.active.clear();
+      store.messages.clear();
+      store.messages.set('m_done_u', { id: 'm_done_u', type: 'user', time: { created: 1 }, text: '问' });
+      store.messages.set('m_done_a', {
+        id: 'm_done_a', type: 'assistant', time: { created: 2, completed: 3 }, content: [],
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      });
+      [
+        ['session.idle', { sessionID: SESSION.id }],
+        ['session.status', { sessionID: SESSION.id, status: { type: 'idle' } }],
+        ['session.execution.succeeded', { sessionID: SESSION.id }],
+        ['session.execution.failed', { sessionID: SESSION.id }],
+        ['session.execution.interrupted', { sessionID: SESSION.id }],
+      ].forEach(function (e) {
+        store.pending = true;
+        store.running = true;
+        store.active.set(SESSION.id, 'busy');
+        handleControlEvent({ type: e[0], data: e[1] });
+        T('收工事件 ' + e[0] + ' 清掉 pending', store.pending === false);
+        T('收工事件 ' + e[0] + ' 重算 running', store.running === false, store.running);
+        T('收工事件 ' + e[0] + ' 显示空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
+      });
+      store.pending = true;
+      store.running = true;
+      handleControlEvent({ type: 'session.execution.started', data: { sessionID: SESSION.id } });
+      T('开工事件不清 pending', store.pending === true && store.running === true);
+      store.pending = true;
+      store.running = true;
+      handleControlEvent({ type: 'session.idle', data: { sessionID: 'ses_other' } });
+      T('别的会话收工不动当前会话的 pending', store.pending === true && store.running === true);
+      store.pending = false;
+      store.running = false;
+      store.active.clear();
+      store.messages.clear();
+
       /* §8.85:usage.updated 的 tokens/cost 是【整个会话】的累计值,
        * 只并进会话对象;live 消息的每步 tokens/cost 留给 step.ended。 */
       store.sessions.set('ses_usage', {
@@ -471,6 +509,16 @@
       var m1 = msgReq();
       await loadActive();
       T('一直空闲:不会每次轮询都重复补拉', msgReq() === m1, { before: m1, after: msgReq() });
+
+      /* SSE 的收工事件整条丢了时,loadActive 的「运行→空闲」也要把 pending 熄掉。 */
+      store.pending = true;
+      store.running = true;
+      ACTIVE_DATA = { ses_t: { type: 'running' } };
+      await loadActive();
+      ACTIVE_DATA = {};
+      await loadActive();
+      T('loadActive 运行→空闲:清掉 pending', store.pending === false);
+      T('loadActive 运行→空闲:重算 running', store.running === false, store.running);
 
       /* SSE 半开(浏览器以为连接还活着,其实一条事件都收不到)时,看门狗要主动重连。 */
       var made = [];

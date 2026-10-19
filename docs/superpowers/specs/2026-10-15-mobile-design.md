@@ -4311,6 +4311,41 @@ diff / write 正文。100 条消息、75 张 edit 卡（每张 3 个文件、每
 **回归**：`smoke.sh` 382 → **383**，`ui-commands` 171 → **181**；其余套件不变。
 全量回归 **0 失败，2 个可选真实模型用例跳过**。
 
+### 8.88 收工后 pending 清掉，进度条不再空转
+
+**背景**：面板自己发消息时会先置 `store.pending = true`，用来在服务端还没回状态前
+把「已发出」画出来。原先把「这一轮结束了」只押在消息列表最后一条是 `idle` 上；
+现在服务端不一定再补这条 `idle` 消息，于是收工事件已经把 `store.active` 清掉，
+`store.pending` 却一直留着，`store.running` 跟着永远为 true —— 用户看到对话和 token
+脚注都收完了，标题还是「● 运行中」、底部进度条还在动。
+
+**行为**：
+
+- `renderMessages()` 不再自己拼 `pending || streaming || compacting || live`，统一走
+  `recomputeRunning(msgs)`；口径只有一处。
+- 收工事件（`session.idle`、`session.status` 的非 busy / retry、以及
+  `session.execution.succeeded` / `failed` / `interrupted`）调用 `markTurnDone(sid)`：
+  只对当前选中会话清掉 `pending`，马上重算 `store.running`，再走原来的 `updateChatStatus()`。
+- `session.execution.started` 不清 `pending`；别的会话的收工事件也不动当前会话。
+- `loadActive()` 的「运行中 → 空闲」兜底同样调用 `markTurnDone()`：SSE 收工事件整条
+  丢了时，8 秒轮询也能把进度条熄掉。
+- 如果收工事件到达时本地流式缓冲还没被服务端权威消息替换，`recomputeRunning()` 仍会
+  返回运行中；等消息对账落地后再熄，不抢在正文前面装空闲。
+
+**验证**：
+
+- `ui-controls.html` 新增 19 项：五种收工事件都清 pending、重算 running、显示空闲；
+  `execution.started` 不清；别的会话的 `session.idle` 不动当前会话；`loadActive` 的
+  「运行→空闲」兜底也清 pending、重算 running。
+- `ui-stream.html` 新增 5 项：pending 期间仍显示运行中；`execution.succeeded` 后
+  pending 清掉、running 为 false、头部「空闲」、进度条收起。
+- `smoke.sh` 新增 1 项静态锁：`recomputeRunning()` / `markTurnDone()` 与
+  `loadActive` 兜底接线都在。
+
+**回归**：`smoke.sh` 383 → **384**，`ui-controls` 110 → **129**，
+`ui-stream` 270 → **275**；`ui-commands` 181、`ui-jump` 151、`ui-layout` 189、
+`ui-tools` 368 不变。全量回归 **0 失败，2 个可选真实模型用例跳过**。
+
 ---
 
 ## 9. 取舍与理由

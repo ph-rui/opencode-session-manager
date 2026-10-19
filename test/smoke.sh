@@ -1604,6 +1604,19 @@ if has "$APPJS" 'const justIdle = sel && wasRunning && !next.has(sel) && !compac
 else
   echo "FAIL: loadActive 的运行→空闲收尾补拉缺失"; fail=$((fail + 1))
 fi
+# 面板自己发的消息会把 pending 置上;服务端不一定再给 idle 消息,收工事件与
+# loadActive 兜底都必须清掉它并重算 running,否则进度条会一直转。
+if has "$APPJS" 'function recomputeRunning(msgs)' &&
+   has "$APPJS" 'function markTurnDone(sid)' &&
+   has "$APPJS" 'if (justIdle) markTurnDone(sel);' &&
+   has "$APPJS" 'recomputeRunning(msgs);' &&
+   has "$(cat "$(dirname "$0")/ui-controls.html")" '清掉 pending' &&
+   has "$(cat "$(dirname "$0")/ui-controls.html")" '重算 running' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '收工事件后进度条收起'; then
+  echo "PASS: 收工事件与 loadActive 兜底都会清 pending、重算 running(进度条不再空转)"; pass=$((pass + 1))
+else
+  echo "FAIL: 收工后 pending / running 没有清干净,进度条会一直转"; fail=$((fail + 1))
+fi
 if has "$APPJS" 'const MSG_SETTLE_MS = 1500;' &&
    has "$APPJS" 'function turnLooksUnsettled()' &&
    has "$APPJS" 'function settleReconcile(sid)' &&

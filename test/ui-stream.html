@@ -408,6 +408,19 @@
       T('回收后状态回到空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
       T('回到空闲后进度条收起来', q('#progress').hidden === true);
 
+      /* 面板自己发的消息(pending)在收工事件后也必须落下:
+       * 服务端现在不一定再给一条 idle 消息,不能只靠消息列表来熄状态条。 */
+      store.pending = true;
+      store.running = true;
+      store.active.set('ses_a', 'busy');
+      updateChatStatus();
+      T('pending 期间仍是运行中', q('#chatState').textContent === '● 运行中' && q('#progress').hidden === false);
+      handleControlEvent({ type: 'session.execution.succeeded', data: { sessionID: 'ses_a' } });
+      T('收工事件后 pending 清掉', store.pending === false);
+      T('收工事件后 running 重算为 false', store.running === false, store.running);
+      T('收工事件后状态回到空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
+      T('收工事件后进度条收起', q('#progress').hidden === true);
+
       /* ---------------- 进度条的其余状态:重试中 / 无选中 ---------------- */
       var savedSel = store.selected;
       store.active.set('ses_a', 'retry');

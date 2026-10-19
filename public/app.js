@@ -384,17 +384,19 @@ async function loadActive() {
   }
   const sel = store.selected;
   const wasRunning = !!sel && prev.has(sel);
+  /* SSE 静默断流时这趟 8s 轮询是唯一还在走的眼睛:只熄状态条不补消息,内容就会
+   * 一直停在断流前的快照里(用户看到「空闲了但内容不是最新」,只能刷新)。
+   * 运行中 → 空闲是权威收工信号,立刻绕过间隔补拉一次;再排一次延迟收尾,
+   * 兜住「事件先到、消息稍后才落盘」。压缩中途 active 会空一拍,别误判成收工。
+   * 这里也要清 pending:SSE 的收工事件可能整条丢了,loadActive 是最后一道兜底。 */
+  const justIdle = sel && wasRunning && !next.has(sel) && !compactionRunning(sel);
   store.active = next;
+  if (justIdle) markTurnDone(sel);
   if (changed) {
     renderSessions();
     updateChatStatus();
   }
   updateComposerControls();
-  /* SSE 静默断流时这趟 8s 轮询是唯一还在走的眼睛:只熄状态条不补消息,内容就会
-   * 一直停在断流前的快照里(用户看到「空闲了但内容不是最新」,只能刷新)。
-   * 运行中 → 空闲是权威收工信号,立刻绕过间隔补拉一次;再排一次延迟收尾,
-   * 兜住「事件先到、消息稍后才落盘」。压缩中途 active 会空一拍,别误判成收工。 */
-  const justIdle = sel && wasRunning && !next.has(sel) && !compactionRunning(sel);
   if (justIdle) {
     loadMessages({ older: false, auto: true, now: true });
     scheduleSettle(sel);
@@ -5808,6 +5810,29 @@ function currentMessages() {
   return msgs;
 }
 
+/* 运行状态只该由「当前消息 + 本地流式缓冲 + pending」现算。
+ * store.running 是缓存:renderMessages() 会刷新它,收工事件也得立刻刷新,
+ * 否则面板自己发的消息(pending)在服务端不再给 idle 消息时会一直亮着进度条。 */
+function recomputeRunning(msgs) {
+  if (!store.selected) {
+    store.running = false;
+    return false;
+  }
+  const list = msgs || currentMessages();
+  const last = list[list.length - 1];
+  const streaming = !!(last && last.type === 'assistant' && last.time && !last.time.completed);
+  store.running = store.pending || streaming ||
+    compactionRunning(store.selected, list) || !!liveForSid(store.selected);
+  return store.running;
+}
+
+// 收工事件(含 loadActive 兜底)清掉本轮 pending,并马上重算 store.running。
+function markTurnDone(sid) {
+  if (!sid || sid !== store.selected) return;
+  store.pending = false;
+  recomputeRunning();
+}
+
 /* content-visibility: auto 只对「真长」的会话开(见 styles.css 里 #messages.cvmany > .msg)。
    条数少的时候离屏内容本来就没多少,省不下几个钱,却要拿 contain-intrinsic-size 的估值去
    占位 —— 短会话「压根不用滚」的场景反而会被估值虚高撑出一条假滚动条。所以按条数挂开关,
@@ -5950,9 +5975,7 @@ function renderMessages() {
 
   const last = msgs[msgs.length - 1];
   if (last && last.type === 'idle') store.pending = false;
-  const streaming = !!(last && last.type === 'assistant' && last.time && !last.time.completed);
-  const compacting = compactionRunning(store.selected, msgs);
-  store.running = store.pending || streaming || compacting || !!liveForSid(store.selected);
+  recomputeRunning(msgs);
   updateChatStatus();
 }
 
@@ -9354,12 +9377,16 @@ function handleControlEvent(e) {
     const st = (d.status && d.status.type) || null;
     if (sid) {
       if (st === 'busy' || st === 'retry') store.active.set(sid, st);
-      else store.active.delete(sid);
+      else {
+        store.active.delete(sid);
+        markTurnDone(sid);
+      }
       dirty = true;
     }
   } else if (t === 'session.idle') {
     if (sid) {
       store.active.delete(sid);
+      markTurnDone(sid);
       dirty = true;
     }
   } else if (t === 'session.usage.updated') {
@@ -9378,7 +9405,10 @@ function handleControlEvent(e) {
   } else if (t.indexOf('session.execution.') === 0) {
     if (sid) {
       if (t === 'session.execution.started') store.active.set(sid, 'busy');
-      else store.active.delete(sid);
+      else {
+        store.active.delete(sid);
+        markTurnDone(sid);
+      }
       dirty = true;
     }
   } else if (t.indexOf('session.compaction.') === 0) {
