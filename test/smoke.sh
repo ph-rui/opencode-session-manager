@@ -573,6 +573,14 @@ if has "$APPJS" "e.ctrlKey || e.metaKey"; then
 else
   echo "FAIL: app.js 缺 Ctrl+P"; fail=$((fail + 1))
 fi
+# Ctrl+C = TUI 的 prompt.clear,但只在输入框聚焦、有内容、且没有选中文本时接管;
+# 有选区或 Meta+C(Mac 复制)时让浏览器照常复制,不能把网页复制弄坏。
+if has "$APPJS" "e.ctrlKey && !e.metaKey" && has "$APPJS" "inp.selectionStart === inp.selectionEnd" &&
+   has "$APPJS" "clearInput();"; then
+  echo "PASS: Ctrl+C 清空输入(有选区 / Meta+C 仍走浏览器复制)"; pass=$((pass + 1))
+else
+  echo "FAIL: Ctrl+C 清空输入缺失,或没避开复制"; fail=$((fail + 1))
+fi
 # 顺序锁:输入框里敲 / 要先看命令面板,再看 @ 文件补全
 DEB_ORDER=$(printf '%s' "$APPJS" | awk '
   /^function setupAttachments\(\)/ { f = 1 }

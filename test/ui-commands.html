@@ -800,6 +800,68 @@
       await settle(function () { return hadCall(/\/prompt$/); });
       T('输入框按键:Enter 仍然发送', hadCall(/\/prompt$/), window.calls);
 
+      /* Ctrl+C = TUI 的 prompt.clear(§8.87):有内容且没选区时清空;
+         有选区 / Meta+C 仍让浏览器复制,空输入框不拦。 */
+      idle();
+      store.selected = 'ses_a';
+      setCaret('/re');
+      await openCommands();
+      saveDraft('ses_a', '/re');
+      var cc1 = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(cc1);
+      T('Ctrl+C:输入框有内容 → 清空(对应 TUI prompt.clear)',
+        q('#input').value === '' && cc1.defaultPrevented === true,
+        [q('#input').value, cc1.defaultPrevented]);
+      T('Ctrl+C:顺带收掉命令面板', q('#cmds').hidden === true);
+      T('Ctrl+C:草稿也一起清掉', draftText('ses_a') === '', draftText('ses_a'));
+
+      store.history.set('ses_a', ['旧消息']);
+      setCaret('');
+      q('#input').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', cancelable: true, bubbles: true }));
+      T('(前置)↑ 进入输入历史', store.histAt === 0 && q('#input').value === '旧消息',
+        [store.histAt, q('#input').value]);
+      var ccHist = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(ccHist);
+      T('Ctrl+C:清空后退出输入历史', store.histAt === -1 && q('#input').value === '',
+        [store.histAt, q('#input').value]);
+      store.history.clear();
+
+      setCaret('要复制的字');
+      q('#input').setSelectionRange(0, 2);
+      var cc2 = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(cc2);
+      T('Ctrl+C:有选中文本 → 不抢复制',
+        q('#input').value === '要复制的字' && cc2.defaultPrevented === false,
+        [q('#input').value, cc2.defaultPrevented]);
+
+      setCaret('Mac 复制');
+      var cc3 = new KeyboardEvent('keydown', { key: 'c', metaKey: true, cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(cc3);
+      T('Cmd+C:仍是复制,不清空',
+        q('#input').value === 'Mac 复制' && cc3.defaultPrevented === false,
+        [q('#input').value, cc3.defaultPrevented]);
+
+      setCaret('');
+      var cc4 = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(cc4);
+      T('Ctrl+C:输入框为空 → 不拦', cc4.defaultPrevented === false);
+
+      /* 清空也要撤掉 Esc 上膛(照 TUI handleInputClear) */
+      qa('dialog[open]').forEach(function (d) { d.close(); });
+      store.active.set('ses_a', 'busy');
+      window.calls.length = 0;
+      fire('Escape');
+      T('(前置)Esc 已上膛', q('#progress .phint').textContent.indexOf('again') >= 0,
+        q('#progress .phint').textContent);
+      setCaret('清掉');
+      var cc5 = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(cc5);
+      T('Ctrl+C:清空输入也撤掉 Esc 上膛',
+        q('#progress .phint').textContent.indexOf('again') < 0,
+        q('#progress .phint').textContent);
+      store.active.delete('ses_a');
+      q('#input').dispatchEvent(new Event('input'));
+
       /* ================= 完整命令名 + Enter 直接执行 ================= */
       idle();
       setCaret('/models');

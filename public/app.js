@@ -7693,6 +7693,7 @@ const HELP_KEYS = [
   { k: 'End', d: '跳回最新消息(对应 TUI session.last);往上翻过头了也能一键回来' },
   { k: 'Shift+Tab', d: '切换到下一个智能体(对应 TUI agent.cycle)' },
   { k: 'Enter', d: '发送(Shift+Enter 换行)' },
+  { k: 'Ctrl+C', d: '清空输入框(对应 TUI prompt.clear);有选区时仍是复制' },
   { k: '@', d: '补全工程内的文件' },
 ];
 
@@ -7701,6 +7702,11 @@ function clearInput() {
   if (el) el.value = '';
   saveDraft(store.selected, ''); // §8.71:/clear 也把草稿一起清掉
   dropSessionSkills(store.selected); // §8.77:草稿没了,技能选择也一起撤掉
+  store.histAt = -1; // 清空后别停在输入历史里(否则按 ↓ 又能把旧草稿翻回来)
+  store.histDraft = '';
+  // 清空也是一次输入变化 —— 照 TUI 的 handleInputClear,把「Esc 上膛」收掉。
+  // 编程改 value 不会触发 input 事件,这里得自己撤。
+  disarmInterrupt();
   closeCommands();
   closeMentions();
   renderAttachments();
@@ -8661,6 +8667,16 @@ function setupComposerKeys() {
    * 放弃这次中断),免得几秒前的半次 Esc 突然把回合砍了。 */
   inp.addEventListener('input', () => disarmInterrupt());
   inp.addEventListener('keydown', (e) => {
+    /* Ctrl+C = TUI 的 prompt.clear:输入框有内容就清掉。只在【输入框聚焦 + 没有
+     * 选中文本】时接管 —— 有选区时 Ctrl+C 仍是浏览器的复制,不能把网页复制弄坏;
+     * Meta+C(Mac 复制)也不拦。空输入框不拦,留给浏览器默认行为。 */
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+        (e.key === 'c' || e.key === 'C') && !e.isComposing &&
+        inp.value && inp.selectionStart === inp.selectionEnd) {
+      e.preventDefault();
+      clearInput();
+      return;
+    }
     if (commandKey(e)) return; // 命令面板开着时优先吃方向键/Enter/Tab/Esc
     if (mentionKey(e)) return; // 补全列表开着时,方向键/Enter/Tab/Esc 先给补全
     if (historyKey(e)) return; // 光标在首行/末行时,↑/↓ 取输入历史
