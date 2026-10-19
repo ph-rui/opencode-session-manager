@@ -7464,15 +7464,23 @@ async function queueFiles(list) {
 
 /* ---- @ 文件补全(GET /api/fs/find,与 TUI 同源)---- */
 
+// 照 TUI 的 mentionTriggerIndex:@ 只在行首或空白后开始一个新 token。
+// 不按字符类型拉黑(邮箱、中文、路径分隔符后面都不算引用入口)。
+function mentionAtTokenStart(before, at) {
+  return at <= 0 || /\s/.test(before.charAt(at - 1));
+}
+
 // 光标前最后一个 @token → 它在输入框里的 [start, end) 与查询词
 function mentionQuery() {
   const el = $('#input');
   if (!el) return null;
   const caret = el.selectionStart == null ? el.value.length : el.selectionStart;
   const before = el.value.slice(0, caret);
-  const m = /@([^\s@]{0,200})$/.exec(before);
-  if (!m) return null;
-  return { start: caret - m[0].length, end: caret, query: m[1] };
+  const at = before.lastIndexOf('@');
+  if (at < 0 || !mentionAtTokenStart(before, at)) return null;
+  const query = before.slice(at + 1);
+  if (query.length > 200 || /\s/.test(query)) return null;
+  return { start: at, end: caret, query };
 }
 
 function closeMentions() {

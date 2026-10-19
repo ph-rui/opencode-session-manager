@@ -411,6 +411,12 @@ if has "$APPJS" 'resolveMentions' && has "$APPJS" 'userFilesHtml' && has "$APPJS
 else
   echo "FAIL: app.js 缺附件或 @ 补全逻辑"; fail=$((fail + 1))
 fi
+# 对齐 TUI 的 mentionTriggerIndex:@ 只认行首/空白后,不做字符黑名单
+if has "$APPJS" 'mentionAtTokenStart' && has "$APPJS" 'before.lastIndexOf'; then
+  echo "PASS: @ 补全按 TUI 的 token 边界触发(行首/空白后)"; pass=$((pass + 1))
+else
+  echo "FAIL: @ 补全没有按 TUI 的 token 边界触发"; fail=$((fail + 1))
+fi
 # 上传绝不能自己另起端点:走 OpenCode 自带的 fs/write,代理只负责建目录 + 清理
 if has "$APPJS" '/api/experimental/fs/write' && has "$APPJS" 'uploadDir'; then
   echo "PASS: 上传复用 OpenCode 的 fs/write(代理不新增上传端点)"; pass=$((pass + 1))

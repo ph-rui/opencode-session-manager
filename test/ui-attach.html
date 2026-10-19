@@ -272,7 +272,15 @@
       setCaret('@a b');
       T('mentionQuery:@ 后面有空格就不再补全', mentionQuery() === null);
       setCaret('看@Makefile');
-      T('mentionQuery:紧贴着中文也能触发', (function () { var t = mentionQuery(); return !!t && t.start === 1 && t.query === 'Makefile'; })(), mentionQuery());
+      T('mentionQuery:紧贴中文不触发(TUI 只认行首/空白后)', mentionQuery() === null);
+      setCaret('user@123');
+      T('mentionQuery:邮箱/密码里的 @ 不触发', mentionQuery() === null);
+      setCaret('发给 a@b.com');
+      T('mentionQuery:邮箱地址里的 @ 不触发', mentionQuery() === null);
+      setCaret('foo/@bar');
+      T('mentionQuery:紧贴路径分隔符的 @ 不触发', mentionQuery() === null);
+      setCaret('hello,@Makefile');
+      T('mentionQuery:紧贴标点的 @ 不触发', mentionQuery() === null);
       setCaret('hello @Mak', 8);
       T('mentionQuery:光标在中间时按光标前的内容算', (function () { var t = mentionQuery(); return !!t && t.end === 8; })(), mentionQuery());
 
@@ -281,6 +289,13 @@
       store.selected = 'ses_a';
       renderSessions();
       setupAttachments(); // 补全下拉的点击、上传、拖放的接线都在这(只接一次)
+      window.calls.length = 0;
+      setCaret('密码输入: user@123');
+      await openMentions();
+      T('openMentions:邮箱/密码形态不请求 fs/find',
+        window.calls.filter(function (c) { return c.url.indexOf('/api/fs/find') === 0; }).length === 0,
+        window.calls.map(function (c) { return c.url; }));
+      T('openMentions:邮箱/密码形态不显示补全', q('#mentions').hidden === true);
       window.calls.length = 0;
       setCaret('看 @Mak');
       await openMentions();
