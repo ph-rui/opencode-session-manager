@@ -8410,6 +8410,14 @@ async function openCommands(opts) {
   const range = tok ? { start: tok.start, end: tok.end } : { start: caret, end: caret };
   const q = (tok ? tok.query : '').toLowerCase();
   const hits = mergedCommands(dir).filter((c) => !q || c.name.toLowerCase().includes(q));
+  /* TUI 的 W4 在第一个 / 之后再见到 / 就不弹补全,免得把 /media/... 之类的
+   * 绝对路径当成命令。面板保留嵌套命令名(如 team/review)的补全,但只认
+   * 「查询词确实是某个已注册命令名的前缀」;否则按路径处理,直接收起。
+   * Ctrl+P 是显式要命令面板,不走这条。 */
+  if (!opts.force && tok && tok.query.includes('/') &&
+      !hits.some((c) => c.name.toLowerCase().startsWith(q))) {
+    return closeCommands();
+  }
   // 前缀命中的排前面,其余按名字
   hits.sort((a, b) => {
     const pa = a.name.toLowerCase().startsWith(q) ? 0 : 1;

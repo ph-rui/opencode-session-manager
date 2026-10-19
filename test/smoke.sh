@@ -476,6 +476,14 @@ if has "$APPJS" 'parseCommand' && has "$APPJS" 'runCommand' && has "$APPJS" "/co
 else
   echo "FAIL: app.js 缺命令执行通道"; fail=$((fail + 1))
 fi
+# 自动补全不把绝对路径当命令(照 TUI 的 W4):查询词里再有 / 时只放行已注册命令的前缀,
+# 否则收起面板;Ctrl+P 的显式打开不受影响。
+if has "$APPJS" "tok.query.includes('/')" && has "$APPJS" 'c.name.toLowerCase().startsWith(q)' &&
+   has "$APPJS" 'return closeCommands();'; then
+  echo "PASS: 绝对路径不自动弹命令面板(已注册的嵌套命令仍可补全)"; pass=$((pass + 1))
+else
+  echo "FAIL: 绝对路径会被误当命令查询"; fail=$((fail + 1))
+fi
 # 同名冲突:服务端命令优先,面板动作让位(否则用户自定义的 /new 会被面板动作盖掉)
 if has "$APPJS" 'const taken = new Set(srv.map'; then
   echo "PASS: 同名命令以服务端为准(面板动作让位)"; pass=$((pass + 1))

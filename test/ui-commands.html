@@ -308,6 +308,25 @@
       T('openCommands:没有匹配时给出空态而不是不显示',
         q('#cmds').hidden === false && q('#cmds .mention-empty') !== null);
       T('openCommands:空态时高亮为 -1', store.cmdAt === -1);
+      setCaret('/media/example/project/imx-gesture-classify');
+      await openCommands();
+      T('openCommands:绝对路径不弹命令面板(照 TUI 的路径判定)',
+        q('#cmds').hidden === true && commandsOpen() === false);
+      setCaret('/home/user/review/file.ts');
+      await openCommands();
+      T('openCommands:路径里带命令名也不误弹(只认前缀)',
+        q('#cmds').hidden === true && commandsOpen() === false);
+      setCaret('/media/example/project/imx-gesture-classify');
+      await openCommands({ force: true });
+      T('openCommands:force(Ctrl+P)对绝对路径照开(显式动作)',
+        q('#cmds').hidden === false && q('#cmds .mention-empty') !== null);
+      store.commands.set('/proj/a', [{ name: 'team/review', description: '嵌套' }]);
+      setCaret('/team/review');
+      await openCommands();
+      T('openCommands:已注册的嵌套命令照常补全',
+        q('#cmds').hidden === false && store.cmdItems.length === 1 &&
+        store.cmdItems[0].name === 'team/review', store.cmdItems);
+      store.commands.set('/proj/a', window.CMDS);
       setCaret('普通消息');
       await openCommands({ force: true });
       T('openCommands:force(Ctrl+P)时输入框非空也开', q('#cmds').hidden === false);
