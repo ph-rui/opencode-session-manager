@@ -116,6 +116,22 @@
       T('有变体时显示变体选择', q('#variantWrap').hidden === false && q('#variantSel').value === 'low',
         q('#variantSel').value);
 
+      /* 模型表已经缓存时,renderControls 只更新选择器,不再补一次整表重绘 */
+      var paintCalls = 0;
+      var realRenderMessages = window.renderMessages;
+      window.renderMessages = function () {
+        paintCalls++;
+        return realRenderMessages.apply(this, arguments);
+      };
+      store.models.clear();
+      store.modelIndex.clear();
+      store.ctrlKey = '';
+      await renderControls(SESSION);
+      T('模型表首次加载后补一次脚注重绘', paintCalls === 1, paintCalls);
+      await renderControls(SESSION);
+      T('模型表已缓存时不再重复重绘', paintCalls === 1, paintCalls);
+      window.renderMessages = realRenderMessages;
+
       T('modelKey 拼接 providerID/id', modelKey({ providerID: 'p1', id: 'm1' }) === 'p1/m1');
       T('modelKey 对空值返回空串', modelKey(null) === '');
       T('ctrlKeyOf 随 agent/model 变化',

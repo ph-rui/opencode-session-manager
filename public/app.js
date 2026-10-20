@@ -493,6 +493,10 @@ async function renderControls(s) {
   const modelSel = $('#modelSel');
   const varWrap = $('#variantWrap');
   const varSel = $('#variantSel');
+  /* 模型表没缓存过才需要补一次消息重绘(脚注里的模型名要查它);
+   * 已经缓存、且当前模型在索引里,重绘只会把整张消息表再签名一遍。 */
+  const curModel = modelKey(s.model);
+  const needModelPaint = !store.models.has(dir) || (!!curModel && !store.modelIndex.has(curModel));
 
   const [agents, models] = await Promise.all([loadAgents(dir), loadModels(dir)]);
   if (store.selected !== s.id) return; // 期间切换了会话
@@ -504,7 +508,6 @@ async function renderControls(s) {
 
   // 模型(按 provider 分组)
   let mHtml = modelOptionsHtml(models);
-  const curModel = modelKey(s.model);
   if (curModel && !store.modelIndex.has(curModel)) {
     mHtml += '<option value="' + esc(curModel) + '">' + esc(curModel) + '(当前)</option>';
   }
@@ -520,8 +523,8 @@ async function renderControls(s) {
   paintContextUsage();
   updateComposerControls();
   /* 脚注里的模型名也要拿这张表来查(§8.27)—— 消息往往早于模型表渲染完,这里补一次重绘。
-     签名里带了解析出来的模型名,所以只有真变了的那几条会换 DOM。 */
-  renderMessages();
+     模型表已经缓存且当前模型能查到时不补:签名里已经带了解析名,画面本来就是对的。 */
+  if (needModelPaint) renderMessages();
 }
 
 async function switchAgent(id) {
