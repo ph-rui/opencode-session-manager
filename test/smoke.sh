@@ -2348,6 +2348,16 @@ if has "$CSS" '.tab {' && has "$CSS" 'min-width: 96px;' &&
 else
   echo "FAIL: 短标签缺少最小宽度或 × 安全缝"; fail=$((fail + 1))
 fi
+# §8.94 标签拖拽排序:鼠标拖 / 手机长按;只改本机顺序,不动会话
+if has "$APPJS" 'function moveTab(' && has "$APPJS" 'TAB_LONGPRESS_MS' &&
+   has "$APPJS" 'function startTabDrag(' && has "$APPJS" 'function tabLongPress()' &&
+   has "$APPJS" 'tabSuppressClickUntil' && has "$APPJS" "'pointerdown'" &&
+   has "$CSS" 'touch-action: pan-x;' && has "$CSS" '.tab.dragging {' &&
+   has "$CSS" '.tab.drop-before::before'; then
+  echo "PASS: 标签拖拽排序的鼠标 / 手机长按状态机与插入线样式都在"; pass=$((pass + 1))
+else
+  echo "FAIL: 标签拖拽排序缺少状态机或样式"; fail=$((fail + 1))
+fi
 SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
 if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.59 最近会话标签栏' &&
    has "$(cat "$SMOKE_CAP")" '关闭非当前标签:只移出标签栏,不删会话也不切会话' &&
@@ -2357,6 +2367,16 @@ if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.59 最近会话标签�
   echo "PASS: test/ui-capabilities.html 里有标签栏的浏览器断言(自动入栏 / 切换 / 关闭 / 上限 / 窄屏)"; pass=$((pass + 1))
 else
   echo "FAIL: test/ui-capabilities.html 缺标签栏的关键断言"; fail=$((fail + 1))
+fi
+if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.94 标签拖拽排序(鼠标 / 手机长按)' &&
+   has "$(cat "$SMOKE_CAP")" '鼠标拖拽:从最前拖到末尾后顺序变了、当前会话不变' &&
+   has "$(cat "$SMOKE_CAP")" '鼠标拖拽:新顺序写回 localStorage' &&
+   has "$(cat "$SMOKE_CAP")" '手机长按拖拽:顺序变了、当前会话不变' &&
+   has "$(cat "$SMOKE_CAP")" '手机未长按就横滑:让给标签栏滚动,不进入拖拽' &&
+   has "$(cat "$SMOKE_CAP")" '拖到标签栏外松手:取消排序,顺序不动'; then
+  echo "PASS: test/ui-capabilities.html 里有标签拖拽的鼠标 / 手机长按 / 横滑让路 / 取消断言"; pass=$((pass + 1))
+else
+  echo "FAIL: test/ui-capabilities.html 缺标签拖拽的关键断言"; fail=$((fail + 1))
 fi
 
 # §8.60 TUI diff 偏好共享:面板不再只记 localStorage,而是读写 cli.json 的 diffs.view

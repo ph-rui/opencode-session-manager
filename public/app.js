@@ -2398,19 +2398,30 @@ function visibleSessions() {
 
 /* ----------------------------- 最近会话标签栏(§8.59) -----------------------------
  * 照 TUI 的 session tabs 的骨架,只做手机/桌面都用得上的那部分:
- *   · 打开会话自动进 tab;顺序 = 打开顺序,点 tab 不重排;
+ *   · 打开会话自动进 tab;默认顺序 = 打开顺序,可拖拽调整,点 tab 不重排;
  *   · × 只从 tab 栏移除,不归档不删除;关掉当前 tab 自动切右邻居,没有就左邻居;
- *   · 最多 8 个,超出丢最旧的;列表存 localStorage(只存 id + 标题快照);
+ *   · 最多 8 个,超出丢最左边那个;列表存 localStorage(只存 id + 标题快照);
  *   · 手机也显示,横向滑,不折行;没有 tab 时整条 hidden。
- * 刻意不做:TUI 的拖拽排序 / 未读脉冲 / Ctrl+数字 / global-cwd 分域。 */
+ * 拖拽排序(§8.94):鼠标拖 / 手机长按;只改本机顺序,不做未读脉冲 / Ctrl+数字 /
+ * global-cwd 分域。 */
 const TABS_KEY = 'ocs.tabs';
 const TABS_MAX = 8;
+/* §8.94 标签拖拽排序:鼠标移动 4px 起拖;手机长按 300ms 起拖,之前的横滑仍然滚标签栏。 */
+const TAB_DRAG_PX = 4;
+const TAB_TOUCH_SLOP = 8;
+const TAB_LONGPRESS_MS = 300;
+const TAB_EDGE_PX = 28;
+const TAB_CLICK_GUARD_MS = 800;
 /* §8.75 照 TUI 的 session.tab.reopen:最近关掉的标签留在内存里(不写 localStorage),
  * 最多 8 个;最近关的排最前。刷新页面就清空 —— 关标签本身只是移出栏,不是持久状态。 */
 const CLOSED_MAX = 8;
 const closedTabs = [];
 let tabsSig = '';
 let tabsActiveSeen = null;
+/* §8.94 一次只能拖一个标签;拖完到下一次 click 之间压住点击,避免松手又切会话。 */
+let tabDrag = null;
+let tabAutoRaf = 0;
+let tabSuppressClickUntil = 0;
 
 function readTabs() {
   let raw = null;
@@ -2436,6 +2447,220 @@ function saveTabs() {
   try {
     localStorage.setItem(TABS_KEY, JSON.stringify(store.tabs));
   } catch (_) {}
+}
+
+/* §8.94 按「插入位」挪标签:insertAt 是松手时标签中心的落点,0..len。
+ * 先取再插,所以从前往后拖时要把插入位减一;没有变化就不写盘。 */
+function moveTab(id, insertAt) {
+  const from = store.tabs.findIndex((t) => t.id === id);
+  if (from < 0) return false;
+  let to = Number.isFinite(insertAt) ? Math.trunc(insertAt) : from;
+  to = Math.max(0, Math.min(store.tabs.length, to));
+  if (to > from) to -= 1;
+  to = Math.max(0, Math.min(store.tabs.length - 1, to));
+  if (to === from) return false;
+  const [tab] = store.tabs.splice(from, 1);
+  store.tabs.splice(to, 0, tab);
+  saveTabs();
+  return true;
+}
+
+/* 按鼠标/手指的横坐标找插入位:落在哪个标签左半边就插在它前面,否则插到末尾。 */
+function tabDropIndex(clientX) {
+  const strip = document.getElementById('tabStrip');
+  if (!strip) return 0;
+  const tabs = Array.from(strip.querySelectorAll('.tab'));
+  for (let i = 0; i < tabs.length; i++) {
+    const r = tabs[i].getBoundingClientRect();
+    if (clientX < r.left + r.width / 2) return i;
+  }
+  return tabs.length;
+}
+
+function paintTabDrop(index) {
+  const strip = document.getElementById('tabStrip');
+  if (!strip) return;
+  const tabs = Array.from(strip.querySelectorAll('.tab'));
+  for (const el of tabs) el.classList.remove('drop-before', 'drop-after');
+  if (!tabs.length) return;
+  if (index >= tabs.length) tabs[tabs.length - 1].classList.add('drop-after');
+  else tabs[Math.max(0, index)].classList.add('drop-before');
+}
+
+function stopTabAutoScroll() {
+  if (tabAutoRaf) {
+    cancelAnimationFrame(tabAutoRaf);
+    tabAutoRaf = 0;
+  }
+}
+
+/* 拖到标签栏左右边缘时自己滚,手机上一次看不全 8 个也能拖到后面。 */
+function tabAutoScrollTick() {
+  tabAutoRaf = 0;
+  if (!tabDrag || !tabDrag.active) return;
+  const strip = document.getElementById('tabStrip');
+  if (!strip) return;
+  const r = strip.getBoundingClientRect();
+  let dx = 0;
+  if (tabDrag.x < r.left + TAB_EDGE_PX) {
+    dx = -Math.max(2, Math.ceil((r.left + TAB_EDGE_PX - tabDrag.x) / 3));
+  } else if (tabDrag.x > r.right - TAB_EDGE_PX) {
+    dx = Math.max(2, Math.ceil((tabDrag.x - (r.right - TAB_EDGE_PX)) / 3));
+  }
+  if (dx) {
+    const before = strip.scrollLeft;
+    strip.scrollLeft += dx;
+    if (strip.scrollLeft !== before) {
+      const drop = tabDropIndex(tabDrag.x);
+      if (drop !== tabDrag.drop) {
+        tabDrag.drop = drop;
+        paintTabDrop(drop);
+      }
+    }
+  }
+  tabAutoRaf = requestAnimationFrame(tabAutoScrollTick);
+}
+
+function startTabDrag(x, y) {
+  if (!tabDrag || tabDrag.active) return;
+  if (tabDrag.timer) {
+    clearTimeout(tabDrag.timer);
+    tabDrag.timer = 0;
+  }
+  const strip = document.getElementById('tabStrip');
+  if (!strip || !tabDrag.el) return;
+  tabDrag.active = true;
+  tabDrag.moved = false;
+  tabDrag.x = x;
+  tabDrag.y = y;
+  tabDrag.el.classList.add('dragging');
+  strip.classList.add('tab-dragging');
+  try {
+    strip.setPointerCapture(tabDrag.pointerId);
+  } catch (_) {}
+  tabDrag.drop = tabDropIndex(x);
+  paintTabDrop(tabDrag.drop);
+  if (typeof requestAnimationFrame === 'function') {
+    tabAutoRaf = requestAnimationFrame(tabAutoScrollTick);
+  }
+}
+
+/* 手机长按到点后进入拖拽;测试页把 setTimeout 替成空实现时会直接调这个函数。 */
+function tabLongPress() {
+  if (!tabDrag || tabDrag.active) return;
+  startTabDrag(tabDrag.x, tabDrag.y);
+}
+
+function updateTabDrag(x, y) {
+  if (!tabDrag) return;
+  tabDrag.x = x;
+  tabDrag.y = y;
+  if (!tabDrag.active) {
+    const dx = x - tabDrag.startX;
+    const dy = y - tabDrag.startY;
+    if (tabDrag.touch) {
+      // 长按还没到点就横向滑了:让给标签栏滚动,不要抢成拖拽。
+      if (Math.abs(dx) > TAB_TOUCH_SLOP || Math.abs(dy) > TAB_TOUCH_SLOP) finishTabDrag(false);
+    } else if (Math.abs(dx) > TAB_DRAG_PX || Math.abs(dy) > TAB_DRAG_PX) {
+      startTabDrag(x, y);
+      // 鼠标是“先动再算拖”,这一下本身就算真的拖过了;手机长按仍要等后续移动。
+      if (tabDrag) tabDrag.moved = true;
+    }
+    return;
+  }
+  if (!tabDrag.moved && (Math.abs(x - tabDrag.startX) > 2 || Math.abs(y - tabDrag.startY) > 2)) {
+    tabDrag.moved = true;
+  }
+  const drop = tabDropIndex(x);
+  if (drop !== tabDrag.drop) {
+    tabDrag.drop = drop;
+    paintTabDrop(drop);
+  }
+}
+
+function finishTabDrag(commit) {
+  const d = tabDrag;
+  if (!d) return;
+  tabDrag = null;
+  if (d.timer) clearTimeout(d.timer);
+  stopTabAutoScroll();
+  const strip = document.getElementById('tabStrip');
+  if (strip) {
+    strip.classList.remove('tab-dragging');
+    try {
+      strip.releasePointerCapture(d.pointerId);
+    } catch (_) {}
+    for (const el of strip.querySelectorAll('.tab')) {
+      el.classList.remove('drop-before', 'drop-after');
+    }
+  }
+  if (d.el) d.el.classList.remove('dragging');
+  if (!d.active || !d.moved) return;
+  // 拖过再松手不算点击;长按后原地松手仍然算点击。下一次 pointerdown 会提前清掉。
+  tabSuppressClickUntil = Date.now() + TAB_CLICK_GUARD_MS;
+  if (!commit || !strip) return;
+  const r = strip.getBoundingClientRect();
+  if (d.x < r.left || d.x > r.right || d.y < r.top || d.y > r.bottom) return;
+  const insertAt = tabDropIndex(d.x);
+  if (moveTab(d.id, insertAt)) renderTabs();
+}
+
+function onTabPointerDown(e) {
+  if (e.isPrimary === false) return;
+  if (e.button != null && e.button !== 0) return;
+  if (!e.target.closest || e.target.closest('.tabx')) return;
+  // 新一次按下说明用户已经开始下一个动作,别让上一拖的点击保护压住它。
+  tabSuppressClickUntil = 0;
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  const strip = document.getElementById('tabStrip');
+  const id = tab.dataset.id;
+  if (!strip || !id) return;
+  if (tabDrag) finishTabDrag(false);
+  const from = store.tabs.findIndex((t) => t.id === id);
+  if (from < 0) return;
+  tabDrag = {
+    id: id,
+    from: from,
+    el: tab,
+    pointerId: e.pointerId,
+    touch: e.pointerType === 'touch',
+    startX: e.clientX,
+    startY: e.clientY,
+    x: e.clientX,
+    y: e.clientY,
+    active: false,
+    moved: false,
+    drop: from,
+    timer: 0,
+  };
+  if (tabDrag.touch) tabDrag.timer = setTimeout(tabLongPress, TAB_LONGPRESS_MS);
+}
+
+function onTabPointerMove(e) {
+  if (!tabDrag || e.pointerId !== tabDrag.pointerId) return;
+  if (tabDrag.active && e.cancelable) e.preventDefault();
+  updateTabDrag(e.clientX, e.clientY);
+}
+
+function onTabPointerUp(e) {
+  if (!tabDrag || e.pointerId !== tabDrag.pointerId) return;
+  tabDrag.x = e.clientX;
+  tabDrag.y = e.clientY;
+  finishTabDrag(true);
+}
+
+function onTabPointerCancel(e) {
+  if (!tabDrag || e.pointerId !== tabDrag.pointerId) return;
+  finishTabDrag(false);
+}
+
+/* 手机长按后浏览器可能开始横滑;拖拽期间由这个非 passive 监听把滚动拦下来。 */
+function onTabTouchMove(e) {
+  if (!tabDrag || !tabDrag.active) return;
+  if (e.cancelable) e.preventDefault();
+  const t = e.touches && e.touches[0];
+  if (t) updateTabDrag(t.clientX, t.clientY);
 }
 
 /* §8.75 关标签时记一笔(最近的在最前);同一个会话重复关 / 重开只留一条。 */
@@ -2496,6 +2721,7 @@ function touchTab(id, title) {
     }
   } else {
     store.tabs.push({ id: id, title: next || id });
+    // 顺序可由 §8.94 拖拽调整,所以超限时丢最左边那个,规则仍然看得见。
     while (store.tabs.length > TABS_MAX) store.tabs.shift();
     saveTabs();
   }
@@ -2514,6 +2740,8 @@ function renderTabs() {
   const nav = document.getElementById('sessionTabs');
   const strip = document.getElementById('tabStrip');
   if (!nav || !strip) return; // 老测试页没有这条栏 —— 什么都不做
+  // 标题同步 / 事件重画把 DOM 换掉之前先收掉拖拽状态,别留下指向旧节点的指针。
+  if (tabDrag) finishTabDrag(false);
   let changed = false;
   for (const t of store.tabs) {
     const s = store.sessions.get(t.id);
@@ -2598,6 +2826,17 @@ function setupSessionTabs() {
   if (!nav || nav.dataset.wired === '1') return;
   nav.dataset.wired = '1';
   nav.addEventListener('click', (e) => {
+    // §8.94 刚把标签拖到新位置,松手后的 click 不能再切一次会话 / 关一次标签。
+    // 只压标签上的点击;拖完紧接着点「+ 新建」/「↺」仍然照常。
+    if (Date.now() < tabSuppressClickUntil) {
+      if (e.target.closest('.tab')) {
+        tabSuppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      tabSuppressClickUntil = 0;
+    }
     const x = e.target.closest('.tabx');
     if (x) {
       e.preventDefault();
@@ -2620,6 +2859,15 @@ function setupSessionTabs() {
     const id = tab.dataset.id;
     if (id && id !== store.selected) selectSession(id);
   });
+  // §8.94 鼠标拖 / 手机长按都走 pointer events;标签栏只在拖拽期间抢滚动手势。
+  const strip = document.getElementById('tabStrip');
+  if (strip) {
+    strip.addEventListener('pointerdown', onTabPointerDown);
+    strip.addEventListener('pointermove', onTabPointerMove);
+    strip.addEventListener('pointerup', onTabPointerUp);
+    strip.addEventListener('pointercancel', onTabPointerCancel);
+    strip.addEventListener('touchmove', onTabTouchMove, { passive: false });
+  }
   // 桌面习惯:中键关闭(只移出 tab,不删会话)
   nav.addEventListener('auxclick', (e) => {
     if (e.button !== 1) return;

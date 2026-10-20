@@ -1085,6 +1085,7 @@
         closedTabs.length = 0; // §8.75:测试页自己把「最近关闭」也清掉
         tabsSig = '';
         tabsActiveSeen = null;
+        tabSuppressClickUntil = 0; // §8.94:别让上一组拖拽的点击保护串到下一组
         renderTabs();
       };
       T('标签栏在聊天区顶部、标题头之前',
@@ -1243,6 +1244,108 @@
       q('#tabNew').click();
       T('「+ 新建」复用现有新建框', q('#dlgNew').open === true);
       closeDlg(q('#dlgNew'));
+
+      /* ---- §8.94 标签拖拽排序(鼠标 / 手机长按) ---- */
+      var ptr = function (type, el, x, y, id, kind) {
+        var ev = new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          pointerId: id,
+          pointerType: kind || 'mouse',
+          button: 0,
+          buttons: type === 'pointerup' ? 0 : 1,
+          isPrimary: true,
+        });
+        el.dispatchEvent(ev);
+        return ev;
+      };
+      var tabRect = function (id) {
+        return strip.querySelector('.tab[data-id="' + id + '"]').getBoundingClientRect();
+      };
+      var tabOrder = function () {
+        return store.tabs.map(function (t) { return t.id; }).join(',');
+      };
+      var dragSetup = function () {
+        resetTabs();
+        seed();
+        store.tabs = [
+          { id: 'ses_a', title: 'A' },
+          { id: 'ses_b', title: 'B' },
+          { id: 'ses_c', title: 'C' },
+        ];
+        store.selected = 'ses_a';
+        tabsSig = '';
+        tabsActiveSeen = null;
+        renderTabs();
+      };
+
+      dragSetup();
+      var ra = tabRect('ses_a');
+      var rc = tabRect('ses_c');
+      var sx = ra.left + ra.width / 2;
+      var sy = ra.top + ra.height / 2;
+      var tx = rc.left + rc.width * 0.75;
+      ptr('pointerdown', strip.querySelector('.tab[data-id="ses_a"]'), sx, sy, 41, 'mouse');
+      ptr('pointermove', strip, tx, sy, 41, 'mouse');
+      T('鼠标拖拽:按住移动后标签进入拖拽态、露出插入线',
+        !!strip.querySelector('.tab.dragging') &&
+        !!strip.querySelector('.tab.drop-before, .tab.drop-after'),
+        { dragging: !!strip.querySelector('.tab.dragging'),
+          drop: !!strip.querySelector('.tab.drop-before, .tab.drop-after') });
+      ptr('pointerup', strip, tx, sy, 41, 'mouse');
+      T('鼠标拖拽:从最前拖到末尾后顺序变了、当前会话不变',
+        tabOrder() === 'ses_b,ses_c,ses_a' && store.selected === 'ses_a', tabOrder());
+      T('鼠标拖拽:新顺序写回 localStorage',
+        JSON.parse(localStorage.getItem('ocs.tabs')).map(function (t) { return t.id; }).join(',') ===
+        'ses_b,ses_c,ses_a',
+        JSON.parse(localStorage.getItem('ocs.tabs')));
+      var tabAfterDrag = strip.querySelector('.tab[data-id="ses_b"] .tabmain');
+      tabAfterDrag.click();
+      T('鼠标拖拽:松手后的 click 被压住,不会顺手切到别的会话',
+        store.selected === 'ses_a' && tabOrder() === 'ses_b,ses_c,ses_a', store.selected);
+
+      dragSetup();
+      ra = tabRect('ses_a');
+      rc = tabRect('ses_c');
+      sx = ra.left + ra.width / 2;
+      sy = ra.top + ra.height / 2;
+      tx = rc.left + rc.width * 0.75;
+      ptr('pointerdown', strip.querySelector('.tab[data-id="ses_a"]'), sx, sy, 42, 'touch');
+      T('手机长按前只是普通触摸,还没进入拖拽',
+        tabDrag !== null && tabDrag.active === false, tabDrag);
+      tabLongPress();
+      T('手机长按后进入拖拽态', tabDrag !== null && tabDrag.active === true && !!strip.querySelector('.tab.dragging'));
+      ptr('pointermove', strip, tx, sy, 42, 'touch');
+      ptr('pointerup', strip, tx, sy, 42, 'touch');
+      T('手机长按拖拽:顺序变了、当前会话不变',
+        tabOrder() === 'ses_b,ses_c,ses_a' && store.selected === 'ses_a', tabOrder());
+
+      dragSetup();
+      ra = tabRect('ses_a');
+      sx = ra.left + ra.width / 2;
+      sy = ra.top + ra.height / 2;
+      ptr('pointerdown', strip.querySelector('.tab[data-id="ses_a"]'), sx, sy, 43, 'touch');
+      ptr('pointermove', strip, sx + 12, sy, 43, 'touch');
+      T('手机未长按就横滑:让给标签栏滚动,不进入拖拽', tabDrag === null, tabDrag);
+      tabLongPress();
+      ptr('pointerup', strip, sx + 12, sy, 43, 'touch');
+      T('手机横滑取消后不会再起拖、顺序不变',
+        tabDrag === null && tabOrder() === 'ses_a,ses_b,ses_c', tabOrder());
+
+      dragSetup();
+      ra = tabRect('ses_a');
+      rc = tabRect('ses_c');
+      sx = ra.left + ra.width / 2;
+      sy = ra.top + ra.height / 2;
+      tx = rc.left + rc.width * 0.75;
+      ptr('pointerdown', strip.querySelector('.tab[data-id="ses_a"]'), sx, sy, 44, 'mouse');
+      ptr('pointermove', strip, tx, sy, 44, 'mouse');
+      ptr('pointerup', strip, strip.getBoundingClientRect().left - 20, sy, 44, 'mouse');
+      T('拖到标签栏外松手:取消排序,顺序不动',
+        tabOrder() === 'ses_a,ses_b,ses_c' && store.selected === 'ses_a', tabOrder());
+      resetTabs();
 
       document.documentElement.classList.add('narrow', 'view-chat');
       store.tabs = [{ id: 'ses_a', title: 'A' }, { id: 'ses_b', title: 'B' }];

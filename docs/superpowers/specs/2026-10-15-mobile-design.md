@@ -2919,21 +2919,21 @@ LAN
 **起因**:用户给了一张 TUI 的横向会话 tab 截图,问「能不能实现这种效果」;确认采用默认方案:
 tab 栏放在**聊天区顶部**,**左列表保留**,手机竖屏也显示。其余默认:打开过的会话自动进 tab、
 点 tab 直切、`×` 只移出 tab(不归档不删除)、当前 tab 关掉切右/左邻居、最右 `+ 新建` 复用现有
-新建框、最多 8 个、按打开顺序、存 `localStorage`。
+新建框、最多 8 个、默认按打开顺序(§8.94 可拖拽调整)、存 `localStorage`。
 
 **行为**:
 
 | 场景 | 行为 |
 |---|---|
 | 打开会话(列表 / 深链 / 新建后自动选中) | `touchTab(id)`:没有就追加,有就只更新标题;当前 `store.selected` 高亮并带 `aria-current="page"` |
-| 点 tab | `selectSession(id)`;不重排,仍是打开顺序 |
+| 点 tab | `selectSession(id)`;点选不重排;顺序默认按打开顺序,可拖拽调整(§8.94) |
 | 点当前 tab | 不发请求(和列表点同一行一致) |
 | `×`(悬停 / 当前 tab) | 只从 `store.tabs` 移除并写回 `localStorage`;**不发 DELETE、不归档** |
 | 关当前 tab | 右邻居优先,没有就左邻居;都没有才 `clearSelection()`(回「未选择会话」) |
 | 关非当前 tab | 选中会话不动,只重画 tab 栏 |
 | 最后一个 tab 关掉 | 整条 `hidden`,一个像素都不占;桌面留下空态,手机上回到列表 |
 | `+ 新建` | 直接调现有的 `openNew()`;建完会话自动选中后照常自动进 tab |
-| 最多 8 个 | 第 9 个进来时 `shift()` 掉最旧的;顺序仍是打开顺序 |
+| 最多 8 个 | 第 9 个进来时 `shift()` 掉最左边那个;顺序默认按打开顺序,可拖拽调整(§8.94) |
 | 刷新 | `init()` 先 `readTabs()` 画标题快照,再拉列表;列表回来后 `renderTabs()` 用最新标题覆盖并回写 |
 | 会话被列表删除 | `onAction('del')` 里 `removeTab(id)`;归档只影响列表过滤,tab 留着 |
 | 手机 | 竖屏 34px、横屏(粗指针 + 矮屏)30px;tab 区 `overflow-x: auto` 横向滑,`+` 只留一个加号;当前 tab 才露 `×` |
@@ -2987,12 +2987,13 @@ tab 栏放在**聊天区顶部**,**左列表保留**,手机竖屏也显示。其
 - 当前会话标题会在 tab 栏和聊天头部各出现一次;这是用户要的 TUI 形态,不为了省一行把
   `#chatTitle` 在手机上藏掉(手机上标题行还兼着 `‹ 会话`、状态和上下文用量)。
 - 手机只给当前 tab 露 `×`:少一排小叉,也更难误触;要关别的 tab 先点一下再关。
-- 不做 TUI 的拖拽排序 / 未读脉冲 / `Ctrl+数字` / global-cwd 分域;不做跨标签页同步,
-  也不跨设备同步。标签只存本浏览器的一个小数组(id + 标题快照),不落消息。
+- 拖拽排序已在 §8.94 补上(鼠标拖 / 手机长按);未读脉冲 / `Ctrl+数字` / global-cwd
+  分域仍不做,也不做跨标签页 / 跨设备同步。标签只存本浏览器的一个小数组
+  (id + 标题快照),不落消息。
 - tab 指向的会话若在别处被删,点开会走现有的失败提示,`×` 仍能移除;不在列表页的会话
   不会被 tab 自动补拉,只有选中时才走 `refreshSessionInfo()`。
-- 超过 8 个丢最旧的是**打开顺序**里的最旧,不是「最久没点」;这一版没记访问时间,
-  和 TUI 的模型不完全一样,但规则可预期、实现小。
+- 超过 8 个丢**最左边**那个;顺序可以由用户拖拽调整后,左端是唯一一眼能看到的
+  「先走」规则,不需要再记访问时间。和 TUI 的模型不完全一样,但规则可预期、实现小。
 
 **回归**:`smoke.sh` 333 → **338**(5 项:节点在 `#chatHeader` 之前、自动入栏 + `ocs.tabs`
 + 最多 8 个 + init 接线、`closeTab` 只移出且邻居回退、三档高度样式、`ui-capabilities.html`
@@ -4495,6 +4496,70 @@ diff / write 正文。100 条消息、75 张 edit 卡（每张 3 个文件、每
 
 ---
 
+### 8.94 标签拖拽排序(鼠标 + 手机长按)
+
+**起因**：用户指着标签栏问「这些 TAB 不能拖拽排序之类的」；确认桌面鼠标和手机触摸都要，
+手机采用**长按进入拖拽**，不跟标签栏的横向滚动打架。
+
+**行为**：
+
+| 场景 | 行为 |
+|---|---|
+| 鼠标拖拽 | 按住标签移动超过 4px 才开始拖；没移动仍是普通点击 |
+| 手机长按 | 按住 300ms 进入拖拽；按之前横向移动超过 8px 就取消，继续当标签栏滚动 |
+| 拖拽中 | 被拖标签降到 45% 透明度，落点显示 2px 蓝色插入线；靠近左右边缘 28px 时标签栏自动横向滚 |
+| 松手 | 落在标签栏内按插入位重排；落在栏外或长按后没移动都取消，不切换会话 |
+| 点击保护 | 真的拖动过之后，松手产生的 click 被压住（`TAB_CLICK_GUARD_MS = 800`，下一次 pointerdown 提前清掉）；只压标签上的 click，`+ 新建` / `↺` 不受影响 |
+| 当前会话 | `store.selected` 不动，重排后当前标签仍然高亮 |
+| 持久化 | 只改 `store.tabs` 的顺序并 `saveTabs()`；不发请求，不动会话内容 |
+| 最多 8 个 | 新增第 9 个时 `shift()` 掉**最左边**那个；拖拽后顺序由用户定，仍保持「看得见的最左先走」 |
+| 打开新标签 | 仍然追加到最右；`touchTab()` 不因为点选而重排 |
+
+**DOM / CSS**：
+
+- 不改标签栏 DOM；仍由 `renderTabs()` 生成 `.tab > .tabmain + .tabx`。
+- `#tabStrip { touch-action: pan-x; }`：普通横滑归标签栏；拖拽期间由非 passive 的
+  `touchmove` 拦下滚动。
+- `.tab` 加 `position: relative` / `user-select: none` / `-webkit-touch-callout: none`；
+  `.tab.dragging` 半透明；`.tab.drop-before::before` / `.tab.drop-after::after` 画插入线；
+  `#tabStrip.tab-dragging` 用 `grabbing` 光标。
+
+**JS**：
+
+- 状态只有一个 `tabDrag`：`{id, from, el, pointerId, touch, startX/startY, x/y, active, moved, drop, timer}`；
+  另有 `tabAutoRaf` 与 `tabSuppressClickUntil`。
+- `moveTab(id, insertAt)` 先取再插，从前往后拖时自动把插入位减一；`tabDropIndex(clientX)`
+  按每个标签的中心线算插入位；`paintTabDrop()` 只换插入线类名。
+- `startTabDrag()` / `tabLongPress()` / `updateTabDrag()` / `finishTabDrag()` 分开：
+  鼠标在 `updateTabDrag()` 里跨过 4px 起拖；手机由 300ms 定时器调 `tabLongPress()`，
+  之后 `touchmove` 负责 `preventDefault()` 并更新位置。
+- `setupSessionTabs()` 在 `#tabStrip` 上挂 `pointerdown / pointermove / pointerup /
+  pointercancel` 和非 passive `touchmove`；点击处理开头先看 `tabSuppressClickUntil`。
+- `renderTabs()` 开头如果还有 `tabDrag`，先 `finishTabDrag(false)`，避免重画后指针
+  指向旧节点；测试页把 `setTimeout` 替成空实现时，可以直接调 `tabLongPress()` 驱动长按分支。
+
+**验证**：
+
+- `ui-capabilities.html` 新增 10 项：鼠标拖拽进入拖拽态 / 露出插入线、顺序与当前会话、
+  `localStorage` 回写、松手 click 被压住、手机长按前还不是拖拽、长按后进入拖拽、
+  手机长按拖拽顺序、未长按横滑让路、横滑取消后顺序不动、拖到栏外取消。
+- `smoke.sh` 新增 2 项静态锁：`moveTab` / `TAB_LONGPRESS_MS` / `startTabDrag` /
+  `tabLongPress` / pointer 接线 / `tabSuppressClickUntil` 与插入线样式；以及
+  `ui-capabilities.html` 里上述关键断言在。
+
+**回归**：`smoke.sh` 391 → **393**，`ui-capabilities` 203 → **213**；其余套件不变。
+全量回归见提交前日志，0 失败；全部用合成标签数据，没有读取或打断真实会话。
+
+**取舍**：
+
+- 手机必须长按 300ms 才能拖；普通横滑仍然优先，代价是拖拽前会有一点等待。
+- 不做拖拽手柄、键盘排序、跨标签页 / 跨设备同步；顺序只在本机 `localStorage`。
+- 拖到边缘的自动滚动只在拖拽期间开；松手后标签栏回到普通横向滚动。
+- 超过 8 个从最左边丢，而不是按「打开时间」丢；顺序可以手动调整后，左端是唯一
+  一眼能看到的「先走」规则。
+
+---
+
 ## 9. 取舍与理由
 
 | 决定 | 理由 | 放弃了什么 |
@@ -4528,7 +4593,7 @@ diff / write 正文。100 条消息、75 张 edit 卡（每张 3 个文件、每
 | worktree 管理补到列出 / 删除 / 移入 | 复用 `#dlgPick` 和现有 `+ 新建`；根之外再按会话 `subpath` 列子目录，删除前用 `#dlgWtDel` 展示 status 文件清单（§8.65 把原来的两处缺口补上）| 子目录只能移入、不能单独删；预览只列文件与增删行数，不列完整 diff；入口只在 `/worktrees` 命令（§8.61 / §8.65）|
 | 变更总览接四档 + 文件树 | `turn` / `branch` / `working` / `committed` 与 TUI 同名同义；多文件时左侧平铺文件树，点文件跳正文，逐文件 reviewed 只在本页内存 | 对比基线不猜 `branch.default`，没 base 时先让用户选；窄屏不显示文件树，reviewed 不持久化（§8.63 / §8.64）|
 | 会话标签栏放聊天区顶部、左列表保留 | 用户挑的默认方案；桌面主布局只多这一条，手机上 tab 栏就在聊天区里，和「‹ 会话」回列表不打架 | 桌面多 36px、竖屏 34px、横屏 30px；当前标题在 tab 与聊天头部各出现一次（§8.59）|
-| 标签最多 8 个、只存 id + 标题、按打开顺序 | 规则可预期、实现小；标题快照让刷新先有内容，列表回来后自动对账 | 丢最旧按打开顺序而不是「最久没点」；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59）|
+| 标签最多 8 个、只存 id + 标题、默认按打开顺序，可拖拽排序（§8.94）| 规则可预期、实现小；拖拽只改本机顺序，不发请求；标题快照让刷新先有内容，列表回来后自动对账 | 超限丢最左边那个；手机要长按 300ms 才拖；不跨标签页 / 不跨设备同步，不在列表页的会话不自动补拉（§8.59 / §8.94）|
 | diff 统一视图无条件折行 | 照 TUI 的 `wrapMode="char"`；393px 上不用左右拖着读 | 超长单 token 会断在任意字符；Markdown 代码块仍横向滚（§8.58）|
 | diff 偏好与 TUI 共用 `cli.json` 的 `diffs.view` | 两边一本账，不会「TUI 并排、面板统一」；面板本来只有 view 这一项偏好 | 只共享 view；写本机文件，需同一 `OPENCODE_CONFIG_DIR`；`wrap/tree/single/source` 仍只在 TUI；同时写靠 rename 最后一次赢（§8.60）|
 | 切 diff 视图只换 `.diffwrap` 正文 | 不重造 summary / 诊断 / `details`，展开状态、正文滚动与焦点都留住；40 张卡片实测约 -38% | 仍重跑 `diffHtml` / `parsePatch`；正文里的文本选区会随替换丢失（§8.62）|
