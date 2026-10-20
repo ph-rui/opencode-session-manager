@@ -417,6 +417,24 @@ if has "$APPJS" 'mentionAtTokenStart' && has "$APPJS" 'before.lastIndexOf'; then
 else
   echo "FAIL: @ 补全没有按 TUI 的 token 边界触发"; fail=$((fail + 1))
 fi
+# 大会话标签切换:模型表已缓存时不再补一次整表重绘
+if has "$APPJS" 'needModelPaint' && has "$APPJS" 'if (needModelPaint) renderMessages'; then
+  echo "PASS: 模型表已缓存时不再重复重绘消息"; pass=$((pass + 1))
+else
+  echo "FAIL: renderControls 缺少条件重绘"; fail=$((fail + 1))
+fi
+# 串口/长命令的大输出复用 §8.83 的懒壳
+if has "$APPJS" 'toolOutputText' && has "$APPJS" "if (kind === 'shell') return toolOutputText"; then
+  echo "PASS: shell 大输出接入工具卡懒渲染"; pass=$((pass + 1))
+else
+  echo "FAIL: shell 大输出没有接入工具卡懒渲染"; fail=$((fail + 1))
+fi
+# 空闲会话缓存:摘要没更新、也不在运行时,切回不再整页重拉
+if has "$APPJS" 'cached.updated' && has "$APPJS" 'sessionUpdated <= cached.updated'; then
+  echo "PASS: 空闲会话切回时按摘要跳过整页对账"; pass=$((pass + 1))
+else
+  echo "FAIL: 缺少空闲会话的缓存摘要比较"; fail=$((fail + 1))
+fi
 # 上传绝不能自己另起端点:走 OpenCode 自带的 fs/write,代理只负责建目录 + 清理
 if has "$APPJS" '/api/experimental/fs/write' && has "$APPJS" 'uploadDir'; then
   echo "PASS: 上传复用 OpenCode 的 fs/write(代理不新增上传端点)"; pass=$((pass + 1))
