@@ -2328,11 +2328,20 @@ if has "$CSS" '#sessionTabs {' && has "$CSS" '#tabStrip {' && has "$CSS" '.tab.a
 else
   echo "FAIL: 标签栏样式缺基础规则或窄屏高度"; fail=$((fail + 1))
 fi
+# §8.92 短标签也要有可点击的安全区:最小宽度 + × 前的 6px 缝
+if has "$CSS" '.tab {' && has "$CSS" 'min-width: 96px;' &&
+   has "$CSS" 'html.narrow .tab { max-width: 150px; min-width: 84px; }' &&
+   has "$CSS" '.tabx {' && has "$CSS" 'margin-left: 6px;'; then
+  echo "PASS: 短标签有最小宽度,× 前留 6px 安全缝"; pass=$((pass + 1))
+else
+  echo "FAIL: 短标签缺少最小宽度或 × 安全缝"; fail=$((fail + 1))
+fi
 SMOKE_CAP="$(dirname "$0")/ui-capabilities.html"
 if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.59 最近会话标签栏' &&
    has "$(cat "$SMOKE_CAP")" '关闭非当前标签:只移出标签栏,不删会话也不切会话' &&
    has "$(cat "$SMOKE_CAP")" '最多留 8 个,超出丢最旧的那个' &&
-   has "$(cat "$SMOKE_CAP")" '窄屏:只有当前标签露 ×'; then
+   has "$(cat "$SMOKE_CAP")" '窄屏:只有当前标签露 ×' &&
+   has "$(cat "$SMOKE_CAP")" '短标签有最小宽度,标题与 × 之间留安全缝'; then
   echo "PASS: test/ui-capabilities.html 里有标签栏的浏览器断言(自动入栏 / 切换 / 关闭 / 上限 / 窄屏)"; pass=$((pass + 1))
 else
   echo "FAIL: test/ui-capabilities.html 缺标签栏的关键断言"; fail=$((fail + 1))

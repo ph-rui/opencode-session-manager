@@ -1114,6 +1114,12 @@
         store.tabs.length === 1 && store.tabs[0].id === 'ses_a' && store.tabs[0].title === '活动会话', store.tabs);
       T('有标签后整条露出来', nav.hidden === false && qa('#tabStrip .tab').length === 1);
       T('标题过长的省略交给 CSS(.tabtitle)', !!strip.querySelector('.tabtitle'));
+      var tabAStyle = strip.querySelector('.tab[data-id="ses_a"]');
+      var tabXStyle = tabAStyle.querySelector('.tabx');
+      T('短标签有最小宽度,标题与 × 之间留安全缝',
+        parseFloat(getComputedStyle(tabAStyle).minWidth) >= 96 &&
+        parseFloat(getComputedStyle(tabXStyle).marginLeft) >= 6,
+        { minWidth: getComputedStyle(tabAStyle).minWidth, gap: getComputedStyle(tabXStyle).marginLeft });
       touchTab('ses_a');
       T('重复打开同一个会话不会多一个标签', store.tabs.length === 1, store.tabs);
       T('没选中时不高亮', !strip.querySelector('.tab.active'));
@@ -1137,6 +1143,13 @@
       strip.querySelector('.tab[data-id="ses_a"] .tabmain').click();
       T('点标签直接切会话(当前标签同步)',
         store.selected === 'ses_a' && strip.querySelector('.tab.active').dataset.id === 'ses_a');
+
+      await selectSession('ses_b');
+      var tabABlank = strip.querySelector('.tab[data-id="ses_a"]');
+      tabABlank.click(); // 点标签容器本身(标题与 × 之间的安全区),不是 .tabmain / .tabx
+      T('点标签空白区切会话,不会关闭标签',
+        store.selected === 'ses_a' && store.tabs.length === 2,
+        { selected: store.selected, tabs: store.tabs.length });
 
       var delBefore = window.calls.filter(function (c) { return c.method === 'DELETE'; }).length;
       strip.querySelector('.tab[data-id="ses_b"] .tabx').click();
@@ -1249,6 +1262,11 @@
       T('窄屏:只有当前标签露 ×',
         getComputedStyle(tabA.querySelector('.tabx')).display === 'flex' &&
         getComputedStyle(tabB.querySelector('.tabx')).display === 'none');
+      T('窄屏:短标签也有最小宽度和 × 安全缝',
+        parseFloat(getComputedStyle(tabA).minWidth) >= 84 &&
+        parseFloat(getComputedStyle(tabA.querySelector('.tabx')).marginLeft) >= 6,
+        { minWidth: getComputedStyle(tabA).minWidth,
+          gap: getComputedStyle(tabA.querySelector('.tabx')).marginLeft });
       document.documentElement.classList.remove('narrow', 'view-chat');
 
       /* ---- §8.61 worktree 管理(列出 / 删除 / 移入) ---- */

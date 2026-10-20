@@ -250,7 +250,8 @@ table#list { width: 100%; border-collapse: collapse; }
   align-items: stretch;
   flex: none;
   max-width: 220px;
-  min-width: 0;
+  /* §8.92 短标题也要留出可点击的安全区,别让 × 贴着标题。 */
+  min-width: 96px;
   border-right: 1px solid var(--border);
 }
 .tab:hover { background: var(--bg); }
@@ -275,6 +276,8 @@ table#list { width: 100%; border-collapse: collapse; }
   flex: none;
   align-items: center;
   justify-content: center;
+  /* §8.92 这段 6px 是标签自己的空白区:点它切会话,不会点到关闭。 */
+  margin-left: 6px;
   width: 24px;
   border: 0;
   background: transparent;
@@ -1765,7 +1768,7 @@ html.narrow #ctoolbar .ctl select { font-size: 16px; }
 /* §8.59 手机上的标签栏:再压 2px、tab 更窄、+ 只留一个加号;
    横屏(矮)再收 4px。当前 tab 才露 ×,别的 tab 先点一下再关,少一排小叉。 */
 html.narrow #sessionTabs { height: 34px; }
-html.narrow .tab { max-width: 150px; }
+html.narrow .tab { max-width: 150px; min-width: 84px; }
 html.narrow .tabmain { padding: 0 5px 0 8px; font-size: 12px; }
 html.narrow .tabx { width: 26px; font-size: 1.2em; }
 html.narrow .tab .tabx { display: none; }
