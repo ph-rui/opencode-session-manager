@@ -3445,7 +3445,13 @@ async function selectSession(id) {
   if (!s) refreshSessionInfo(id);
   if (cached) renderMessages(); // §8.55 先把旧内容顶上来,网络那一趟在后台安静跑
   // 缓存很新(刚看过 <1.5s)就不必再对账;其余情况走 quiet + now,不显示加载行、也不等对账间隔
-  const fresh = cached && Date.now() - cached.at < MSG_CACHE_FRESH_MS;
+  /* 会话摘要没更新(常见于空闲的串口/大工具会话)时,缓存就是这一页的权威版本:
+   * 不再每次切回都重拉一整页 MB 级消息。会话还在跑、或摘要的 updated 变新了,照旧对账。 */
+  const cachedSession = store.sessions.get(id);
+  const sessionUpdated = cachedSession && cachedSession.time && cachedSession.time.updated;
+  const unchanged = !!(cached && cached.updated && sessionUpdated &&
+    sessionUpdated <= cached.updated && !isRunning(id));
+  const fresh = cached && (Date.now() - cached.at < MSG_CACHE_FRESH_MS || unchanged);
   await Promise.all([
     fresh ? Promise.resolve() : loadMessages({ older: false, auto: !!cached, now: !!cached }),
     loadAsks(id),
@@ -3565,11 +3571,13 @@ const MSG_CACHE_FRESH_MS = 1500;
 function cacheCurrentMessages() {
   const id = store.selected;
   if (!id || !store.messages.size || store.msgError) return;
+  const s = store.sessions.get(id);
   store.msgCache.delete(id);
   store.msgCache.set(id, {
     messages: new Map(store.messages),
     cursor: store.msgOlderCursor,
     at: Date.now(),
+    updated: (s && s.time && s.time.updated) || 0,
   });
   while (store.msgCache.size > MSG_CACHE_MAX) {
     store.msgCache.delete(store.msgCache.keys().next().value);

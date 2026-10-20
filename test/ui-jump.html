@@ -798,6 +798,8 @@
       /* §8.55 切回看过的会话:内存缓存先顶上,再后台对账(不闪加载行、只发一条) */
       store.msgCache.clear();
       store.selected = null;
+      store.sessions.set('ses_a', SESSIONS[0]);
+      store.active.delete('ses_a');
       await selectSession('ses_a');
       await selectSession('ses_b'); // 切走时把 a 存进缓存
       T('切走时缓存了上一个会话', store.msgCache.has('ses_a'));
@@ -806,6 +808,7 @@
       };
       var cachedA = store.msgCache.get('ses_a');
       cachedA.at = Date.now() - 5000; // 模拟离开了一阵 → 需要后台对账
+      cachedA.updated = 4; // 服务端摘要比快照新 → 仍要对账
       var gateC = {};
       gateC.promise = new Promise(function (r) { gateC.release = r; });
       window.GATE = gateC.promise;
@@ -828,6 +831,16 @@
       await selectSession('ses_a');
       T('刚看过的会话(<1.5s)切回来不再发请求', msgN() === mN1, msgN() - mN1);
       T('缓存上限 6 个会话', MSG_CACHE_MAX === 6 && store.msgCache.size <= 6, store.msgCache.size);
+
+      /* 缓存旧了,但会话摘要没更新:不再整页重拉 */
+      await selectSession('ses_b');
+      var mN2 = msgN();
+      var cachedA2 = store.msgCache.get('ses_a');
+      cachedA2.at = Date.now() - 5000;
+      cachedA2.updated = 5; // 与 ses_a.time.updated 相同
+      store.active.delete('ses_a');
+      await selectSession('ses_a');
+      T('会话摘要没更新时,缓存旧了也不重拉', msgN() === mN2, msgN() - mN2);
 
       /* ============ 10. 贴完底再跟几帧:估值落定不许把底顶歪(§8.36) ============
        * cvmany 下 scrollHeight 是估值,浏览器是【贴完之后】才把它落定的 —— 一落定
