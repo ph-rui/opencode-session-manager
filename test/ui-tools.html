@@ -1629,6 +1629,57 @@
       T('懒渲染:直接 renderMessage 默认完整渲染',
         !!directLazy.querySelector('.diff .dl'), directLazy.innerHTML.slice(0, 120));
 
+      /* 串口/长命令的 shell 输出也走同一套懒壳 */
+      var bigShell = {
+        type: 'tool', id: 'lazy_shell_big', name: 'bash',
+        state: {
+          status: 'completed',
+          input: { command: 'cat /dev/ttyUSB0' },
+          content: [{ type: 'text', text: ('serial line\n').repeat(3000) }],
+        },
+      };
+      var bigShellLazy = toolHtml(bigShell, true);
+      T('懒渲染:大 shell 输出先出懒壳',
+        bigShellLazy.indexOf('class="tool lazy"') >= 0 && bigShellLazy.indexOf('<pre>') < 0,
+        bigShellLazy.slice(0, 120));
+      T('懒渲染:shell 输出计入懒渲染门槛',
+        toolBodyBytes(bigShell) >= LAZY_TOOL_CARD_MIN, toolBodyBytes(bigShell));
+      T('懒渲染:不懒时 shell 输出仍完整',
+        toolHtml(bigShell).indexOf('<pre>') >= 0 && toolHtml(bigShell).indexOf('serial line') >= 0);
+
+      /* 整表渲染时也要把 shell 输出认成懒壳,并在进入视口后补正文 */
+      var shellMsgs = new Map();
+      for (var si = 0; si < 4; si++) {
+        shellMsgs.set('shell_msg_' + si, {
+          id: 'shell_msg_' + si, type: 'assistant', time: { created: 2000 + si },
+          content: [
+            { type: 'text', text: '串口第 ' + si + ' 段' },
+            { type: 'tool', id: 'shell_tool_' + si, name: 'bash',
+              state: { status: 'completed', input: { command: 'cat /dev/ttyUSB0' },
+                content: [{ type: 'text', text: ('serial line\n').repeat(3000) }] } },
+          ],
+        });
+      }
+      store.selected = 'ses_a';
+      store.messages = shellMsgs;
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.forceBottom = true;
+      store.restoreScroll = null;
+      renderMessages();
+      var shellLazyShells = qa('#messages details.tool.lazy');
+      T('懒渲染:串口大会话首屏先出 shell 懒壳', shellLazyShells.length > 0, shellLazyShells.length);
+      T('懒渲染:shell 懒壳正文先空',
+        shellLazyShells.every(function (el) { return el.querySelector('.toolbody').children.length === 0; }),
+        shellLazyShells.length);
+      await lazyFrames(3);
+      var shellHydrated = qa('#messages details.tool:not(.lazy)');
+      T('懒渲染:shell 卡进入视口后补出正文',
+        shellHydrated.length > 0 && !!shellHydrated[0].querySelector('.toolbody pre') &&
+        shellHydrated[0].querySelector('.toolbody pre').textContent.indexOf('serial line') >= 0,
+        shellHydrated.length);
+
       store.messages = lazyMessages(2);
       store.live.clear();
       msgEls.clear();

@@ -4765,9 +4765,13 @@ function diffToolHtml(p, files) {
 }
 
 /* 工具输出统一拼进 <pre>(shell 与通用工具共用)。 */
-function toolOutputHtml(st) {
+function toolOutputText(st) {
   if (!Array.isArray(st.content)) return '';
-  const txt = st.content.map((c) => (c && c.text) || '').join('\n').trim();
+  return st.content.map((c) => (c && c.text) || '').join('\n').trim();
+}
+
+function toolOutputHtml(st) {
+  const txt = toolOutputText(st);
   return txt ? '<pre>' + esc(txt) + '</pre>' : '';
 }
 
@@ -4803,6 +4807,9 @@ function toolBodyBytes(p) {
     return n;
   }
   if (kind === 'write' && input && typeof input.content === 'string') return input.content.length;
+  /* 串口/长命令的输出也可能一次几十万字符。和 diff 正文一样先画摘要壳,
+   * 进入视口再补正文,别在每次切回会话时把整段输出重新转义、排版。 */
+  if (kind === 'shell') return toolOutputText(st).length;
   return 0;
 }
 
@@ -4841,6 +4848,7 @@ function toolBodyHtml(p) {
     if (!input || typeof input.content !== 'string') return '';
     return codeHtml(input.content, path) + diagHtml(md, path);
   }
+  if (kind === 'shell') return toolOutputHtml(st);
   return '';
 }
 
@@ -4986,6 +4994,7 @@ function toolHtml(p, lazy) {
   if (kind === 'shell') {
     const out = toolOutputHtml(st);
     if (!out) return '<div class="toolrow">' + toolHead(p, line) + '</div>';
+    if (lazy && lazyToolBodyCandidate(p)) return lazyToolCard(p, line, null);
     return toolCard(p, line, null, out, false);
   }
 
