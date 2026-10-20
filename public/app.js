@@ -5304,7 +5304,7 @@ function assistantFooterHtml(m, opts) {
       (m.retry.error && m.retry.error.message ? ' · ' + esc(m.retry.error.message) : '') +
       '</div>';
   }
-  if (m.live) return out; // 还没收工:照 TUI 这行是 step.ended 之后才有的
+  if (m.live || m.provisional) return out; // 还没收工 / 等权威版本:照 TUI 这行是 step.ended 之后才有的
   const parts = [];
   const agent = titlecase(m.agent || '');
   if (agent) parts.push('<span class="afAgent' + (m.error ? ' muted' : '') + '">' + esc(agent) + '</span>');
@@ -5840,17 +5840,40 @@ function recomputeRunning(msgs) {
   }
   const list = msgs || currentMessages();
   const last = list[list.length - 1];
-  const streaming = !!(last && last.type === 'assistant' && last.time && !last.time.completed);
+  // currentMessages() 里可能还是服务端的半成品对象;收束状态要看它对应的本地缓冲。
+  const lastLive = last && store.live.get(last.id);
+  const closedLive = !!(lastLive && !lastLive.open && liveView(last.id));
+  /* provisional:收工事件已到、服务端权威消息还没落盘的本地缓冲。正文继续显示,
+   * 但它已经不是「流式中」,不能因为 time.completed 还没来就把状态条一直点亮。 */
+  const streaming = !!(last && last.type === 'assistant' && last.time &&
+    !last.time.completed && !last.provisional && !closedLive);
   store.running = store.pending || streaming ||
-    compactionRunning(store.selected, list) || !!liveForSid(store.selected);
+    compactionRunning(store.selected, list) || !!openLiveForSid(store.selected);
   return store.running;
 }
 
 // 收工事件(含 loadActive 兜底)清掉本轮 pending,并马上重算 store.running。
-function markTurnDone(sid) {
-  if (!sid || sid !== store.selected) return;
+// 同时把该会话的流式缓冲标成收束:正文还留着等权威版本,但不再算运行中。
+function closeLiveFor(sid) {
+  let closed = false;
+  for (const L of store.live.values()) {
+    if (L.sid === sid && L.open) {
+      L.open = false;
+      closed = true;
+    }
+  }
+  return closed;
+}
+
+function markTurnDone(sid, opts) {
+  if (!sid) return false;
+  const closed = closeLiveFor(sid);
+  if (sid !== store.selected) return closed;
   store.pending = false;
   recomputeRunning();
+  // handleEvent 里还会统一重绘一次(defer),这里只给 loadActive 这类外部调用兜底。
+  if (closed && !(opts && opts.defer)) renderMessages();
+  return closed;
 }
 
 /* content-visibility: auto 只对「真长」的会话开(见 styles.css 里 #messages.cvmany > .msg)。
@@ -9001,6 +9024,15 @@ function liveForSid(sid) {
   return null;
 }
 
+/* 还在流式中的缓冲(收工事件一到就会 open=false)。状态条 / SSE 忙闲只看这一路:
+ * 收束后的缓冲可能还要等权威消息落盘,但那是收尾对账的事,不该继续显示「运行中」。 */
+function openLiveForSid(sid) {
+  for (const L of store.live.values()) {
+    if (L.sid === sid && L.open && liveView(L.id)) return L;
+  }
+  return null;
+}
+
 // 服务端已有权威完整版本时返回 null,表示不再用本地缓冲覆盖
 function liveView(id) {
   const L = store.live.get(id);
@@ -9144,7 +9176,8 @@ function liveMessage(L) {
         ? { type: 'tool', id: p.id, name: p.name, executed: false, state: p.state, time: p.time }
         : { type: p.type, text: p.text }
     ),
-    live: true,
+    live: !!L.open,
+    provisional: !L.open,
   };
 }
 
@@ -9408,6 +9441,12 @@ function handleControlEvent(e) {
   const sid = d.sessionID;
   let dirty = false;
   let refreshActive = false;
+  let closedLive = false;
+  /* 收工分支统一走这里:关闭该会话的流式缓冲。当前会话的重绘交给 handleEvent
+   * (defer),避免 execution.succeeded 既在这里重画、又在下面 structural 分支重画。 */
+  const done = (id) => {
+    if (markTurnDone(id, { defer: true }) && id === store.selected) closedLive = true;
+  };
 
   if (t === 'session.status') {
     const st = (d.status && d.status.type) || null;
@@ -9415,14 +9454,14 @@ function handleControlEvent(e) {
       if (st === 'busy' || st === 'retry') store.active.set(sid, st);
       else {
         store.active.delete(sid);
-        markTurnDone(sid);
+        done(sid);
       }
       dirty = true;
     }
   } else if (t === 'session.idle') {
     if (sid) {
       store.active.delete(sid);
-      markTurnDone(sid);
+      done(sid);
       dirty = true;
     }
   } else if (t === 'session.usage.updated') {
@@ -9443,7 +9482,7 @@ function handleControlEvent(e) {
       if (t === 'session.execution.started') store.active.set(sid, 'busy');
       else {
         store.active.delete(sid);
-        markTurnDone(sid);
+        done(sid);
       }
       dirty = true;
     }
@@ -9572,6 +9611,7 @@ function handleControlEvent(e) {
     renderChatOps(); // 子会话创建 / 删除时,头部的「子会话 N」和「父会话」入口要跟着变
     updateChatStatus();
   }
+  return closedLive;
 }
 
 // 单条事件的统一入口(独立出来便于测试,也让 setupEvents 更薄)
@@ -9579,7 +9619,7 @@ function handleEvent(e) {
   if (!e || !e.type) return;
   handleAskEvent(e);
   const structural = handleStreamEvent(e);
-  handleControlEvent(e);
+  const closedLive = handleControlEvent(e);
   const d = e.data || {};
   const L = d.assistantMessageID ? store.live.get(d.assistantMessageID) : null;
   // 有本地缓冲的文本事件才算「已经渲染过」;没有缓冲(例如中途接入时才收到 delta)
@@ -9592,6 +9632,7 @@ function handleEvent(e) {
   // 结构变化(新 part / 工具状态 / 元数据)立刻重绘;纯文本变化只刷局部节点
   if (repaint && liveForSid(store.selected)) renderMessages();
   else if (local) scheduleLivePaint();
+  else if (closedLive) renderMessages();
 
   const t = e.type || '';
   const evSid = d.sessionID || (d.info && d.info.id) || '';
@@ -9661,7 +9702,7 @@ function sseBusy() {
   if (store.pending || store.active.size) return true;
   const sel = store.selected;
   if (!sel) return false;
-  return isRunning(sel) || store.running || compactionRunning(sel) || !!liveForSid(sel);
+  return isRunning(sel) || store.running || compactionRunning(sel) || !!openLiveForSid(sel);
 }
 
 function sseWatchdog() {

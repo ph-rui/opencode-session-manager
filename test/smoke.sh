@@ -1639,7 +1639,7 @@ fi
 # 面板自己发的消息会把 pending 置上;服务端不一定再给 idle 消息,收工事件与
 # loadActive 兜底都必须清掉它并重算 running,否则进度条会一直转。
 if has "$APPJS" 'function recomputeRunning(msgs)' &&
-   has "$APPJS" 'function markTurnDone(sid)' &&
+   has "$APPJS" 'function markTurnDone(sid, opts)' &&
    has "$APPJS" 'if (justIdle) markTurnDone(sel);' &&
    has "$APPJS" 'recomputeRunning(msgs);' &&
    has "$(cat "$(dirname "$0")/ui-controls.html")" '清掉 pending' &&
@@ -1648,6 +1648,18 @@ if has "$APPJS" 'function recomputeRunning(msgs)' &&
   echo "PASS: 收工事件与 loadActive 兜底都会清 pending、重算 running(进度条不再空转)"; pass=$((pass + 1))
 else
   echo "FAIL: 收工后 pending / running 没有清干净,进度条会一直转"; fail=$((fail + 1))
+fi
+# §8.93 收工后流式缓冲先标收束:正文留着等权威版本,但不再算运行、不再显示流式中。
+if has "$APPJS" 'function closeLiveFor(sid)' &&
+   has "$APPJS" 'function openLiveForSid(sid)' &&
+   has "$APPJS" 'provisional: !L.open' &&
+   has "$APPJS" '!last.time.completed && !last.provisional && !closedLive' &&
+   has "$APPJS" 'else if (closedLive) renderMessages();' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '收束后不等权威消息就回到空闲' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" 'session.idle 关闭本地流式缓冲'; then
+  echo "PASS: 收工后流式缓冲先标收束,不等权威消息就熄掉运行中与「流式中」"; pass=$((pass + 1))
+else
+  echo "FAIL: 收工后流式缓冲未收束,状态条可能一直转"; fail=$((fail + 1))
 fi
 if has "$APPJS" 'const MSG_SETTLE_MS = 1500;' &&
    has "$APPJS" 'function turnLooksUnsettled()' &&

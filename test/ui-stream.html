@@ -369,6 +369,12 @@
       T('execution.succeeded 判定为结构变化', re === true);
       T('收束后缓冲标记关闭', view(AID).open === false);
       T('收束后仍显示(等权威版本)', !!view(AID));
+      handleControlEvent({ type: 'session.execution.succeeded', data: { sessionID: 'ses_a' } });
+      renderMessages();
+      T('收束后不等权威消息就回到空闲', q('#chatState').textContent === '空闲', q('#chatState').textContent);
+      T('收束后进度条不再动', q('#progress').hidden === true);
+      T('收束后不再显示「流式中」', el(AID).textContent.indexOf('流式中') < 0);
+      T('收束后本地正文仍然在', el(AID).textContent.indexOf('权威版本') >= 0);
 
       /* ---------------- 服务端权威版本到达:交回服务端 ---------------- */
       window.SERVER['ses_a'] = window.SERVER['ses_a'].map(function (m) {
@@ -1175,10 +1181,19 @@
         id: 'm_live9', sid: 'ses_a', open: true, parts: [], byKey: {},
       });
       T('收尾判定:本地流式缓冲还没被权威版本替换 → 还要拉', turnLooksUnsettled() === true);
-      store.live.clear();
+      store.active.set('ses_a', 'busy');
+      store.pending = true;
+      renderMessages();
+      T('idle 前:本地流式仍算运行中', q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
 
       window.__timeouts.length = 0;
       handleEvent(ev('session.idle', { sessionID: 'ses_a' }));
+      T('session.idle 关闭本地流式缓冲', store.live.get('m_live9').open === false);
+      T('session.idle 后 pending 清掉且状态回到空闲',
+        store.pending === false && q('#chatState').textContent === '空闲',
+        store.pending + '/' + q('#chatState').textContent);
+      T('session.idle 后进度条收起', q('#progress').hidden === true);
+      T('session.idle 后不再显示「流式中」', q('#messages').textContent.indexOf('流式中') < 0);
       T('session.idle 排一次 1.5s 的延迟收尾对账(不跟 150ms 那次抢)',
         window.__pending(1500) === 1, window.__timeouts);
 
