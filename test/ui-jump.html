@@ -842,6 +842,71 @@
       await selectSession('ses_a');
       T('会话摘要没更新时,缓存旧了也不重拉', msgN() === mN2, msgN() - mN2);
 
+      /* ============ 9.5 切回时复用整棵消息 DOM(§8.96) ============
+       * 没有这份缓存时,切走必须清空 #messages,切回来只能整表重建(500 条实测 ~130ms)。
+       * 这里把消息节点整棵留在会话上:切回来接上、内容一字不差,别再重画一遍。 */
+      msgDomCache.clear();
+      store.active.delete('ses_a');
+      sessionStorage.removeItem('ocs.scroll');
+      await selectSession('ses_b');
+      await selectSession('ses_a');
+      var nodeA1 = box.querySelector('.msg');
+      var txtA1 = nodeA1 ? nodeA1.textContent : '';
+      T('(前置)A 已经画出来了', !!nodeA1, box.childElementCount);
+      T('(前置)这一刻没有待用的快路径标记', store.domFast === null);
+
+      await selectSession('ses_b');
+      T('切走时把整棵消息 DOM 存进会话缓存', msgDomCache.has('ses_a'), msgDomCache.size);
+      T('节点只是被摘下,没有销毁(展开态 / 懒渲染壳都还留着)',
+        !!nodeA1 && !nodeA1.isConnected && nodeA1.textContent === txtA1,
+        { conn: !!nodeA1 && nodeA1.isConnected, txt: nodeA1 && nodeA1.textContent });
+
+      await selectSession('ses_a');
+      T('切回来接的是同一批节点(不是重新渲染)', box.querySelector('.msg') === nodeA1);
+      T('接回来的内容还是对的', box.textContent.indexOf('会话 A 的第一问') >= 0);
+      T('快路径标记用完就清掉', store.domFast === null);
+      T('消息节点排在 #msgState 前面',
+        !!(nodeA1.compareDocumentPosition(stateEl) & Node.DOCUMENT_POSITION_FOLLOWING));
+
+      /* 缓存条目被对账换过 → 消息集合可能变了,不能拿旧 DOM 顶 */
+      await selectSession('ses_b');
+      var eA = store.msgCache.get('ses_a');
+      var mA = new Map(eA.messages);
+      mA.set('msg_a_extra', { id: 'msg_a_extra', type: 'user', time: { created: 200 }, text: '后到的消息' });
+      store.msgCache.set('ses_a', { messages: mA, cursor: eA.cursor, at: eA.at, updated: eA.updated });
+      await selectSession('ses_a');
+      T('缓存里的消息集合变过 → 不复用旧 DOM,照旧重绘',
+        box.querySelector('.msg') !== nodeA1 && box.textContent.indexOf('后到的消息') >= 0);
+
+      /* 正在跑的会话不缓存 DOM:那些节点下一帧还会被流式增量改写 */
+      store.active.delete('ses_a');
+      await selectSession('ses_b');
+      store.active.set('ses_a', 'busy');
+      await selectSession('ses_a');
+      await selectSession('ses_b');
+      T('运行中的会话不往 DOM 缓存里放(节点还会变)', !msgDomCache.has('ses_a'), msgDomCache.size);
+      store.active.delete('ses_a');
+
+      /* 全局偏好(探索分组 / diff 视图)一动,缓存里那棵 DOM 就过时了:
+       * 改偏好的地方只重画当前会话,碰不到还留在缓存里的那几个 —— 靠换代让它们失效。 */
+      store.exploreGroup = true;
+      msgDomCache.clear();
+      await selectSession('ses_b');
+      await selectSession('ses_a');
+      var nodeGen = box.querySelector('.msg');
+      await selectSession('ses_b'); // 把 a 存起来
+      setExploreGroup(false); // 全局偏好变了
+      await selectSession('ses_a');
+      T('全局渲染偏好变过 → 不接旧 DOM', box.querySelector('.msg') !== nodeGen, domGen);
+      store.exploreGroup = true;
+      await selectSession('ses_b');
+      await selectSession('ses_a');
+      var nodeGen2 = box.querySelector('.msg');
+      await selectSession('ses_b');
+      redrawDiffCards(''); // diff 视图 / 分栏宽窄变化走这里
+      await selectSession('ses_a');
+      T('diff 视图 / 分栏宽窄变过 → 也不接旧 DOM', box.querySelector('.msg') !== nodeGen2, domGen);
+
       /* ============ 10. 贴完底再跟几帧:估值落定不许把底顶歪(§8.36) ============
        * cvmany 下 scrollHeight 是估值,浏览器是【贴完之后】才把它落定的 —— 一落定
        * scrollTop 就被夹回去,而这时往往已经没有下一次渲染来纠正(事件不来就永远停着)。

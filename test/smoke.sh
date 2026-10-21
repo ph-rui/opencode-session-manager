@@ -2396,6 +2396,27 @@ else
   echo "FAIL: §8.95 的图片预览函数 / 对话框 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# §8.96 切回会话复用整棵消息 DOM:切走 stash、切回接上、签名不重算、缓存变了就退回重绘
+if has "$APPJS" 'const msgDomCache = new Map();' &&
+   has "$APPJS" 'function stashMessagesDom(sid)' &&
+   has "$APPJS" 'function restoreMessagesDom(sid, cached)' &&
+   has "$APPJS" 'if (prev && prev !== id) stashMessagesDom(prev);' &&
+   has "$APPJS" 'if (cached) restoreMessagesDom(id, cached);' &&
+   has "$APPJS" 'store.domFast = { sid: sid, ids: ids };' &&
+   has "$APPJS" 'if (!domFast) {' &&
+   has "$APPJS" 'const MSG_DOM_MAX = 3;' &&
+   has "$APPJS" 'function bumpDomGen()' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '切走时把整棵消息 DOM 存进会话缓存' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '切回来接的是同一批节点(不是重新渲染)' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '缓存里的消息集合变过 → 不复用旧 DOM,照旧重绘' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '运行中的会话不往 DOM 缓存里放(节点还会变)' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '全局渲染偏好变过 → 不接旧 DOM' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" 'diff 视图 / 分栏宽窄变过 → 也不接旧 DOM'; then
+  echo "PASS: §8.96 切回会话复用整棵消息 DOM,缓存变过 / 运行中都不复用"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.96 的 DOM 缓存 / 快路径 / 退回条件或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 # §8.60 TUI diff 偏好共享:面板不再只记 localStorage,而是读写 cli.json 的 diffs.view
 if has "$SERVERJS" "url === '/__config/diffs'" && has "$SERVERJS" 'function readDiffView()' &&
    has "$SERVERJS" 'function writeDiffView(view)' && has "$SERVERJS" 'diffView: dv.view'; then

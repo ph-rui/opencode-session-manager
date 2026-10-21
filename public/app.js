@@ -75,6 +75,7 @@ const store = {
   ctrlKey: '', // 当前会话 agent/model 的指纹,避免回填时覆盖用户输入
   showArchived: false, // 列表是否显示已归档会话
   restoreScroll: null, // 本次进入会话要还原的滚动锚点(由 selectSession / restoreFromHash 设置,renderMessages 消费)
+  domFast: null, // §8.96 刚接回的那棵消息 DOM:{ sid, ids };renderMessages 看见它就跳过逐条签名
   live: new Map(), // assistantMessageID -> 流式本地缓冲(见「逐 token 流式」)
   uploadDir: '', // 附件暂存目录(来自 /__health)
   home: '', // 机器 home 目录(来自 /__health),提示栏拿它把路径缩成 ~/...(照 TUI 的 cm)
@@ -3639,6 +3640,8 @@ async function selectSession(id) {
   }
   // §8.55 切走的这一份先留在内存里,切回来时先用它顶上(再后台对账)
   if (prev && prev !== id) cacheCurrentMessages();
+  // §8.96 同一份消息已经画过 → 把 DOM 也留在内存里,切回来直接接上
+  if (prev && prev !== id) stashMessagesDom(prev);
   // 深链恢复可能已经塞了一个显式锚点;其它入口(列表 / 标签 / 前后退)按
   // sessionStorage 里这个会话上次读到的位置还原。没有存档才落到底部。
   const explicit = store.restoreScroll && store.restoreScroll.sid === id ? store.restoreScroll.anchor : null;
@@ -3691,6 +3694,10 @@ async function selectSession(id) {
    * 刻意不 await:不能让这条网络往返改掉选会话的时序(会跟列表刷新抢);
    * 也刻意排在下面那组【之前】——那组里任何一个卡住,都不该把这条一起拖住。 */
   if (!s) refreshSessionInfo(id);
+  /* §8.96 缓存命中的会话:把上次那棵消息 DOM 原样接回来(接不上就照旧整表重绘)。
+   * 刻意放在上面那排 UI 之后:接回 500 条消息会让整页排版作废,谁先读布局谁付这笔钱;
+   * 提前接就等于让 revealActiveTab() 白排一遍,再去 renderMessages() 里排第二遍。 */
+  if (cached) restoreMessagesDom(id, cached);
   if (cached) renderMessages(); // §8.55 先把旧内容顶上来,网络那一趟在后台安静跑
   // 缓存很新(刚看过 <1.5s)就不必再对账;其余情况走 quiet + now,不显示加载行、也不等对账间隔
   /* 会话摘要没更新(常见于空闲的串口/大工具会话)时,缓存就是这一页的权威版本:
@@ -3830,6 +3837,76 @@ function cacheCurrentMessages() {
   while (store.msgCache.size > MSG_CACHE_MAX) {
     store.msgCache.delete(store.msgCache.keys().next().value);
   }
+}
+
+/* §8.96 切回来时复用整棵消息 DOM。
+ * 没有这份缓存时,selectSession() 必须 msgEls.clear() + 清空 #messages,切回来只能
+ * 整表重建:合成 500 条消息实测 show 一次 ~130ms(其中 renderMessage 只占 ~28ms,
+ * 大头是逐条 JSON.stringify 算签名再比对)。这里把消息节点的「所有权」留给会话:
+ *   离开 → 把消息节点挪进 DocumentFragment(不销毁),连同 msgEls 记录一起存;
+ *   回来 → 消息集合没变就把节点原样接回,并给 renderMessages() 一个快路径,
+ *          省掉逐条签名/比对,滚动锚点 / 底部跟随 / 懒渲染仍走原来的收尾。
+ * 只缓存空闲会话:运行中或有流式缓冲时节点下一帧还会变,存了也是错的。
+ * 最多 MSG_DOM_MAX 个会话,LRU 淘汰;msgCache 条目被淘汰后这份也随之失效。 */
+const MSG_DOM_MAX = 3;
+const msgDomCache = new Map(); // sid -> { entry, frag, recs, ids, gen }
+/* §8.96 渲染代:探索分组、diff 视图 / 分栏宽窄这些【全局】偏好一变,缓存里那几棵
+ * 已经画好的 DOM 就过时了 —— 改它们的地方只重画当前会话(redrawDiffCards /
+ * renderMessages),碰不到还留在缓存里的。用一个计数把这类变化串起来:
+ * 存 DOM 时记一代,切回来对不上就老老实实重绘。 */
+let domGen = 0;
+function bumpDomGen() {
+  domGen++;
+}
+
+function msgIdsSig(msgs) {
+  let s = '';
+  for (let i = 0; i < msgs.length; i++) s += msgs[i].id + '\u0001';
+  return s;
+}
+
+function stashMessagesDom(sid) {
+  if (!sid || isRunning(sid)) return;
+  for (const L of store.live.values()) if (L && L.sid === sid) return;
+  const entry = store.msgCache.get(sid);
+  const box = $('#messages');
+  if (!entry || !box || store.selected !== sid) return;
+  const frag = document.createDocumentFragment();
+  const recs = new Map();
+  for (const [id, rec] of msgEls) {
+    if (!rec || !rec.el || rec.el.parentNode !== box) continue;
+    frag.appendChild(rec.el); // 挪走但不销毁:details 展开态、懒渲染壳都留着
+    recs.set(id, rec);
+  }
+  if (!recs.size) return;
+  msgDomCache.delete(sid); // 重新 set 到队尾,保证 LRU 顺序
+  msgDomCache.set(sid, {
+    entry: entry,
+    frag: frag,
+    recs: recs,
+    ids: msgIdsSig(Array.from(entry.messages.values())),
+    gen: domGen,
+  });
+  while (msgDomCache.size > MSG_DOM_MAX) msgDomCache.delete(msgDomCache.keys().next().value);
+}
+
+/* cached 就是 selectSession() 里取的那份 msgCache 条目:对不上说明会话已经被
+ * 对账 / 淘汰过,不能拿旧 DOM 顶。 */
+function restoreMessagesDom(sid, cached) {
+  const rec = msgDomCache.get(sid);
+  if (!rec) return false;
+  msgDomCache.delete(sid);
+  if (!cached || rec.entry !== cached) return false;
+  if (rec.gen !== domGen) return false; // 探索分组 / diff 视图这类全局偏好动过
+  const box = $('#messages');
+  if (!box || !store.messages.size) return false;
+  const ids = msgIdsSig(Array.from(store.messages.values()));
+  if (ids !== rec.ids) return false; // 缓存里的消息集合变过 → 老老实实重绘
+  for (const [id, r] of rec.recs) msgEls.set(id, r);
+  // 插在最前面:paintMsgState() 已经把 #msgState 放好了,#jumpLatest 由收尾再追加到末尾
+  box.insertBefore(rec.frag, box.firstChild);
+  store.domFast = { sid: sid, ids: ids };
+  return true;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -4744,6 +4821,8 @@ function findToolPart(pid) {
 function redrawDiffCards(pid) {
   const box = $('#messages');
   if (!box) return null;
+  /* 只重画当前会话里的卡片;缓存里那几棵还是老视图,换代让它们下次重绘 */
+  bumpDomGen();
   const tops = new Map();
   let anchor = null;
   // 切换按钮点下去之后马上会被换掉;先记下是哪一张卡片的按钮,重画完再把焦点还回去。
@@ -5284,6 +5363,7 @@ function isExploreTool(p) {
  * 但偏好只存本机 localStorage(面板没有 TUI 的 cli.json 会话配置通道,不硬造一个)。 */
 function setExploreGroup(on) {
   store.exploreGroup = !!on;
+  bumpDomGen(); // 缓存里那几棵 DOM 是按老分组画的,不能再接回去
   try {
     localStorage.setItem(EXPLORE_GROUP_KEY, store.exploreGroup ? '1' : '0');
   } catch (_) {}
@@ -6141,10 +6221,19 @@ function renderMessages() {
   const force = store.forceBottom;
   store.forceBottom = false;
   const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底
+  /* §8.96 快路径:这棵 DOM 是刚由 restoreMessagesDom() 接回来的,消息集合一字未变。
+   * 逐条算签名再比对是热切会话最贵的一步(500 条实测 ~100ms),这里直接跳过,
+   * 只走后面的滚动 / 底部 / 懒渲染收尾。 */
+  const domFast = !!(store.domFast && store.domFast.sid === store.selected &&
+    store.domFast.ids === msgIdsSig(msgs));
+  store.domFast = null;
   // 量一次「跟不跟随」。注意不能拿 atBottom(box) 的结果当结论 —— 容器刚变矮(状态条 /
   // 底板展开 / #asks / 软键盘)也会让离底变远,而那不是用户往上滚(见 updateJumpLatest)。
-  const nearBottom = !pending && (force || updateJumpLatest());
+  // 快路径下 DOM 已经在位,这一量会把整棵 500 条消息重新排版一次(实测 100ms+);
+  // 而切会话一定有锚点或 forceBottom,收尾那一步本来就会重排,这里不重复量。
+  const nearBottom = domFast ? false : (!pending && (force || updateJumpLatest()));
 
+  if (!domFast) {
   // 删除已不存在的消息(live 缓冲里的消息不算「不存在」)
   for (const [id, rec] of msgEls) {
     if (!store.messages.has(id) && !liveView(id)) {
@@ -6232,6 +6321,8 @@ function renderMessages() {
     if (rec.el !== anchor) box.insertBefore(rec.el, anchor);
     prev = rec.el;
   }
+
+  } // end !domFast
 
   // 收尾时「贴不贴底」其实已经能定下来,直接喂给 updateJumpLatest() —— 省掉它自己再读一次
   // 布局。那次读正好落在刚改完 DOM 之后,是整个 renderMessages() 里最贵的一步
