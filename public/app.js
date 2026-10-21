@@ -2419,6 +2419,7 @@ const CLOSED_MAX = 8;
 const closedTabs = [];
 let tabsSig = '';
 let tabsActiveSeen = null;
+let sessionsSig = '';
 /* §8.94 一次只能拖一个标签;拖完到下一次 click 之间压住点击,避免松手又切会话。 */
 let tabDrag = null;
 let tabAutoRaf = 0;
@@ -2785,7 +2786,7 @@ function renderTabs() {
   // 当前 tab 换了才把它滚进视野;用户自己横向翻着看的时候不要去拽回来。
   const reveal = !!active && active !== tabsActiveSeen;
   tabsActiveSeen = active;
-  if (reveal) revealActiveTab();
+  if (reveal && store.selected === active) revealActiveTab();
 }
 
 /* 只动 #tabStrip 自己的 scrollLeft,不碰页面/聊天区的纵向滚动。
@@ -2887,10 +2888,43 @@ function renderSessions() {
   const rows = visibleSessions();
   const pinned = pinnedSet();
   const tb = $('#list tbody');
-  tb.innerHTML = '';
-  $('#count').textContent = rows.length;
+  if (!tb) return;
+  const cnt = $('#count');
+  if (cnt) cnt.textContent = rows.length;
   const ac = $('#archivedCount');
   if (ac) ac.textContent = archived.length ? '(另 ' + archived.length + ' 个已归档)' : '';
+  /* 只要行顺序/选中/徽标/归档/数值都没变,就别整表重画。左栏每次选中会话、切标签、
+   * 刷新状态都会调到这里,全量重建 50 行是热路径里最惹眼的「没必要」排版/事件绑定成本。 */
+  const sig = JSON.stringify([
+    store.selected || null,
+    store.order || null,
+    !!store.showArchived,
+    store.sessionCursor ? 1 : 0,
+    rows.map((s) => [
+      s.id,
+      s.title || '',
+      isArchived(s) ? 1 : 0,
+      pinned.has(s.id) ? 1 : 0,
+      askCountFor(s.id),
+      runStatus(s.id) || (compactionRunning(s.id) ? 'busy' : ''),
+      (s.location && s.location.directory) || '',
+      rel(s.time && s.time.updated),
+      fmtTokens(s.tokens),
+      fmtCost(s.cost),
+    ]),
+  ]);
+  if (sig === sessionsSig) {
+    /* 徽标变了(运行/问询/压缩)也会体现在上面的 sig;目录选项、聊天操作行、标签栏
+     * 每次选中都会需要刷新,但这里已经省了整表 innerHTML。 */
+    renderDirOptions();
+    renderChatOps();
+    renderTabs();
+    const lm = $('#loadMore');
+    if (lm) lm.hidden = !store.sessionCursor;
+    return;
+  }
+  sessionsSig = sig;
+  tb.innerHTML = '';
   for (const s of rows) {
     const tr = document.createElement('tr');
     tr.dataset.id = s.id;
@@ -2925,7 +2959,8 @@ function renderSessions() {
   renderDirOptions();
   renderChatOps();
   renderTabs();
-  $('#loadMore').hidden = !store.sessionCursor;
+  const lm2 = $('#loadMore');
+  if (lm2) lm2.hidden = !store.sessionCursor;
 }
 
 function renderDirOptions() {
