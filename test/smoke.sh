@@ -2378,6 +2378,23 @@ if [ -f "$SMOKE_CAP" ] && has "$(cat "$SMOKE_CAP")" '§8.94 标签拖拽排序(�
 else
   echo "FAIL: test/ui-capabilities.html 缺标签拖拽的关键断言"; fail=$((fail + 1))
 fi
+# §8.95 消息图片点击放大:缩略图可聚焦,预览复用 data: URL,三种关闭方式都清 src
+if has "$APPJS" 'function openImagePreview(src, name)' &&
+   has "$APPJS" 'function closeImagePreview()' &&
+   has "$APPJS" 'function setupImagePreview()' &&
+   has "$APPJS" "closest('img.att-img')" &&
+   has "$APPJS" 'role="button" tabindex="0" title="点击放大"' &&
+   has "$HOME_HTML" 'id="dlgImage"' && has "$HOME_HTML" 'id="imgView"' &&
+   has "$HOME_HTML" 'id="imgViewClose"' &&
+   has "$CSS" 'dialog.dlg.dlgimage {' && has "$CSS" 'cursor: zoom-in;' &&
+   has "$CSS" 'html.narrow dialog.dlg.dlgimage {' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '图片预览:点击缩略图打开' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '图片预览:关闭按钮退出并清掉 src' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '图片预览:close 事件清掉 src(Esc 走同一条)'; then
+  echo "PASS: §8.95 消息图片可点击放大,预览框 / 键盘打开 / 三种关闭与清理都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.95 的图片预览函数 / 对话框 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
 
 # §8.60 TUI diff 偏好共享:面板不再只记 localStorage,而是读写 cli.json 的 diffs.view
 if has "$SERVERJS" "url === '/__config/diffs'" && has "$SERVERJS" 'function readDiffView()' &&

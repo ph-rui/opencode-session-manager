@@ -5389,7 +5389,8 @@ function userFilesHtml(m) {
         (meta ? '<span class="att-meta">' + esc(meta) + '</span>' : '') +
         (src ? '<span class="att-src">' + esc(src) + '</span>' : '') +
         '</div>' +
-        (isImg ? '<img class="att-img" alt="' + esc(name) + '" src="data:' + esc(mime) + ';base64,' + String(f.data) + '">' : '')
+        (isImg ? '<img class="att-img" alt="' + esc(name) + '" src="data:' + esc(mime) + ';base64,' + String(f.data) +
+          '" role="button" tabindex="0" title="点击放大" aria-label="放大图片：' + esc(name) + '">' : '')
     );
   }
   return out.length ? '<div class="atts">' + out.join('') + '</div>' : '';
@@ -10307,6 +10308,47 @@ function syncCtxInfoHome() {
   else foot.insertBefore(ctx, $('#agentHint') || null);
 }
 
+/* §8.95 消息图片点击放大:预览直接复用缩略图里的 data: URL,不发请求。
+ * 关掉时把 #imgView 的 src 摘掉 —— 大图的 base64 可能几 MB,不能让它一直挂在
+ * 隐藏的对话框里。Esc 走 <dialog> 自己的 close 事件,也走这里同一条清理。 */
+function openImagePreview(src, name) {
+  const dlg = $('#dlgImage');
+  const img = $('#imgView');
+  if (!dlg || !img || !src) return false;
+  const title = name || '图片';
+  const label = $('#imgViewName');
+  img.src = src;
+  img.alt = title;
+  if (label) label.textContent = title;
+  if (!dlg.open) openDlg(dlg);
+  return true;
+}
+
+function closeImagePreview() {
+  const dlg = $('#dlgImage');
+  if (dlg && dlg.open) closeDlg(dlg);
+  const img = $('#imgView');
+  if (img) {
+    img.removeAttribute('src');
+    img.alt = '';
+  }
+  const label = $('#imgViewName');
+  if (label) label.textContent = '';
+}
+
+function setupImagePreview() {
+  const dlg = $('#dlgImage');
+  if (!dlg || dlg.dataset.wired === '1') return;
+  dlg.dataset.wired = '1';
+  // 点遮罩(事件目标正好是 dialog 自己)才关;点图片或顶栏按钮不关。
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg) closeImagePreview();
+  });
+  dlg.addEventListener('close', closeImagePreview); // Esc / 程序关闭都清 src
+  const btn = $('#imgViewClose');
+  if (btn) btn.addEventListener('click', closeImagePreview);
+}
+
 // 子会话收工行的点击委托(照 TUI 的 SessionNoticeMessageV2):整行可点,但正在选字时
 // 不跳(与 TUI 的 getSelection 判断一致);键盘 Enter / 空格同样算「打开」。
 function setupMessageActions() {
@@ -10317,6 +10359,12 @@ function setupMessageActions() {
     if (id) selectSession(id);
   };
   box.addEventListener('click', (e) => {
+    const img = e.target.closest('img.att-img');
+    if (img) {
+      e.preventDefault();
+      openImagePreview(img.getAttribute('src'), img.getAttribute('alt'));
+      return;
+    }
     const row = e.target.closest('.completion[data-child]');
     if (!row) return;
     const sel = window.getSelection && window.getSelection();
@@ -10325,6 +10373,12 @@ function setupMessageActions() {
   });
   box.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    const img = e.target.closest('img.att-img');
+    if (img) {
+      e.preventDefault();
+      openImagePreview(img.getAttribute('src'), img.getAttribute('alt'));
+      return;
+    }
     const row = e.target.closest('.completion[data-child]');
     if (!row) return;
     e.preventDefault();
@@ -10466,6 +10520,7 @@ function init() {
   );
 
   setupListActions();
+  setupImagePreview(); // §8.95 消息图片缩略图的预览框(关按钮 / 遮罩 / Esc)
   setupMessageActions();
 }
 

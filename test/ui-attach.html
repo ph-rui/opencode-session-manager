@@ -44,6 +44,15 @@
       </div>
     </section>
   </main>
+  <dialog id="dlgImage" class="dlg dlgimage" aria-label="图片预览">
+    <div class="imgview">
+      <div class="imgview-bar">
+        <span id="imgViewName" class="imgview-name"></span>
+        <button type="button" class="chip" id="imgViewClose">关闭</button>
+      </div>
+      <img id="imgView" alt="">
+    </div>
+  </dialog>
   <div id="toast" hidden></div>
   <pre id="results"></pre>
 
@@ -226,6 +235,64 @@
       })(), um.outerHTML);
       T('renderMessage:没有附件时不产生空的 atts 行',
         renderMessage({ id: 'x', type: 'user', text: 'hi' }).querySelector('.atts') === null);
+
+      /* ================= 消息图片点击放大(§8.95) ================= */
+      var imgMsg = renderMessage({ id: 'msg_img', type: 'user', text: '',
+        files: [{ data: 'aGVsbG8=', mime: 'image/png', name: 'p.png', source: { type: 'inline' } }] });
+      q('#messages').appendChild(imgMsg);
+      setupMessageActions();
+      setupImagePreview();
+      var thumb = imgMsg.querySelector('.att-img');
+      T('图片预览:缩略图是可聚焦按钮',
+        thumb.getAttribute('role') === 'button' && thumb.getAttribute('tabindex') === '0' &&
+        thumb.title.indexOf('放大') >= 0, thumb.outerHTML);
+      thumb.click();
+      T('图片预览:点击缩略图打开',
+        q('#dlgImage').open === true &&
+        q('#imgView').getAttribute('src') === 'data:image/png;base64,aGVsbG8=' &&
+        q('#imgViewName').textContent === 'p.png',
+        { open: q('#dlgImage').open, src: q('#imgView').getAttribute('src'), name: q('#imgViewName').textContent });
+      q('#imgView').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('图片预览:点图片本身不关闭', q('#dlgImage').open === true, q('#dlgImage').open);
+      q('#imgViewClose').click();
+      T('图片预览:关闭按钮退出并清掉 src',
+        q('#dlgImage').open === false && !q('#imgView').getAttribute('src'),
+        { open: q('#dlgImage').open, src: q('#imgView').getAttribute('src') });
+      var imgMsg2 = renderMessage({ id: 'msg_img2', type: 'user', text: '', files: [
+        { data: 'b25l', mime: 'image/png', name: 'one.png', source: { type: 'inline' } },
+        { data: 'dHdv', mime: 'image/png', name: 'two.png', source: { type: 'inline' } },
+      ] });
+      q('#messages').appendChild(imgMsg2);
+      imgMsg2.querySelectorAll('.att-img')[1].click();
+      T('图片预览:多张图点哪张开哪张',
+        q('#imgView').getAttribute('src') === 'data:image/png;base64,dHdv' &&
+        q('#imgViewName').textContent === 'two.png',
+        { src: q('#imgView').getAttribute('src'), name: q('#imgViewName').textContent });
+      q('#imgViewClose').click();
+      imgMsg2.remove();
+      var htmlName = '<b>x</b>.png';
+      var htmlMsg = renderMessage({ id: 'msg_img3', type: 'user', text: '', files: [
+        { data: 'eA==', mime: 'image/png', name: htmlName, source: { type: 'inline' } },
+      ] });
+      q('#messages').appendChild(htmlMsg);
+      htmlMsg.querySelector('.att-img').click();
+      T('图片预览:文件名按纯文本显示,不会注入 HTML',
+        q('#imgViewName').textContent === htmlName && q('#imgViewName').querySelector('b') === null,
+        q('#imgViewName').innerHTML);
+      q('#imgViewClose').click();
+      htmlMsg.remove();
+      thumb.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      T('图片预览:Enter 也能打开', q('#dlgImage').open === true &&
+        q('#imgView').getAttribute('src') === 'data:image/png;base64,aGVsbG8=', q('#dlgImage').open);
+      q('#dlgImage').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('图片预览:点遮罩退出', q('#dlgImage').open === false, q('#dlgImage').open);
+      thumb.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+      T('图片预览:Space 也能打开', q('#dlgImage').open === true, q('#dlgImage').open);
+      q('#dlgImage').close();
+      q('#dlgImage').dispatchEvent(new Event('close'));
+      T('图片预览:close 事件清掉 src(Esc 走同一条)',
+        !q('#imgView').getAttribute('src'), q('#imgView').getAttribute('src'));
+      imgMsg.remove();
 
       /* ================= @ 引用解析(resolveMentions) ================= */
       store.mentionHits.clear();
