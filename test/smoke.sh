@@ -2694,15 +2694,23 @@ else
   echo "FAIL: §8.74 附件上限没跟服务端对齐(20 MiB / 发送前兜底 / 错误翻译)"; fail=$((fail + 1))
 fi
 
-# ---- R30c 组:命令面板点选即执行(§8.97)----
-# 点选面板命令(如 /models)直接执行,而不是只补全文本;带参数的服务端命令仍只补全。
+# ---- R30c 组:命令面板点选/回车同效 + 删空自动收起(§8.98)----
+# 点选或回车,面板命令(整行就是它/唯一候选)直接执行;服务端命令只补全。
+# 命令词删干净后面板要跟着收掉,不能留着旧列表。
+CMD_PAGE=$(cat "$(dirname "$0")/ui-commands.html")
 if has "$APPJS" '点击即执行' &&
    has "$APPJS" 'function commandItemClick(e)' &&
-   has "$(cat "$(dirname "$0")/ui-commands.html")" '点选 /models(前缀输入):直接弹出模型选择框' &&
-   has "$(cat "$(dirname "$0")/ui-commands.html")" '点选服务端命令 /review:只补全成 /review ,不执行'; then
-  echo "PASS: §8.97 命令面板点选即执行(面板命令),服务端命令点选只补全"; pass=$((pass + 1))
+   has "$APPJS" 'function commandShouldExecute' &&
+   has "$APPJS" 'function commandExecute(idx)' &&
+   has "$APPJS" '命令词没了(删干净/打成正文)就得把面板收掉' &&
+   has "$CMD_PAGE" '点选 /models(前缀输入):直接弹出模型选择框' &&
+   has "$CMD_PAGE" '前缀 + Enter(唯一候选面板命令):直接弹出模型选择框' &&
+   has "$CMD_PAGE" '多候选 + 前缀:Enter 只补全高亮那条,不执行' &&
+   has "$CMD_PAGE" '点选服务端命令 /review:只补全成 /review ,不执行' &&
+   has "$CMD_PAGE" '命令词删空后:命令面板自动收起,不留旧列表'; then
+  echo "PASS: §8.98 命令面板点选/回车同效(面板命令直接执行,服务端命令只补全),删空自动收起"; pass=$((pass + 1))
 else
-  echo "FAIL: §8.97 命令面板点选即执行没接上(点击仍只补全,点 /models 不会弹选择框)"; fail=$((fail + 1))
+  echo "FAIL: §8.98 命令面板没对齐(点选/回车仍只补全,或删空后还挂着旧列表)"; fail=$((fail + 1))
 fi
 
 # ---- R30d 组:发送失败不吞正文(§8.74)----

@@ -359,12 +359,15 @@
       var sentBefore = window.calls.length;
       setCaret('/hel');
       await openCommands();
-      T('commandKey:Enter 选中(不会顺手把消息发出去)', (function () {
+      T('commandKey:唯一候选 /help 前缀 + Enter 直接执行(帮助框弹出)', (function () {
         var e = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true });
         commandKey(e);
         var sent = window.calls.slice(sentBefore).some(function (c) { return /\/prompt$/.test(c.url); });
-        return sent === false && q('#input').value === '/help ';
-      })(), q('#input').value);
+        return sent === false && q('#dlgHelp').open === true && q('#cmds').hidden === true;
+      })(), [q('#input').value, q('#dlgHelp').open, q('#cmds').hidden]);
+      q('#dlgHelp').close();
+      await settle(function () { return q('#input').value === ''; });
+      T('commandKey:唯一候选 + Enter 执行后输入框被清空', q('#input').value === '', q('#input').value);
       setCaret('/rev 后面的字', 4);
       await openCommands();
       T('acceptCommand:保留光标之后已有的正文', (function () {
@@ -899,15 +902,20 @@
       T('完整命令名 + Enter:输入框被清空(没有停在 /models )', q('#input').value === '');
       closePick();
 
-      /* 只敲前缀 → Enter 仍然只是补全 */
+      /* 只敲前缀、唯一候选(面板命令)→ Enter 直接执行,与点选同效(§8.98) */
       idle();
       setCaret('/mod');
       await openCommands();
+      window.calls.length = 0;
       var pa = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
       q('#input').dispatchEvent(pa);
-      T('只敲前缀时:Enter 只是补全成 /models ', q('#input').value === '/models ', q('#input').value);
-      T('只敲前缀时:没有真的执行', !picksOpen() && !hadCall(/\/prompt$/));
-      closeCommands();
+      await settle(function () { return picksOpen(); });
+      T('前缀 + Enter(唯一候选面板命令):直接弹出模型选择框',
+        picksOpen() === true && q('#cmds').hidden === true);
+      await settle(function () { return q('#input').value === ''; });
+      T('前缀 + Enter 执行后:输入框被清空(不停在 /models )', q('#input').value === '', q('#input').value);
+      T('前缀 + Enter 执行:没当普通消息/命令发送', !hadCall(/\/prompt$/) && !hadCall(/\/command$/));
+      closePick();
 
       /* 高亮移到别的命令上时,Enter 补全成那个命令(而不是执行) */
       idle();
@@ -974,6 +982,79 @@
         q('#input').value === '/models  看下' && !picksOpen(),
         q('#input').value);
       closeCommands();
+      q('#input').value = '';
+
+      /* ================= 回车执行与点选同效,但多候选不抢跑(§8.98) ================= */
+      /* 多候选 + 前缀 + Enter → 只补全高亮那条,不执行(防「打 /re 高亮在 /redo」误执行) */
+      idle();
+      setCaret('/re');
+      await openCommands();
+      T('防抢跑前置:/re 多候选且默认高亮是面板命令',
+        store.cmdItems.length > 1 && store.cmdItems[store.cmdAt].panel === true,
+        store.cmdItems.map(function (c) { return c.name + (c.panel ? '(p)' : '(s)'); }));
+      var guardName = store.cmdItems[store.cmdAt] && store.cmdItems[store.cmdAt].name;
+      var pm = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+      q('#input').dispatchEvent(pm);
+      T('多候选 + 前缀:Enter 只补全高亮那条,不执行',
+        guardName && q('#input').value === '/' + guardName + ' ' &&
+        !picksOpen() && !hadCall(/\/command$/) && !hadCall(/\/prompt$/),
+        q('#input').value);
+      closeCommands();
+      q('#input').value = '';
+
+      /* 高亮移到服务端命令上:Enter 仍只补全(要留参数位) */
+      idle();
+      setCaret('/re');
+      await openCommands();
+      var srvIdx = -1;
+      for (var si = 0; si < store.cmdItems.length; si++) {
+        if (!store.cmdItems[si].panel) { srvIdx = si; break; }
+      }
+      T('前置:候选里确有服务端命令', srvIdx >= 0);
+      if (srvIdx >= 0) {
+        var steps = (srvIdx - store.cmdAt + store.cmdItems.length) % store.cmdItems.length;
+        var kd2 = new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true, bubbles: true });
+        for (var st2 = 0; st2 < steps; st2++) q('#input').dispatchEvent(kd2);
+        var srvName = store.cmdItems[srvIdx].name;
+        var en2 = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+        q('#input').dispatchEvent(en2);
+        T('高亮在服务端命令 + Enter:只补全,不执行',
+          q('#input').value === '/' + srvName + ' ' && !hadCall(/\/command$/),
+          q('#input').value);
+      }
+      closeCommands();
+      q('#input').value = '';
+
+      /* 输入行为空(Ctrl+P 强开面板):点选面板命令直接执行 */
+      idle();
+      setCaret('');
+      await openCommands({ force: true });
+      var miHelp = null;
+      Array.prototype.forEach.call(q('#cmds').querySelectorAll('.mention-item'), function (el) {
+        var it = store.cmdItems[Number(el.dataset.i)];
+        if (it && it.name === 'help' && it.panel) miHelp = el;
+      });
+      T('前置:强开面板前 12 条里列了 /help', !!miHelp);
+      if (miHelp) miHelp.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await settle(function () { return q('#dlgHelp').open === true; });
+      T('空输入点选面板命令:直接执行(帮助框弹出)', q('#dlgHelp').open === true);
+      q('#dlgHelp').close();
+      closeCommands();
+      q('#input').value = '';
+
+      /* ================= 命令词删干净后,面板跟着收掉(用户截图) ================= */
+      idle();
+      setCaret('/a');
+      await openCommands();
+      T('前置:命令面板开着', q('#cmds').hidden === false);
+      var realST = window.setTimeout;
+      var grabDeb = null;
+      window.setTimeout = function (fn) { grabDeb = fn; return 1; };
+      q('#input').value = '';
+      q('#input').dispatchEvent(new Event('input'));
+      window.setTimeout = realST;
+      if (grabDeb) grabDeb();
+      T('命令词删空后:命令面板自动收起,不留旧列表', q('#cmds').hidden === true);
       q('#input').value = '';
 
       document.getElementById('results').textContent = out.join('\n');

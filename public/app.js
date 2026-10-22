@@ -8055,6 +8055,9 @@ function setupAttachments() {
           closeMentions();
           openCommands();
         } else {
+          // 命令词没了(删干净/打成正文)就得把面板收掉,不能留着旧列表;
+          // 否则删到空还挂着一排 /xxx,看着像还能选(§8.98)。
+          closeCommands();
           openMentions();
         }
       }, 120);
@@ -8883,36 +8886,68 @@ function acceptCommand(i) {
   return it;
 }
 
-/* §8.97 点击即执行:点选面板命令(自包含、参数在弹出的框里填)时直接执行 ——
- * 整行就是这条命令、或还在打它的前缀时,点 /models 就直接弹模型选择框,跟「敲完整
- * 命令名 + Enter」同一个结果。服务端命令(模板带 $ARGUMENTS)与行里还有别的正文的
- * 情况照旧只补全:前者留出手打参数的位置,后者的正文不该被一条命令吃掉。
- * 只在点这一下的两个字符串切片 + 一次 trim,无热路径开销。 */
+/* §8.98 点选/回车执行共用的判定与动作。
+ * 输入框拆成两段:命令词 tok(cmdRange 覆盖的 /xxx)与其余正文 other。 */
+function commandTokenParts(el, range) {
+  const tok = el.value.slice(range.start, range.end);
+  const other = (el.value.slice(0, range.start) + el.value.slice(range.end)).trim();
+  return { tok, other };
+}
+
+/* 直接执行某条命令:命令词替换成完整名字、关面板、send()。 */
+function commandExecute(idx) {
+  const it = store.cmdItems[idx];
+  const el = $('#input');
+  const range = store.cmdRange;
+  if (!it || !el || !range) return;
+  el.value = el.value.slice(0, range.start) + '/' + it.name + el.value.slice(range.end);
+  closeCommands();
+  send();
+}
+
+/* 这条命令能否「直接执行」:
+ * - 只能是面板命令(自包含、参数在弹出的框里填);服务端命令要留参数位,只补全;
+ * - 命令词之外不能有别的正文(否则那条正文不该被一条命令吃掉);
+ * - tok 是这条命令本身或它的前缀(用户正在打它);
+ * - requireUnambiguous(键盘 Enter 用):有多个候选且没敲完整命令名 → 不抢跑,
+ *   免得「打 /re、高亮停在 /redo」被回车直接执行成别的东西。
+ * 点选是显式选择,无歧义问题,requireUnambiguous=false。 */
+function commandShouldExecute(idx, requireUnambiguous) {
+  const it = store.cmdItems[idx];
+  const el = $('#input');
+  const range = store.cmdRange;
+  if (!it || !it.panel || !el || !range) return false;
+  const parts = commandTokenParts(el, range);
+  const tok = parts.tok;
+  const other = parts.other;
+  if (other !== '') return false;
+  if (el.value.trim() === '') return true; // 空行(Ctrl+P 强开面板):高亮的那条就是选择
+  const typingThis = tok.startsWith('/') &&
+    it.name.toLowerCase().startsWith(tok.slice(1).toLowerCase());
+  if (!typingThis) return false;
+  if (requireUnambiguous && store.cmdItems.length > 1 && tok !== '/' + it.name) return false;
+  return true;
+}
+
+/* §8.97 点击即执行:点选面板命令(如 /models)直接执行 —— 整行就是这条命令、
+ * 或还在打它的前缀时,点 /models 就直接弹模型选择框,跟「敲完整命令名 + Enter」
+ * 同一个结果。服务端命令(模板带 $ARGUMENTS)与行里还有别的正文的情况照旧只补全:
+ * 前者留出手打参数的位置,后者的正文不该被一条命令吃掉。
+ * 只在点这一下做两次 slice + 一次 trim,无热路径开销。 */
 function commandItemClick(e) {
   const it = e.target.closest('.mention-item');
   if (!it) return;
   const idx = Number(it.dataset.i);
-  const item = store.cmdItems[idx];
-  const el = $('#input');
-  const range = store.cmdRange;
-  if (item && item.panel && el && range) {
-    const tok = el.value.slice(range.start, range.end);
-    const other = (el.value.slice(0, range.start) + el.value.slice(range.end)).trim();
-    const typingThis = tok.startsWith('/') &&
-      item.name.toLowerCase().startsWith(tok.slice(1).toLowerCase());
-    const wholeIsThis = tok === '' && other === '/' + item.name;
-    if ((!other && typingThis) || wholeIsThis) {
-      el.value = '/' + item.name;
-      closeCommands();
-      send();
-      return;
-    }
+  if (commandShouldExecute(idx, false)) {
+    commandExecute(idx);
+    return;
   }
   acceptCommand(idx);
 }
 
 /* 输入框里已经把命令名整个敲完了(后面没有参数)→ Enter 直接执行,不用再按一次。
- * 只敲了前缀时 Enter 仍然只是补全,免得把「想接着打参数」误判成执行。 */
+ * §8.98 起:面板命令只敲前缀但它是唯一候选时,Enter 也直接执行(与点选同效);
+ * 多候选前缀与服务端命令(要留参数位)仍只补全,见 commandShouldExecute()。 */
 function exactCommand() {
   const el = $('#input');
   const it = store.cmdItems[store.cmdAt];
@@ -8935,6 +8970,12 @@ function commandKey(e) {
     if (e.key === 'Enter' && exactCommand()) {
       closeCommands();
       send();
+      return true;
+    }
+    /* §8.98:面板命令且无歧义(唯一候选/整行就是它)时,前缀 + Enter 也直接执行,
+     * 与点选同一个效果;多候选前缀 / 服务端命令仍只补全,留参数位。 */
+    if (e.key === 'Enter' && commandShouldExecute(store.cmdAt, true)) {
+      commandExecute(store.cmdAt);
       return true;
     }
     acceptCommand();
