@@ -422,7 +422,7 @@
       await send();
       T('send:命令失败时弹提示(toast)',
         q('#toast').textContent.indexOf('命令失败') >= 0 && q('#toast').hidden === false, q('#toast').textContent);
-      T('send:命令失败时输入框照旧清空(不赖在输入框里)', q('#input').value === '');
+      T('send:命令失败时正文留着(改一改再试)', q('#input').value === '/review x', q('#input').value);
       window.COMMAND_FAIL = false;
 
       window.calls.length = 0;
@@ -895,6 +895,7 @@
       T('完整命令名 + Enter:直接执行(选择框弹出来,不用按第二次)',
         picksOpen() === true);
       T('完整命令名 + Enter:命令面板已关', q('#cmds').hidden === true);
+      await settle(function () { return q('#input').value === ''; });
       T('完整命令名 + Enter:输入框被清空(没有停在 /models )', q('#input').value === '');
       closePick();
 

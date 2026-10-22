@@ -9264,8 +9264,14 @@ function sendErrorText(e) {
   return (name ? '「' + name + '」' : '附件') + '超过' + capTxt + ' —— 换个小一点的,或先压缩';
 }
 
+/* 一次只发一条。文字现在要等发送成功才清空(§8.74),光靠「请求前先清空」挡不住
+ * 连按 Enter 重发,所以显式加一道闸:请求在飞的时候再按发送直接忽略。 */
+let sendFlight = false;
+
 async function send() {
-  const text = $('#input').value.trim();
+  if (sendFlight) return;
+  const raw = $('#input').value; // 原样留一份:发失败时输入框一个字都不动
+  const text = raw.trim();
   if (!store.selected) return;
   const sid = store.selected;
   // 附件还在上传时先别发:此时还没有 uri,发出去会把图悄悄丢掉
@@ -9299,16 +9305,25 @@ async function send() {
   // I 组:以 / 开头且命中命令表 → 走命令通道,不当作普通消息
   const parsed = parseCommand(text);
   if (parsed) {
-    $('#input').value = '';
     closeCommands();
     closeMentions();
-    renderAttachments();
-    const ok = await runCommand(parsed, sid, files, busy);
-    if (ok) saveDraft(sid, ''); // §8.71:命令确实执行了,这份草稿就完成了使命
-    if (ok) dropSessionSkills(sid); // §8.77:正文已经清空,技能选择也作废(面板命令同样)
-    if (ok && !parsed.cmd.panel) {
-      store.mentionHits.clear();
-      dropSessionAttachments(sid); // 服务端命令确实消费了附件,才清空
+    sendFlight = true;
+    let ok = false;
+    try {
+      ok = await runCommand(parsed, sid, files, busy);
+    } finally {
+      sendFlight = false;
+    }
+    if (ok) {
+      // 命令确实执行了才清输入框(§8.74):失败时正文留着,改一改再试
+      if ($('#input').value === raw) {
+        $('#input').value = '';
+        store.mentionHits.clear();
+        renderAttachments();
+      }
+      saveDraft(sid, ''); // §8.71:命令确实执行了,这份草稿就完成了使命
+      dropSessionSkills(sid); // §8.77:正文已经清空,技能选择也作废(面板命令同样)
+      if (!parsed.cmd.panel) dropSessionAttachments(sid); // 服务端命令确实消费了附件,才清空
     }
     updateComposerControls();
     setTimeout(() => {
@@ -9318,13 +9333,12 @@ async function send() {
     return;
   }
 
-  $('#input').value = '';
   closeMentions();
-  renderAttachments(); // 正文清了,@ 引用的 chip 也一起消失
   pushHistory(sid, text);
   store.pending = !willQueue;
   updateChatStatus();
   updateComposerControls();
+  sendFlight = true;
   try {
     const j = await api('/api/session/' + enc(sid) + '/prompt', {
       method: 'POST',
@@ -9335,15 +9349,23 @@ async function send() {
       flash('已排队,当前回合结束后执行', 'ok');
       store.pending = false;
     }
+    /* 真发出去了才清输入框(§8.74):失败时文字原样留在原地,直接再点一次发送就行,
+     * 不用从会话草稿里找回来。请求期间用户又敲了新内容(draft 变了)就别动它。 */
+    if ($('#input').value === raw) {
+      $('#input').value = '';
+      store.mentionHits.clear(); // 正文清了,@ 引用的 chip 才跟着消失
+      renderAttachments();
+    }
     dropSessionAttachments(sid); // 发送成功才清空(失败还能原样重发)
     dropSessionSkills(sid); // §8.77:技能也随正文一起消费掉
     saveDraft(sid, ''); // §8.71:发送成功,草稿功成身退;失败则留着,切回来还能接着改
-    store.mentionHits.clear();
   } catch (e) {
     alert('发送失败:' + sendErrorText(e));
     store.pending = false;
     updateChatStatus();
     return;
+  } finally {
+    sendFlight = false;
   }
   loadInbox(sid);
   setTimeout(() => {

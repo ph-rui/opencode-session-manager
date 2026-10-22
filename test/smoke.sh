@@ -2694,6 +2694,26 @@ else
   echo "FAIL: §8.74 附件上限没跟服务端对齐(20 MiB / 发送前兜底 / 错误翻译)"; fail=$((fail + 1))
 fi
 
+# ---- R30c 组:发送失败不吞正文(§8.74)----
+# 以前是「先清空输入框、再发请求」,失败分支直接 return,用户当场敲的字就没了;
+# 现在留到发送成功才清,连按 Enter 由 sendFlight 挡住。
+SEND_SRC="$(dirname "$0")/../public/app.js"
+SEND_FN=$(awk '/^async function send\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$SEND_SRC")
+PRE_PUSH=$(awk '/^  pushHistory\(sid, text\);/{ if (f) { print prev; exit } } f{prev=$0} /^async function send\(\) \{/{f=1}' "$SEND_SRC")
+PRE_CLEAR=0
+case "$PRE_PUSH" in *"value = '';"*) PRE_CLEAR=1 ;; esac
+if has "$APPJS" 'let sendFlight = false;' &&
+   has "$SEND_FN" 'if (sendFlight) return;' &&
+   has "$SEND_FN" 'const raw = $('"'"'#input'"'"').value;' &&
+   has "$SEND_FN" 'if ($('"'"'#input'"'"').value === raw) {' &&
+   has "$SEND_FN" 'alert('"'"'发送失败:'"'"' + sendErrorText(e));' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '失败时正文留在输入框里' &&
+   [ "$PRE_CLEAR" = 0 ]; then
+  echo "PASS: §8.74 发送成功才清输入框,失败时正文与 @ chip 留着,连按 Enter 只发一条"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.74 发送失败又把正文吞了(或清空又挪回了请求前 / 少了 sendFlight 闸)"; fail=$((fail + 1))
+fi
+
 # ---- R31 组:重开最近关闭的标签(§8.75)----
 if has "$APPJS" 'const CLOSED_MAX = 8;' &&
    has "$APPJS" 'const closedTabs = [];' &&

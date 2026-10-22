@@ -605,14 +605,36 @@
       await queueFiles([file('keep.txt', 'keep')]);
       var refRange = resolveMentions('看 @Makefile');
       setCaret('看 @Makefile');
+      inp.dispatchEvent(new Event('input')); // 让草稿真的落进 sessionStorage(§8.71)
       store.mentionHits.set('Makefile', '/proj/a/Makefile');
+      renderAttachments();
       window.PROMPT_FAIL = true;
       window.__alerts.length = 0;
       await send();
       T('send:失败时弹提示', window.__alerts.length === 1 && window.__alerts[0].indexOf('发送失败') >= 0, window.__alerts);
       T('send:失败时保留待发送附件(可重发)', store.attachments.length === 1 && store.attachments[0].name === 'keep.txt',
         store.attachments);
+      T('send:失败时正文留在输入框里,不用去草稿里找', inp.value === '看 @Makefile', inp.value);
+      T('send:失败时 @ 引用的 chip 也还在',
+        qa('.achip.ref').length === 1 && qa('.achip').length === 2,
+        qa('.achip').map(function (c) { return c.textContent; }));
+      T('send:失败时草稿没被清掉', (readDraftMap()['ses_a'] || '') === '看 @Makefile', readDraftMap());
       window.PROMPT_FAIL = false;
+
+      /* 连按两次 Enter:文字留到成功才清,必须只发一条 */
+      store.attachments = [];
+      store.mentionHits.clear();
+      renderAttachments();
+      setCaret('手快按了两下');
+      window.calls.length = 0;
+      var p1 = send();
+      var p2 = send();
+      await p1;
+      await p2;
+      T('send:连按两次 Enter 只发一条',
+        window.calls.filter(function (c) { return /\/prompt$/.test(c.url); }).length === 1,
+        window.calls.map(function (c) { return c.url; }));
+      T('send:发成功之后输入框才清空', inp.value === '', inp.value);
 
       /* §8.74 发送前兜底:缓存里恢复出来的超限附件不许发出去 */
       window.calls.length = 0;
