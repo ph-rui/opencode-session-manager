@@ -7622,7 +7622,11 @@ async function onAction(act, id) {
  * 只在发送成功后才清空待发送附件 —— 失败还能原样重发。
  */
 
-const UPLOAD_MAX = 32 * 1024 * 1024; // 单个附件上限
+/* 单个附件上限:必须跟 OpenCode 服务端对齐。服务端把这个值写死在二进制里
+ * (附件解析那段 `RI = 20971520`,超了回 "Attachment exceeds the 20971520 byte limit"),
+ * 这里写大了只会让用户白传一趟、到点发送才失败(§8.74)。边界也照抄服务端的
+ * `size > RI` —— 恰好 20.0 MB 仍然发得出去。服务端版本要是改了这个值,这里得跟着改。 */
+const UPLOAD_MAX = 20 * 1024 * 1024;
 const MENTION_LIMIT = 12; // @ 补全一次最多列几条
 
 function fileURI(abs) {
@@ -7849,7 +7853,8 @@ async function queueFiles(list) {
   let failed = 0;
   for (const f of picked) {
     if ((f.size || 0) > UPLOAD_MAX) {
-      flash('「' + (f.name || '文件') + '」太大(' + humanSize(f.size) + '),单个上限 ' + humanSize(UPLOAD_MAX), 'bad');
+      flash('「' + (f.name || '文件') + '」太大(' + humanSize(f.size) + '),超过服务端单个附件 ' +
+        humanSize(UPLOAD_MAX) + ' 的上限 —— 换个小一点的,或先压缩', 'bad');
       failed++;
       continue;
     }
@@ -9235,6 +9240,30 @@ function setupTuiKeys() {
   });
 }
 
+/* 服务端对每个附件写死了 20 MiB(`RI = 20971520`),超了回的是英文原文:
+ * "Attachment exceeds the 20971520 byte limit: file:///tmp/…"。直接甩给用户等于没说 ——
+ * 翻成人话,点名是哪个文件、多大。@ 引用的大文件(只有路径、这里拿不到 size)也靠这条兜住。 */
+function sendErrorText(e) {
+  const msg = (e && e.message) || String(e || '');
+  const m = msg.match(/Attachment exceeds the (\d+) byte limit:?\s*(\S*)/);
+  if (!m) return msg;
+  const cap = Number(m[1]) || 0;
+  const uri = m[2] || '';
+  let name = '';
+  // 先按上传时记下的绝对路径认回原始文件名(chip 上显示的那个)
+  for (const a of store.attachments) {
+    if (a.path && uri.indexOf(a.path) >= 0) { name = a.name; break; }
+  }
+  if (!name && uri) {
+    const base = uri.split('/').pop() || '';
+    try { name = decodeURIComponent(base); } catch (_) { name = base; }
+    // 去掉上传时加的 "<时间戳>-<随机串>-" 前缀,尽量还原用户选的那个名字
+    name = name.replace(/^\d+-[a-z0-9]+-/i, '');
+  }
+  const capTxt = cap ? '服务端单个附件 ' + humanSize(cap) + ' 的上限' : '服务端附件上限';
+  return (name ? '「' + name + '」' : '附件') + '超过' + capTxt + ' —— 换个小一点的,或先压缩';
+}
+
 async function send() {
   const text = $('#input').value.trim();
   if (!store.selected) return;
@@ -9242,6 +9271,15 @@ async function send() {
   // 附件还在上传时先别发:此时还没有 uri,发出去会把图悄悄丢掉
   if (store.attachments.some((a) => a.busy)) {
     flash('附件还在上传,稍等一下再发', 'warn');
+    return;
+  }
+  /* §8.74 兜底:从会话缓存里恢复出来的、或上传之后文件被换大的,选文件那一刻没拦住,
+   * 这里再卡一次 —— 不然要等服务端回一句英文错误,而那时正文已经被清空了。
+   * 只在点发送这一下跑,列表长度最多几个,不进任何热路径。 */
+  const over = store.attachments.find((a) => (a.size || 0) > UPLOAD_MAX);
+  if (over) {
+    flash('「' + over.name + '」' + humanSize(over.size) + ',超过服务端单个附件 ' +
+      humanSize(UPLOAD_MAX) + ' 的上限 —— 先去掉它再发,或换个小的', 'bad');
     return;
   }
   const busy = isRunning(sid) || store.running;
@@ -9302,7 +9340,7 @@ async function send() {
     saveDraft(sid, ''); // §8.71:发送成功,草稿功成身退;失败则留着,切回来还能接着改
     store.mentionHits.clear();
   } catch (e) {
-    alert('发送失败:' + e.message);
+    alert('发送失败:' + sendErrorText(e));
     store.pending = false;
     updateChatStatus();
     return;

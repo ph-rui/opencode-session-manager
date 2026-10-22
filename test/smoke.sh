@@ -2681,6 +2681,19 @@ else
   echo "FAIL: §8.74 的图片单发 / 附件缓存 / 上传归属或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R30b 组:附件上限跟服务端对齐(§8.74)----
+# 服务端把 20971520(20 MiB)写死在二进制里,面板写大了只会白传一趟、到点发送才失败。
+if has "$APPJS" 'const UPLOAD_MAX = 20 * 1024 * 1024;' &&
+   has "$APPJS" '超过服务端单个附件 ' &&
+   has "$APPJS" 'function sendErrorText(e)' &&
+   has "$APPJS" 'alert('"'"'发送失败:'"'"' + sendErrorText(e));' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '恰好 20.0 MB 的附件照常放行' &&
+   has "$(cat "$(dirname "$0")/ui-attach.html")" '超限附件不会被发出去'; then
+  echo "PASS: §8.74 附件上限对齐服务端 20 MiB,选文件时就拒,发送前兜底并把英文错误翻成人话"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.74 附件上限没跟服务端对齐(20 MiB / 发送前兜底 / 错误翻译)"; fail=$((fail + 1))
+fi
+
 # ---- R31 组:重开最近关闭的标签(§8.75)----
 if has "$APPJS" 'const CLOSED_MAX = 8;' &&
    has "$APPJS" 'const closedTabs = [];' &&

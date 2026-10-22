@@ -502,6 +502,40 @@
       T('超过上限的文件被拒', store.attachments.length === 0 && window.calls.length === 0, window.calls.length);
       T('拒的时候给出提示', q('#toast').textContent.indexOf('太大') >= 0, q('#toast').textContent);
 
+      /* §8.74 上限跟服务端对齐(20 MiB = 20971520):服务端判 size > 20MiB */
+      window.calls.length = 0;
+      var edge = file('edge.bin', 'x');
+      Object.defineProperty(edge, 'size', { value: 20 * 1024 * 1024 });
+      await queueFiles([edge]);
+      T('恰好 20.0 MB 的附件照常放行(边界跟服务端一致)',
+        store.attachments.length === 1 && window.calls.length === 1,
+        [store.attachments.length, window.calls.length]);
+      store.attachments = [];
+      renderAttachments();
+
+      window.calls.length = 0;
+      var tooBigPdf = file('IMX6ULRM.pdf', 'x');
+      Object.defineProperty(tooBigPdf, 'size', { value: Math.round(21.2 * 1024 * 1024) });
+      await queueFiles([tooBigPdf]);
+      T('21.2 MB 的 PDF 在选文件时就被拒,不浪费一次上传',
+        store.attachments.length === 0 && window.calls.length === 0,
+        [store.attachments.length, window.calls.length]);
+      T('拒的时候点名文件与服务端上限',
+        q('#toast').textContent.indexOf('IMX6ULRM.pdf') >= 0 &&
+        q('#toast').textContent.indexOf('服务端') >= 0 &&
+        q('#toast').textContent.indexOf('20.0 MB') >= 0, q('#toast').textContent);
+
+      /* §8.74 服务端那句英文错误翻成人话 */
+      T('附件超限的服务端错误翻成中文、点名原始文件名',
+        sendErrorText(new Error(
+          'Attachment exceeds the 20971520 byte limit: file:///tmp/oc-up/1792643207207-krwzulxk-IMX6ULRM.pdf'
+        )) === '「IMX6ULRM.pdf」超过服务端单个附件 20.0 MB 的上限 —— 换个小一点的,或先压缩',
+        sendErrorText(new Error(
+          'Attachment exceeds the 20971520 byte limit: file:///tmp/oc-up/1792643207207-krwzulxk-IMX6ULRM.pdf'
+        )));
+      T('别的发送错误原样返回', sendErrorText(new Error('提示词非法')) === '提示词非法',
+        sendErrorText(new Error('提示词非法')));
+
       /* 上传失败:不进列表,并提示 */
       window.UPLOAD_FAIL = true;
       await queueFiles([file('bad.txt', 'x')]);
@@ -579,6 +613,23 @@
       T('send:失败时保留待发送附件(可重发)', store.attachments.length === 1 && store.attachments[0].name === 'keep.txt',
         store.attachments);
       window.PROMPT_FAIL = false;
+
+      /* §8.74 发送前兜底:缓存里恢复出来的超限附件不许发出去 */
+      window.calls.length = 0;
+      store.attachments = [{ id: 'att_huge', name: 'old.pdf', size: 22 * 1024 * 1024, mime: 'application/pdf',
+        path: '/tmp/oc-up/1-x-old.pdf', uri: 'file:///tmp/oc-up/1-x-old.pdf', busy: false }];
+      renderAttachments();
+      inp.value = '带个大附件';
+      await send();
+      T('超限附件不会被发出去',
+        !window.calls.some(function (c) { return /\/prompt$/.test(c.url); }),
+        window.calls.map(function (c) { return c.url; }));
+      T('发送前兜底也点名文件与服务端上限',
+        q('#toast').textContent.indexOf('old.pdf') >= 0 && q('#toast').textContent.indexOf('20.0 MB') >= 0,
+        q('#toast').textContent);
+      store.attachments = [];
+      inp.value = '';
+      renderAttachments();
 
       /* ================= 与选中会话联动 ================= */
       store.attachments = [];
