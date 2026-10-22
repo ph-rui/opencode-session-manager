@@ -8042,10 +8042,7 @@ function setupAttachments() {
   }
   const cmdBox = $('#cmds');
   if (cmdBox) {
-    cmdBox.addEventListener('click', (e) => {
-      const it = e.target.closest('.mention-item');
-      if (it) acceptCommand(Number(it.dataset.i));
-    });
+    cmdBox.addEventListener('click', (e) => commandItemClick(e));
   }
   if (inp) {
     inp.addEventListener('input', () => {
@@ -8884,6 +8881,34 @@ function acceptCommand(i) {
   el.focus();
   renderAttachments();
   return it;
+}
+
+/* §8.97 点击即执行:点选面板命令(自包含、参数在弹出的框里填)时直接执行 ——
+ * 整行就是这条命令、或还在打它的前缀时,点 /models 就直接弹模型选择框,跟「敲完整
+ * 命令名 + Enter」同一个结果。服务端命令(模板带 $ARGUMENTS)与行里还有别的正文的
+ * 情况照旧只补全:前者留出手打参数的位置,后者的正文不该被一条命令吃掉。
+ * 只在点这一下的两个字符串切片 + 一次 trim,无热路径开销。 */
+function commandItemClick(e) {
+  const it = e.target.closest('.mention-item');
+  if (!it) return;
+  const idx = Number(it.dataset.i);
+  const item = store.cmdItems[idx];
+  const el = $('#input');
+  const range = store.cmdRange;
+  if (item && item.panel && el && range) {
+    const tok = el.value.slice(range.start, range.end);
+    const other = (el.value.slice(0, range.start) + el.value.slice(range.end)).trim();
+    const typingThis = tok.startsWith('/') &&
+      item.name.toLowerCase().startsWith(tok.slice(1).toLowerCase());
+    const wholeIsThis = tok === '' && other === '/' + item.name;
+    if ((!other && typingThis) || wholeIsThis) {
+      el.value = '/' + item.name;
+      closeCommands();
+      send();
+      return;
+    }
+  }
+  acceptCommand(idx);
 }
 
 /* 输入框里已经把命令名整个敲完了(后面没有参数)→ Enter 直接执行,不用再按一次。

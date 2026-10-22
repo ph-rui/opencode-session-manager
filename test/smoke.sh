@@ -2694,7 +2694,18 @@ else
   echo "FAIL: §8.74 附件上限没跟服务端对齐(20 MiB / 发送前兜底 / 错误翻译)"; fail=$((fail + 1))
 fi
 
-# ---- R30c 组:发送失败不吞正文(§8.74)----
+# ---- R30c 组:命令面板点选即执行(§8.97)----
+# 点选面板命令(如 /models)直接执行,而不是只补全文本;带参数的服务端命令仍只补全。
+if has "$APPJS" '点击即执行' &&
+   has "$APPJS" 'function commandItemClick(e)' &&
+   has "$(cat "$(dirname "$0")/ui-commands.html")" '点选 /models(前缀输入):直接弹出模型选择框' &&
+   has "$(cat "$(dirname "$0")/ui-commands.html")" '点选服务端命令 /review:只补全成 /review ,不执行'; then
+  echo "PASS: §8.97 命令面板点选即执行(面板命令),服务端命令点选只补全"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.97 命令面板点选即执行没接上(点击仍只补全,点 /models 不会弹选择框)"; fail=$((fail + 1))
+fi
+
+# ---- R30d 组:发送失败不吞正文(§8.74)----
 # 以前是「先清空输入框、再发请求」,失败分支直接 return,用户当场敲的字就没了;
 # 现在留到发送成功才清,连按 Enter 由 sendFlight 挡住。
 SEND_SRC="$(dirname "$0")/../public/app.js"

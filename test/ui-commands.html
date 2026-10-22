@@ -923,6 +923,59 @@
         [hi, q('#input').value]);
       closeCommands();
 
+      /* ================= 鼠标点选命令面板条目(§8.97) ================= */
+      /* #cmds 的点击接线在 setupAttachments() 里(init() 自动调,测试页需手动接上) */
+      setupAttachments();
+      /* 还在打前缀时点 /models → 直接执行,弹出模型选择框(用户截图场景) */
+      idle();
+      setCaret('/mod');
+      await openCommands();
+      var miModels = null;
+      Array.prototype.forEach.call(q('#cmds').querySelectorAll('.mention-item'), function (el) {
+        var it = store.cmdItems[Number(el.dataset.i)];
+        if (it && it.name === 'models' && it.panel) miModels = el;
+      });
+      T('点选:面板里有 /models 条目', !!miModels);
+      window.calls.length = 0;
+      if (miModels) miModels.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await settle(function () { return picksOpen(); });
+      T('点选 /models(前缀输入):直接弹出模型选择框', picksOpen() === true);
+      T('点选执行:命令面板已关', q('#cmds').hidden === true);
+      await settle(function () { return q('#input').value === ''; });
+      T('点选执行:输入框被清空', q('#input').value === '');
+      T('点选执行:没当普通消息/命令发送', !hadCall(/\/prompt$/) && !hadCall(/\/command$/));
+      closePick();
+
+      /* 服务端命令(需要参数)点选 → 照旧只补全,不当场执行 */
+      idle();
+      setCaret('/rev');
+      await openCommands();
+      var miReview = null;
+      Array.prototype.forEach.call(q('#cmds').querySelectorAll('.mention-item'), function (el) {
+        var it = store.cmdItems[Number(el.dataset.i)];
+        if (it && it.name === 'review') miReview = el;
+      });
+      if (miReview) miReview.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('点选服务端命令 /review:只补全成 /review ,不执行',
+        q('#input').value === '/review ' && q('#cmds').hidden === true && !hadCall(/\/command$/),
+        q('#input').value);
+
+      /* 命令后还有正文(光标在命令末尾)时点面板命令 → 也只补全,正文不能被吃掉 */
+      idle();
+      setCaret('/mod 看下', 4);
+      await openCommands();
+      var miM2 = null;
+      Array.prototype.forEach.call(q('#cmds').querySelectorAll('.mention-item'), function (el) {
+        var it = store.cmdItems[Number(el.dataset.i)];
+        if (it && it.name === 'models' && it.panel) miM2 = el;
+      });
+      if (miM2) miM2.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('行里有正文时点选:只补全,不执行',
+        q('#input').value === '/models  看下' && !picksOpen(),
+        q('#input').value);
+      closeCommands();
+      q('#input').value = '';
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));
