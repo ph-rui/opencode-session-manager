@@ -1736,7 +1736,7 @@ if has "$APPJS" 'const REASONING_TITLE_RE = /^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/
 else
   echo "FAIL: 思考块没照 TUI 抓加粗标题"; fail=$((fail + 1))
 fi
-if has "$APPJS" 'function reasoningGroupHtml(run, m, body)' && has "$APPJS" "(running ? 'Thinking' : 'Thought')" &&
+if has "$APPJS" 'function reasoningGroupHtml(run, m, body, lazy)' && has "$APPJS" "(running ? 'Thinking' : 'Thought')" &&
    has "$APPJS" "run.length + ' steps" && has "$APPJS" 'function reasoningRunTitle(run)'; then
   echo "PASS: 思考行照 TUI 的 reasoning 分组行(Thinking / Thought + 标题 + N steps + 时长)"; pass=$((pass + 1))
 else
@@ -2731,6 +2731,34 @@ if has "$APPJS" 'let sendFlight = false;' &&
   echo "PASS: §8.74 发送成功才清输入框,失败时正文与 @ chip 留着,连按 Enter 只发一条"; pass=$((pass + 1))
 else
   echo "FAIL: §8.74 发送失败又把正文吞了(或清空又挪回了请求前 / 少了 sendFlight 闸)"; fail=$((fail + 1))
+fi
+
+# ---- R30e 组:切大会话不再卡 —— 冷启分批 + 思考块懒渲染(§8.99)----
+# 「切到串口工具 tab 很卡」的根因在客户端:一次建 100 条消息是 200ms+ 的主线程长任务。
+# 现在冷启先只建最新 10 条,其余按 8ms 时间片逐批往顶部补;收工后超 2000 字的思考块
+# 只留空壳,展开再补正文。
+TOOLS_PAGE=$(cat "$(dirname "$0")/ui-tools.html")
+if has "$APPJS" 'const REASON_LAZY_MIN = 2000;' &&
+   has "$APPJS" 'function reasoningRunChars(run)' &&
+   has "$APPJS" 'function hydrateReasoning(d)' &&
+   has "$APPJS" 'function setupReasonLazy()' &&
+   has "$APPJS" 'setupReasonLazy(); // §8.99' &&
+   has "$APPJS" '<div class="rbody lazy"></div>' &&
+   has "$APPJS" 'const PROG_MIN = 80;' &&
+   has "$APPJS" 'const PROG_TAIL = 10;' &&
+   has "$APPJS" 'const PROG_SLICE_MS = 8;' &&
+   has "$APPJS" 'function flushProgRender()' &&
+   has "$APPJS" 'flushProgRender(); // §8.99' &&
+   has "$APPJS" 'const progCold = !pending && !store.restoreScroll && !msgEls.size && msgs.length >= PROG_MIN;' &&
+   has "$APPJS" 'cancelProgRender(); // §8.99' &&
+   has "$TOOLS_PAGE" '懒思考块:长正文先出折叠空壳' &&
+   has "$TOOLS_PAGE" '懒思考块:展开时补出正文' &&
+   has "$TOOLS_PAGE" '冷启分批:100 条首屏只建尾部一屏' &&
+   has "$TOOLS_PAGE" '冷启分批:再次整表渲染前先补完' &&
+   has "$TOOLS_PAGE" '冷启分批:补完后 DOM 顺序从旧到新'; then
+  echo "PASS: §8.99 冷启先建尾巴再分片补顶部,长思考块展开才补正文,渲染前 flush 保证缓存 DOM 完整"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.99 的分批渲染 / 思考块懒壳 / flush 接线或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
 # ---- R31 组:重开最近关闭的标签(§8.75)----

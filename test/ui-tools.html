@@ -1600,6 +1600,10 @@
         lazyShells.length > 0 && lazyShells[0].open && lazyShells[0].getAttribute('data-def') === '1');
       T('懒渲染:首屏节点数受控', lazyNodes < 8000, lazyNodes);
 
+      /* §8.99 100 条走冷启分批:首屏只建尾巴,后面这组要的是整表口径,
+         先把还没补的同步补完(与「切走 / 再渲染前 flush」同一条路)。 */
+      flushProgRender();
+
       await lazyFrames(1);
       var oneFrameHydrated = qa('#messages details.tool:not(.lazy)').length;
       T('懒渲染:一帧最多补一张', oneFrameHydrated <= 1, oneFrameHydrated);
@@ -1689,6 +1693,167 @@
       renderMessages();
       T('懒渲染:短会话不启用懒壳', qa('#messages details.tool.lazy').length === 0,
         qa('#messages details.tool.lazy').length);
+
+      /* ================= §8.99 折着的思考块懒渲染 ================= */
+      var LONG_REASON = ('这是一段很长的思考正文,按段铺开用来越过懒渲染门槛。\n\n').repeat(80);
+      function longReasonMsg(id, live) {
+        return {
+          id: id, type: 'assistant', live: !!live, time: { created: 3000, completed: 3001 },
+          content: [
+            { type: 'reasoning', text: LONG_REASON, time: { created: 3000, completed: 3001 } },
+            { type: 'text', text: '结论' },
+          ],
+        };
+      }
+      var rLong = renderMessage(longReasonMsg('r_lazy_1'));
+      var rLongD = rLong.querySelector('details.reasoning');
+      var rLongBody = rLongD && rLongD.querySelector('.rbody');
+      T('懒思考块:长正文先出折叠空壳',
+        !!rLongD && rLongD.classList.contains('lazy') && !rLongD.open,
+        rLong.innerHTML.slice(0, 120));
+      T('懒思考块:空壳里没有正文', !!rLongBody && rLongBody.classList.contains('lazy') &&
+        rLongBody.children.length === 0 && rLongBody.textContent === '',
+        rLongBody && rLongBody.innerHTML);
+      T('懒思考块:正文挂在节点上等展开', !!rLongD && !!rLongD.lazyRun &&
+        reasoningRunChars(rLongD.lazyRun) >= REASON_LAZY_MIN,
+        rLongD && rLongD.lazyRun && reasoningRunChars(rLongD.lazyRun));
+      T('懒思考块:摘要仍显示 Thought',
+        rLongD.querySelector('summary').textContent.indexOf('Thought') >= 0,
+        rLongD.querySelector('summary').textContent);
+
+      hydrateReasoning(rLongD);
+      T('懒思考块:展开时补出正文', !rLongBody.classList.contains('lazy') &&
+        rLongBody.textContent.indexOf('这是一段很长的思考正文') >= 0,
+        rLongBody.textContent.slice(0, 60));
+      var onceHtml = rLongBody.innerHTML;
+      hydrateReasoning(rLongD);
+      T('懒思考块:只补一次,重复展开不翻倍', rLongBody.innerHTML === onceHtml,
+        rLongBody.children.length);
+
+      var rShort = renderMessage({
+        id: 'r_short', type: 'assistant', time: { created: 3002, completed: 3003 },
+        content: [{ type: 'reasoning', text: '短思考' }, { type: 'text', text: 'ok' }],
+      });
+      var rShortD = rShort.querySelector('details.reasoning');
+      T('懒思考块:短正文照旧直接画', !!rShortD && !rShortD.classList.contains('lazy') &&
+        rShortD.textContent.indexOf('短思考') >= 0,
+        rShortD && rShortD.textContent.slice(0, 40));
+
+      var rLive = renderMessage(longReasonMsg('r_live', true));
+      var rLiveD = rLive.querySelector('details.reasoning');
+      T('懒思考块:流式中不懒(增量要看得见)', !!rLiveD &&
+        !rLiveD.classList.contains('lazy') && rLiveD.open === true,
+        rLiveD && rLiveD.outerHTML.slice(0, 120));
+
+      /* toggle 不冒泡:setupReasonLazy() 在 #messages 上挂 capture,模拟用户展开 */
+      setupReasonLazy();
+      var reasonBox = q('#messages');
+      reasonBox.innerHTML = '';
+      var rToggle = renderMessage(longReasonMsg('r_toggle'));
+      reasonBox.appendChild(rToggle);
+      var rToggleD = rToggle.querySelector('details.reasoning');
+      rToggleD.open = true;
+      rToggleD.dispatchEvent(new Event('toggle'));
+      var rToggleBody = rToggleD.querySelector('.rbody');
+      T('懒思考块:展开事件把正文补进去', !rToggleBody.classList.contains('lazy') &&
+        rToggleBody.textContent.indexOf('这是一段很长的思考正文') >= 0,
+        rToggleBody.children.length);
+
+      /* 重画收尾时,仍然摊着的懒块(如 live 收工那一瞬)也得补上 */
+      var rOld = renderMessage(longReasonMsg('r_sync'));
+      rOld.querySelector('details.reasoning').setAttribute('open', '');
+      var rNew = renderMessage(longReasonMsg('r_sync'));
+      var rNewD = rNew.querySelector('details.reasoning');
+      rNewD.setAttribute('open', '');
+      syncDetailsOpen(rOld, rNew);
+      T('懒思考块:重画后仍摊开的块补齐正文', rNewD.open === true &&
+        !rNewD.querySelector('.rbody').classList.contains('lazy') &&
+        rNewD.querySelector('.rbody').textContent.indexOf('这是一段很长的思考正文') >= 0,
+        rNewD.querySelector('.rbody').children.length);
+
+      /* ================= §8.99 冷启分批渲染 ================= */
+      function progMessages(n) {
+        var m = new Map();
+        for (var i = 0; i < n; i++) {
+          m.set('prog_' + i, { id: 'prog_' + i, type: 'user', time: { created: 5000 + i },
+            text: '第 ' + i + ' 条消息,用来量冷启分批。' });
+        }
+        return m;
+      }
+      function resetProgDom(n) {
+        cancelProgRender();
+        store.selected = 'ses_a';
+        store.messages = progMessages(n);
+        store.live.clear();
+        msgEls.clear();
+        q('#messages').innerHTML = '';
+        store.forceBottom = true;
+        store.restoreScroll = null;
+      }
+      function domRows() { return qa('#messages > .msg'); }
+
+      resetProgDom(79);
+      renderMessages();
+      T('冷启分批:不到门槛(79 条)照旧一次画完',
+        domRows().length === 79 && msgEls.size === 79 && progQueue === null,
+        { nodes: domRows().length, els: msgEls.size, queue: !!progQueue });
+
+      resetProgDom(100);
+      renderMessages();
+      var tailRows = domRows();
+      T('冷启分批:100 条首屏只建尾部一屏',
+        tailRows.length === PROG_TAIL && msgEls.size === PROG_TAIL,
+        { nodes: tailRows.length, els: msgEls.size });
+      T('冷启分批:首屏就是最新那几条',
+        tailRows.length > 0 &&
+        tailRows[0].textContent.indexOf('第 90 条') >= 0 &&
+        tailRows[tailRows.length - 1].textContent.indexOf('第 99 条') >= 0,
+        tailRows.length ? tailRows[0].textContent.slice(0, 24) : '');
+      T('冷启分批:剩下的排进了队列', !!progQueue && progQueue.next === 90,
+        progQueue && progQueue.next);
+
+      var guard = 0;
+      while (progQueue && guard++ < 200) renderProgBatch();
+      var allRows = domRows();
+      var allKeys = Array.from(msgEls.keys());
+      T('冷启分批:补完后 100 条全在',
+        allRows.length === 100 && msgEls.size === 100 && progQueue === null,
+        { nodes: allRows.length, els: msgEls.size, queue: !!progQueue });
+      T('冷启分批:补完后 DOM 顺序从旧到新',
+        allRows.length === 100 &&
+        allRows[0].textContent.indexOf('第 0 条') >= 0 &&
+        allRows[99].textContent.indexOf('第 99 条') >= 0 &&
+        allRows[50].textContent.indexOf('第 50 条') >= 0,
+        { n: allRows.length, a: allRows[0] && allRows[0].textContent.slice(0, 16),
+          m: allRows[50] && allRows[50].textContent.slice(0, 16),
+          z: allRows[99] && allRows[99].textContent.slice(0, 16) });
+      T('冷启分批:补完后 msgEls 顺序与消息一致',
+        allKeys.length === 100 && allKeys[0] === 'prog_0' && allKeys[99] === 'prog_99',
+        allKeys.slice(0, 3));
+
+      resetProgDom(100);
+      renderMessages();
+      T('冷启分批:二次渲染前队列还挂着',
+        domRows().length === PROG_TAIL && !!progQueue, !!progQueue);
+      renderMessages(); // 开头会 flushProgRender():缓存里的 DOM 不能缺一截
+      T('冷启分批:再次整表渲染前先补完',
+        domRows().length === 100 && msgEls.size === 100 && progQueue === null,
+        { nodes: domRows().length, els: msgEls.size, queue: !!progQueue });
+
+      resetProgDom(100);
+      store.restoreScroll = { sid: 'ses_a', anchor: { id: 'prog_95', off: 0 } };
+      renderMessages();
+      T('冷启分批:要还原滚动锚点时一次画完(分批只给落底的冷启)',
+        domRows().length === 100 && progQueue === null,
+        { nodes: domRows().length, queue: !!progQueue });
+
+      resetProgDom(100);
+      renderMessages();
+      T('冷启分批:清空前队列还挂着', !!progQueue, !!progQueue);
+      clearSelection();
+      T('冷启分批:清空选中丢掉没补完的队列',
+        progQueue === null && domRows().length === 0,
+        { queue: !!progQueue, nodes: domRows().length });
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

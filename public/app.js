@@ -3035,6 +3035,7 @@ function clearSelection() {
   }
   store.selected = null;
   persistSelected(null, 'replace');
+  cancelProgRender(); // §8.99 还没补完的冷启分批没有存的意义
   store.messages.clear();
   msgEls.clear();
   resetLazyToolWatch();
@@ -3903,6 +3904,7 @@ function msgIdsSig(msgs) {
 function stashMessagesDom(sid) {
   if (!sid || isRunning(sid)) return;
   for (const L of store.live.values()) if (L && L.sid === sid) return;
+  flushProgRender(); // §8.99 还没补完的分批先补完:缓存里的 DOM 不能缺一截
   const entry = store.msgCache.get(sid);
   const box = $('#messages');
   if (!entry || !box || store.selected !== sid) return;
@@ -5552,7 +5554,46 @@ function reasoningRunTitle(run) {
   return '';
 }
 
-function reasoningGroupHtml(run, m, body) {
+/* §8.99 折着的思考块超过这个字数才懒渲染(短块照旧直接画 —— 少一层展开等待,
+ * 也免得测试里那些几十字节的夹具全变成异步补)。2000 字符 ≈ 一屏多的正文。 */
+const REASON_LAZY_MIN = 2000;
+
+function reasoningRunChars(run) {
+  let n = 0;
+  for (let i = 0; i < run.length; i++) n += (run[i] && run[i].text ? run[i].text.length : 0);
+  return n;
+}
+
+/* 思考正文的 HTML(与 renderMessage 里非懒路径同一套结构)。 */
+function reasoningBodyHtml(run) {
+  let out = '';
+  for (let i = 0; i < run.length; i++) {
+    out += '<div class="content">' + md((run[i] && run[i].text) || '') + '</div>';
+  }
+  return out;
+}
+
+/* 用户展开一个懒思考块:把正文补进去。只补一次,补完清掉节点上的引用。 */
+function hydrateReasoning(d) {
+  if (!d || !d.lazyRun) return;
+  const body = d.querySelector('.rbody.lazy');
+  if (!body) return;
+  body.innerHTML = reasoningBodyHtml(d.lazyRun);
+  body.classList.remove('lazy');
+  d.lazyRun = null;
+}
+
+/* toggle 不冒泡,capture 挂一次就够(消息节点会整批换掉,逐条挂会漏)。 */
+function setupReasonLazy() {
+  const box = $('#messages');
+  if (!box) return;
+  box.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d && d.tagName === 'DETAILS' && d.open && d.classList.contains('reasoning')) hydrateReasoning(d);
+  }, true);
+}
+
+function reasoningGroupHtml(run, m, body, lazy) {
   const running = !!m.live;
   const title = reasoningRunTitle(run);
   let dur = 0;
@@ -5563,7 +5604,7 @@ function reasoningGroupHtml(run, m, body) {
     }
   }
   return (
-    '<details class="reasoning' + (running ? ' live' : '') + '"' + (running ? ' open' : '') + '>' +
+    '<details class="reasoning' + (running ? ' live' : '') + (lazy ? ' lazy' : '') + '"' + (running ? ' open' : '') + '>' +
     '<summary><span class="rWord' + (running ? '' : ' rDone') + '">' +
     (running ? 'Thinking' : 'Thought') + '</span>' +
     (title ? '<span class="rTitle">: ' + esc(title) + '</span>' : '') +
@@ -6015,6 +6056,7 @@ function renderMessage(m, opts) {
     }
     let nText = 0;
     let nReason = 0;
+    const lazyRuns = []; // §8.99 折着的思考块:正文等展开再补,存在节点上(见 hydrateReasoning)
     // 模型名不再印在头部 —— 照 TUI 挪到脚注(AssistantFooter 那行):「谁干的」在末尾交代,
     // 头部只留标记与身份(照 TUI 其实没有这行,是面板自己的阅读用头部,见 §8.27)。
     let html =
@@ -6031,7 +6073,7 @@ function renderMessage(m, opts) {
           ' data-lk-last="' + (isLast ? '1' : '0') + '"' +
           ' data-lk-key="' + (p.text || '').length + ':0"'
         : '';
-      const body = md(p.text || '');
+      const body = p.type === 'text' ? md(p.text || '') : '';
       const shown = m.live && isLast ? cursorInto(body) : body;
       if (p.type === 'text') {
         nText++;
@@ -6042,21 +6084,31 @@ function renderMessage(m, opts) {
         // (增量重绘 paintLiveText 就是按「同类型里的第几个」定位的)。
         const run = [p];
         while (i + 1 < content.length && content[i + 1].type === 'reasoning') run.push(content[++i]);
+        /* §8.99 收工后的思考块默认是折着的:正文照常 md + 拼 HTML 的话,这一段就是
+         * 几万字的死重(实测这一页 92 段 / 54 万字,占整页 HTML 的 1/4),而用户
+         * 十有八九永远不点开。超过门槛就先只留一个空壳,展开时再补正文。 */
+        const lazyReason = !m.live && reasoningRunChars(run) >= REASON_LAZY_MIN;
         let rbody = '';
-        for (let j = 0; j < run.length; j++) {
-          const rp = run[j];
-          const at = i - (run.length - 1 - j); // 这一段在 content 里的下标
-          const rLast = at === lastBlock;
-          const rmd = md(rp.text || '');
-          const rlk = m.live
-            ? ' data-lk="reasoning:' + nReason + '"' +
-              ' data-lk-last="' + (rLast ? '1' : '0') + '"' +
-              ' data-lk-key="' + (rp.text || '').length + ':0"'
-            : '';
-          nReason++;
-          rbody += '<div class="content"' + rlk + '>' + (m.live && rLast ? cursorInto(rmd) : rmd) + '</div>';
+        if (lazyReason) {
+          lazyRuns.push(run);
+          nReason += run.length; // 折着时 data-lk 用不上,序号仍要跟后面的块对齐
+          rbody = '<div class="rbody lazy"></div>';
+        } else {
+          for (let j = 0; j < run.length; j++) {
+            const rp = run[j];
+            const at = i - (run.length - 1 - j); // 这一段在 content 里的下标
+            const rLast = at === lastBlock;
+            const rmd = md(rp.text || '');
+            const rlk = m.live
+              ? ' data-lk="reasoning:' + nReason + '"' +
+                ' data-lk-last="' + (rLast ? '1' : '0') + '"' +
+                ' data-lk-key="' + (rp.text || '').length + ':0"'
+              : '';
+            nReason++;
+            rbody += '<div class="content"' + rlk + '>' + (m.live && rLast ? cursorInto(rmd) : rmd) + '</div>';
+          }
         }
-        html += reasoningGroupHtml(run, m, rbody);
+        html += reasoningGroupHtml(run, m, rbody, lazyReason);
       } else if (p.type === 'tool') {
         // 相邻的探索类工具(read/glob/grep/webfetch/websearch)折成一组,照 TUI 的
         // exploration 分组 —— 见 EXPLORE_TOOLS 那段的说明。§8.78 关掉时逐条显示。
@@ -6093,6 +6145,12 @@ function renderMessage(m, opts) {
     // Tokens 块排在脚注之后(照 TUI:那是 turn-usage 行,收工那一步才印)
     if (tu && tu.closed.has(m.id)) html += tokenBlockHtml(tu.closed.get(m.id));
     el.innerHTML = html;
+    /* 懒思考块的正文挂在节点上(与消息同生共死,GCF 一起走):展开时由
+     * setupReasonLazy() 的 toggle 监听取出来补进去。 */
+    if (lazyRuns.length) {
+      const ds = el.querySelectorAll('details.reasoning.lazy');
+      for (let i = 0; i < ds.length && i < lazyRuns.length; i++) ds[i].lazyRun = lazyRuns[i];
+    }
     return el;
   }
 
@@ -6176,6 +6234,10 @@ function syncDetailsOpen(oldEl, newEl) {
     if (o[i].open) n[i].setAttribute('open', '');
     else n[i].removeAttribute('open');
   }
+  // §8.99 重画后仍然摊着的思考块(比如新建时就是 open 的)也得把懒正文补上
+  for (let i = 0; i < n.length; i++) {
+    if (n[i].open && n[i].classList.contains('reasoning')) hydrateReasoning(n[i]);
+  }
 }
 
 // 当前会话要渲染的消息全表:服务端消息 + 本地流式缓冲里服务端还没落盘的助手消息,
@@ -6246,7 +6308,145 @@ function markTurnDone(sid, opts) {
    阈值取 30:再少的话那次 flush 也就几毫秒,不值得引入估值这个变量。 */
 const CV_MIN_MSGS = 30;
 
+/* §8.99 冷启分批:一次要建的条数过这个门槛才分。
+ * 60 条那档(测试里的「长会话」)照旧一次画完,行为一个字节都不变。 */
+const PROG_MIN = 80;
+/* 先画最新的一屏多,剩下的下一帧起逐批往顶部补。 */
+const PROG_TAIL = 10;
+/* 每批最多占主线程这么久,到点就让出去 —— 单条消息本身重的(十万字工具卡)兜不住,
+ * 但不会攒成一整段长任务。 */
+const PROG_SLICE_MS = 8;
+
+/* 冷启分批的状态。只在「整表从零建、且落在底部」时挂上;锚点还原 / 增量重绘不碰。 */
+let progQueue = null;
+let progTimer = 0;
+
+function cancelProgRender() {
+  if (progTimer) {
+    clearTimeout(progTimer);
+    progTimer = 0;
+  }
+  progQueue = null;
+}
+
+/* 补一条:与 renderMessages() 里那段逐条逻辑同口径(吸收 / compaction 正文 / 签名),
+ * 只是不必再判「已有 DOM 要不要换」。 */
+function renderProgRow(q, mi, box) {
+  const msgs = q.msgs;
+  const m = msgs[mi];
+  const L = liveView(m.id);
+  let view = L ? liveMessage(L) : m;
+  if (!L && msgHidden(view)) return;
+  const absorbedBy = L ? null : q.absorbPlan.absorbed.get(m.id);
+  let el;
+  let sig;
+  let fp = '';
+  let absorbed = null;
+  if (absorbedBy) {
+    sig = 'absorbed|' + absorbedBy;
+    el = absorbedPlaceholder(absorbedBy);
+    absorbed = absorbedBy;
+  } else {
+    if (!L && view && view.type === 'compaction') {
+      view = Object.assign({}, view, { summary: compactionBody(view, store.selected) });
+    }
+    const liveFp = L ? liveSig(L) : '';
+    let fpExtra = '';
+    if (!L && view && view.type === 'assistant') fpExtra = '|' + modelDisplayName(view.model);
+    else if (!L && view && view.type === 'model-switched') fpExtra = '|' + switchLabel(view.model, view.previous);
+    const absorb = L ? null : q.absorbPlan.partsByOwner.get(m.id) || null;
+    const crossSig = absorb && absorb.length ? '|absorb:' + JSON.stringify(absorb) : '';
+    sig = L ? 'live|' + liveFp : JSON.stringify(view) + fpExtra + crossSig;
+    fp = liveFp;
+    el = renderMessage(view, { msgs: msgs, index: mi, absorb: absorb, lazyTools: q.lazyTools });
+  }
+  msgEls.set(m.id, { sig: sig, fp: fp, el: el, absorbed: absorbed });
+  box.insertBefore(el, q.anchor);
+  q.anchor = el; // 下一条插在它前面:补进来的批次才是从旧到新
+}
+
+/* 补进去的批次是往顶部插的,Map 的插入顺序会跟消息顺序反过来 ——
+ * stashMessagesDom() 搬 DOM 时照 Map 顺序排,这里补完统一按消息顺序重排一次。 */
+function reorderMsgEls(msgs) {
+  const ordered = [];
+  for (let i = 0; i < msgs.length; i++) {
+    const rec = msgEls.get(msgs[i].id);
+    if (rec) ordered.push([msgs[i].id, rec]);
+  }
+  msgEls.clear();
+  for (let i = 0; i < ordered.length; i++) msgEls.set(ordered[i][0], ordered[i][1]);
+}
+
+function finishProgRender() {
+  const q = progQueue;
+  progQueue = null;
+  if (progTimer) {
+    clearTimeout(progTimer);
+    progTimer = 0;
+  }
+  if (q) reorderMsgEls(q.msgs);
+}
+
+function renderProgBatch() {
+  const q = progQueue;
+  const box = $('#messages');
+  if (!q || !box || q.sid !== store.selected) {
+    cancelProgRender();
+    return;
+  }
+  /* 从靠近已上屏那一端往前补(插在 anchor 前面,顺序自然是对的),按时间片让出主线程 */
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const budget = typeof performance !== 'undefined' ? PROG_SLICE_MS : PROG_SLICE_MS * 4;
+  while (q.next > 0) {
+    const mi = q.next - 1;
+    renderProgRow(q, mi, box);
+    q.next = mi;
+    if (((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0) >= budget) break;
+  }
+  // 用户要是还贴着底,补进来的内容把人顶上去就跟着贴回去(往上翻了就一律不动)
+  if (store.nearBottom) {
+    pinBottom(box);
+    updateJumpLatest(true);
+  }
+  if (q.next <= 0) {
+    observeLazyToolCards();
+    syncRepinWatch();
+    finishProgRender();
+  } else {
+    progTimer = setTimeout(renderProgBatch, 0);
+  }
+}
+
+/* 下一帧再补:先把「切过来」这一帧让给浏览器画出来,别在同一帧里把 100 条建完。 */
+function scheduleProgRender() {
+  if (!progQueue || progTimer) return;
+  progTimer = setTimeout(renderProgBatch, 0);
+}
+
+/* 别的渲染 / 切走 / 存 DOM 之前,先把还没补的同步补完(否则缓存里的 DOM 会缺一截)。 */
+function flushProgRender() {
+  const q = progQueue;
+  if (!q) return;
+  if (progTimer) {
+    clearTimeout(progTimer);
+    progTimer = 0;
+  }
+  const box = $('#messages');
+  if (!box || q.sid !== store.selected) {
+    cancelProgRender();
+    return;
+  }
+  while (q.next > 0) {
+    renderProgRow(q, q.next - 1, box);
+    q.next--;
+  }
+  finishProgRender();
+  observeLazyToolCards();
+  syncRepinWatch();
+}
+
 function renderMessages() {
+  flushProgRender(); // §8.99 上一轮还没补完的冷启分批先补完:这次重绘要照完整集合比对
   const box = $('#messages');
   cancelScheduledLivePaint(); // 整表重绘会覆盖这一帧的增量内容,排队的那一帧别再白跑
   const msgs = currentMessages();
@@ -6284,9 +6484,17 @@ function renderMessages() {
   // §8.83 长会话工具正文懒渲染:只在这段会话的工具正文总量过门槛时启用。
   const lazyTools = lazyToolsWanted(msgs);
 
+  /* §8.99 冷启先只建最新一屏:100 条一口气建完实测是 180~500ms 的主线程长任务,
+   * 切标签那一下就是「点了没反应」。剩下的一帧后再分批补到顶部 —— 它们在视口
+   * 上方,补的时候看不见;贴底跟随与滚动锚定照旧收尾。 */
+  const progCold = !pending && !store.restoreScroll && !msgEls.size && msgs.length >= PROG_MIN;
+  let progFrom = progCold ? Math.max(0, msgs.length - PROG_TAIL) : 0;
+  // 被吸收的续步得连吸收方一起画,否则先出来的是个指不到组的占位
+  while (progFrom > 0 && absorbPlan.absorbed.has(msgs[progFrom].id)) progFrom--;
+
   // 增量渲染:仅重建变化的消息,其余复用 DOM(保留已展开的 details)
   let prev = null;
-  for (let mi = 0; mi < msgs.length; mi++) {
+  for (let mi = progFrom; mi < msgs.length; mi++) {
     const m = msgs[mi];
     const L = liveView(m.id);
     let view = L ? liveMessage(L) : m;
@@ -6355,6 +6563,27 @@ function renderMessages() {
     const anchor = prev ? prev.nextSibling : box.firstChild;
     if (rec.el !== anchor) box.insertBefore(rec.el, anchor);
     prev = rec.el;
+  }
+
+  /* §8.99 首屏已经画好:把前面那截排到下一帧开始补。锚在「第一条已上屏的消息」上,
+   * 后面每批都插在它前面(顺序就不会乱)。 */
+  if (progCold && progFrom > 0) {
+    let anchorEl = null;
+    for (let i = progFrom; i < msgs.length && !anchorEl; i++) {
+      const rec = msgEls.get(msgs[i].id);
+      if (rec && rec.el.parentNode === box) anchorEl = rec.el;
+    }
+    if (anchorEl) {
+      progQueue = {
+        sid: store.selected,
+        msgs: msgs,
+        absorbPlan: absorbPlan,
+        lazyTools: lazyTools,
+        next: progFrom,
+        anchor: anchorEl,
+      };
+      scheduleProgRender();
+    }
   }
 
   } // end !domFast
@@ -10724,6 +10953,7 @@ function init() {
   setupRepinWatch(); // 盯内容高度的补贴底(§8.46)
   setupDiffView(); // diff 卡片的并排 / 统一视图切换(§8.52,仅桌面)
   setupAttachments();
+  setupReasonLazy(); // §8.99 折着的思考块:展开时再补正文
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)
   setupExport(); // §8.80 导出格式在 Markdown / JSON 间切换
