@@ -314,6 +314,29 @@ table#list { width: 100%; border-collapse: collapse; }
 .tab:hover .tabx,
 .tab.active .tabx { display: flex; }
 .tabx:hover { color: var(--danger); background: var(--panel); }
+
+/* §8.100 标签右键菜单:光标处的小浮层,外观与命令面板一致 */
+#tabMenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 132px;
+  padding: 4px 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  font-size: 0.92em;
+}
+#tabMenu[hidden] { display: none; }
+.tabmenu-item {
+  padding: 5px 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tabmenu-item:hover { background: var(--bg); }
+.tabmenu-item.disabled { color: var(--muted); cursor: default; }
+.tabmenu-item.disabled:hover { background: none; }
+
 #tabNew {
   display: flex;
   align-items: center;

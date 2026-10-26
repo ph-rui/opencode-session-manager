@@ -52,6 +52,7 @@
     </section>
   </main>
   <div id="toast" hidden></div>
+  <div id="tabMenu" hidden></div>
   <datalist id="dirList"></datalist>
 
   <dialog id="dlgNew" class="dlg"><div class="dlgform"><h3>新建会话</h3>
@@ -1076,6 +1077,7 @@
        * 打开会话自动进 tab;点 tab 直切;× 只移出 tab、不删会话;关当前 tab 自动切邻居;
        * 最多 8 个;存 localStorage;手机也显示。 */
       setupSessionTabs();
+      setupTabMenu(); // §8.100 测试页手动接线(init 被 DOMContentLoaded 桩挡住)
       var nav = q('#sessionTabs');
       var strip = q('#tabStrip');
       var resetTabs = function () {
@@ -1371,6 +1373,96 @@
         { minWidth: getComputedStyle(tabA).minWidth,
           gap: getComputedStyle(tabA.querySelector('.tabx')).marginLeft });
       document.documentElement.classList.remove('narrow', 'view-chat');
+
+      /* ---- §8.100 标签右键菜单:关闭此标签 / 关闭其他标签 ---- */
+      var tabMenu = q('#tabMenu');
+      T('右键菜单节点存在且初始隐藏', !!tabMenu && tabMenu.hidden === true);
+      var rctxTab = function (id, x, y) {
+        var el = strip.querySelector('.tab[data-id="' + id + '"]');
+        var ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2 });
+        el.dispatchEvent(ev);
+        return ev;
+      };
+      var pump = async function (n) { for (var i = 0; i < n; i++) await Promise.resolve(); };
+
+      resetTabs();
+      store.tabs = [
+        { id: 'ses_a', title: 'A' }, { id: 'ses_b', title: 'B' }, { id: 'ses_c', title: 'C' }
+      ];
+      store.selected = 'ses_a';
+      tabsSig = ''; tabsActiveSeen = null;
+      renderTabs();
+      var rb = strip.querySelector('.tab[data-id="ses_b"]');
+      var rbr = rb.getBoundingClientRect();
+      var evR = rctxTab('ses_b', rbr.left + 10, rbr.top + 8);
+      T('右键标签:菜单弹出且默认被阻止(压掉原生右键)',
+        evR.defaultPrevented === true && tabMenu.hidden === false,
+        { prevented: evR.defaultPrevented, hidden: tabMenu.hidden });
+      T('右键标签:两项都在且指向该标签',
+        tabMenuTabId === 'ses_b' &&
+        tabMenu.querySelector('[data-act="close"]').textContent === '关闭此标签' &&
+        tabMenu.querySelector('[data-act="close-others"]').textContent === '关闭其他标签',
+        { id: tabMenuTabId, html: tabMenu.innerHTML.slice(0, 80) });
+      T('多标签时「关闭其他」可点',
+        !tabMenu.querySelector('[data-act="close-others"]').classList.contains('disabled'));
+      var evBlank = (function () {
+        var e2 = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 3, clientY: 3 });
+        strip.dispatchEvent(e2);
+        return e2;
+      })();
+      T('右键标签栏空白:菜单收起且不弹原生菜单',
+        tabMenu.hidden === true && evBlank.defaultPrevented === false,
+        { hidden: tabMenu.hidden, prevented: evBlank.defaultPrevented });
+
+      // 关闭其他:右键非当前标签 ses_b → 只留 ses_b 并切到它,批量关闭不进重开栈
+      rctxTab('ses_b', rbr.left + 10, rbr.top + 8);
+      var closedBefore = closedTabs.length;
+      var delBeforeM = window.calls.filter(function (c) { return c.method === 'DELETE'; }).length;
+      tabMenu.querySelector('[data-act="close-others"]').click();
+      await pump(30);
+      T('关闭其他:只剩右键的标签并切到它',
+        tabMenu.hidden === true &&
+        store.tabs.map(function (t) { return t.id; }).join(',') === 'ses_b' &&
+        store.selected === 'ses_b',
+        { tabs: store.tabs.map(function (t) { return t.id; }), sel: store.selected });
+      T('关闭其他:批量关的不进「最近关闭」栈(用户要求)',
+        closedTabs.length === closedBefore, closedTabs);
+      T('关闭其他:不发 DELETE,被关会话仍在列表',
+        window.calls.filter(function (c) { return c.method === 'DELETE'; }).length === delBeforeM &&
+        store.sessions.has('ses_a') && store.sessions.has('ses_c'));
+
+      // 关闭此标签:右键当前标签 → 移出并进重开栈(与 × 同语义)
+      rctxTab('ses_b', rbr.left + 10, rbr.top + 8);
+      tabMenu.querySelector('[data-act="close"]').click();
+      await pump(30);
+      T('关闭此标签:移出标签栏并进重开栈',
+        store.tabs.length === 0 && closedTabs.length === closedBefore + 1 &&
+        closedTabs[0].id === 'ses_b',
+        { tabs: store.tabs.length, closed: closedTabs.map(function (t) { return t.id; }) });
+
+      // 单标签:「关闭其他」禁用且点了无效
+      resetTabs();
+      store.tabs = [{ id: 'ses_a', title: 'A' }];
+      store.selected = 'ses_a';
+      tabsSig = ''; tabsActiveSeen = null;
+      renderTabs();
+      var ra2r = strip.querySelector('.tab[data-id="ses_a"]').getBoundingClientRect();
+      rctxTab('ses_a', ra2r.left + 8, ra2r.top + 8);
+      T('单标签:「关闭其他」禁用',
+        tabMenu.hidden === false &&
+        tabMenu.querySelector('[data-act="close-others"]').classList.contains('disabled'));
+      tabMenu.querySelector('[data-act="close-others"]').click();
+      await pump(10);
+      T('单标签:点禁用的「关闭其他」无效',
+        tabMenu.hidden === true && store.tabs.length === 1 && store.selected === 'ses_a',
+        { tabs: store.tabs.length, sel: store.selected });
+
+      // 菜单外按下鼠标收起
+      rctxTab('ses_a', ra2r.left + 8, ra2r.top + 8);
+      T('右键再次弹出菜单', tabMenu.hidden === false);
+      document.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      T('菜单外按下鼠标:菜单收起', tabMenu.hidden === true);
+      resetTabs();
 
       /* ---- §8.61 worktree 管理(列出 / 删除 / 移入) ---- */
       var WTS = [

@@ -2886,6 +2886,28 @@ else
   echo "FAIL: §8.81 的状态表 / 摘要 / 版本 / 密码保护 / 命令入口或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R38 组:标签右键菜单,关闭此标签 / 关闭其他标签(§8.100)----
+# 用户要求:右键某标签能「关闭其他 TAB」。批量关掉的标签不进「最近关闭」栈
+# (单关 × / 中键仍记一笔,可用 ↺ 逐个捡回)。
+CAP_PAGE=$(cat "$(dirname "$0")/ui-capabilities.html")
+if has "$APPJS" 'function openTabMenu(id, x, y)' &&
+   has "$APPJS" 'function closeOtherTabs(id)' &&
+   has "$APPJS" 'function setupTabMenu()' &&
+   has "$APPJS" 'setupTabMenu(); // §8.100' &&
+   has "$APPJS" 'store.tabs = store.tabs.filter((t) => t.id === id);' &&
+   has "$APPJS" "if (tabDrag && tabDrag.active) return; // 触摸长按已进拖拽,别弹菜单" &&
+   has "$HOME_HTML" 'id="tabMenu"' &&
+   has "$CSS" '#tabMenu {' && has "$CSS" '.tabmenu-item {' &&
+   has "$CAP_PAGE" '右键标签:菜单弹出且默认被阻止(压掉原生右键)' &&
+   has "$CAP_PAGE" '关闭其他:只剩右键的标签并切到它' &&
+   has "$CAP_PAGE" '关闭其他:批量关的不进「最近关闭」栈(用户要求)' &&
+   has "$CAP_PAGE" '关闭此标签:移出标签栏并进重开栈' &&
+   has "$CAP_PAGE" '单标签:点禁用的「关闭其他」无效'; then
+  echo "PASS: §8.100 标签右键菜单(关闭此标签 / 关闭其他标签),批量关闭不进重开栈,Esc / 外点收起"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.100 的右键菜单 / 关闭其他逻辑 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

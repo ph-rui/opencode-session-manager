@@ -2823,6 +2823,88 @@ function closeTab(id) {
   renderTabs();
 }
 
+/* §8.100 标签右键菜单:关闭此标签 / 关闭其他标签。
+ * 右键是桌面鼠标习惯;onTabPointerDown() 只认 button 0,右键不会触发拖拽,互不冲突。
+ * 触摸长按走拖拽(§8.94),若拖拽已激活就不弹菜单。 */
+let tabMenuTabId = null; // 菜单当前指向的标签会话 ID
+
+function tabMenuOpen() {
+  const m = $('#tabMenu');
+  return !!(m && !m.hidden);
+}
+
+function closeTabMenu() {
+  const m = $('#tabMenu');
+  if (!m) return;
+  m.hidden = true;
+  m.innerHTML = '';
+  tabMenuTabId = null;
+}
+
+function openTabMenu(id, x, y) {
+  const m = $('#tabMenu');
+  if (!m || !id) return;
+  tabMenuTabId = id;
+  const n = store.tabs.length;
+  m.innerHTML =
+    '<div class="tabmenu-item" data-act="close">关闭此标签</div>' +
+    '<div class="tabmenu-item' + (n > 1 ? '' : ' disabled') + '" data-act="close-others"' +
+    (n > 1 ? '' : ' aria-disabled="true"') + '>关闭其他标签</div>';
+  m.hidden = false;
+  // 定位在光标处,量出实际尺寸后夹回视口内
+  m.style.left = '0px';
+  m.style.top = '0px';
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(x, (window.innerWidth || 0) - r.width - 4)) + 'px';
+  m.style.top = Math.max(4, Math.min(y, (window.innerHeight || 0) - r.height - 4)) + 'px';
+}
+
+/* 关闭其他标签:只留右键的那个。批量关掉的【不】进「最近关闭」栈 ——
+ * 单关(× / 中键)记一笔可用 ↺ 逐个捡回,批量清栏不占重开栈(用户明确要求)。 */
+async function closeOtherTabs(id) {
+  if (!id) return;
+  store.tabs = store.tabs.filter((t) => t.id === id);
+  saveTabs();
+  if (store.selected !== id) await selectSession(id);
+  else renderTabs();
+}
+
+function setupTabMenu() {
+  const nav = document.getElementById('sessionTabs');
+  const m = $('#tabMenu');
+  if (!nav || !m || m.dataset.wired === '1') return;
+  m.dataset.wired = '1';
+  nav.addEventListener('contextmenu', (e) => {
+    const tab = e.target.closest('.tab');
+    if (!tab || !tab.dataset.id) return;
+    if (tabDrag && tabDrag.active) return; // 触摸长按已进拖拽,别弹菜单
+    e.preventDefault();
+    e.stopPropagation();
+    openTabMenu(tab.dataset.id, e.clientX, e.clientY);
+  });
+  m.addEventListener('click', (e) => {
+    const item = e.target.closest('.tabmenu-item');
+    if (!item) return;
+    const act = item.dataset.act;
+    const id = tabMenuTabId;
+    closeTabMenu(); // 点菜单(含禁用项)一律先收起,再执行动作
+    if (item.classList.contains('disabled')) return;
+    if (act === 'close') closeTab(id);
+    else if (act === 'close-others') closeOtherTabs(id);
+  });
+  // 在菜单外按下鼠标 / 右键,菜单先收掉(右键另一标签时由上面的 handler 接着重开)
+  document.addEventListener('pointerdown', (e) => {
+    if (!tabMenuOpen()) return;
+    if (e.target.closest && e.target.closest('#tabMenu')) return;
+    closeTabMenu();
+  });
+  document.addEventListener('contextmenu', (e) => {
+    if (!tabMenuOpen()) return;
+    if (e.target.closest && e.target.closest('#tabMenu')) return;
+    closeTabMenu();
+  }, true);
+}
+
 function setupSessionTabs() {
   const nav = document.getElementById('sessionTabs');
   if (!nav || nav.dataset.wired === '1') return;
@@ -9499,6 +9581,11 @@ function setupTuiKeys() {
         closeCommands();
         return;
       }
+      if (tabMenuOpen()) { // §8.100:标签右键菜单开着时 Esc 先关菜单,别去中断会话
+        e.preventDefault();
+        closeTabMenu();
+        return;
+      }
       if (mentionsOpen()) {
         e.preventDefault();
         closeMentions();
@@ -10929,6 +11016,7 @@ function init() {
   // §8.59 先把上次的标签栏画出来(标题是刷新前的快照),再拉列表对账
   store.tabs = readTabs();
   setupSessionTabs();
+  setupTabMenu(); // §8.100 标签右键菜单:关闭此标签 / 关闭其他标签
   renderTabs();
   health();
   setInterval(health, 15000);
