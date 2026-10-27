@@ -1197,6 +1197,180 @@
       T('session.idle 排一次 1.5s 的延迟收尾对账(不跟 150ms 那次抢)',
         window.__pending(1500) === 1, window.__timeouts);
 
+      /* ---- §8.101 服务端忙闲是权威:SSE 丢了收工事件也要收得回来 ----
+       * 用户报的故障:会话结束半小时,头部还亮着「运行中」、状态条一直动,点标签还要卡 2 秒。
+       * 根因是收工只信 SSE 事件;事件断了以后本地 live 缓冲永远 open,8s 的
+       * /api/session/active 只刷 store.active,救不回来。 */
+      var msgCalls = function () {
+        return window.calls.filter(function (c) { return /\/message\?/.test(c.url); }).length;
+      };
+      var pump = async function (n) { for (var i = 0; i < n; i++) await Promise.resolve(); };
+
+      store.active.clear();
+      store.live.clear();
+      store.messages.clear();
+      msgEls.clear();
+      msgDomCache.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      store.pending = false;
+      window.SERVER['ses_a'] = [
+        { id: 'msg_u9', type: 'user', time: { created: 900 }, text: '问题' },
+        { id: 'msg_a9', type: 'assistant', time: { created: 910, completed: 920 },
+          content: [{ type: 'text', text: '收工了' }] },
+      ];
+      store.messages.set('msg_u9', window.SERVER['ses_a'][0]);
+      store.messages.set('msg_a9', window.SERVER['ses_a'][1]);
+      /* 只在本地 live 里、服务端永远不会有落盘版本的一条(丢收工事件的典型残留) */
+      store.live.set('msg_ghost', {
+        id: 'msg_ghost', sid: 'ses_a', started: 930, agent: null, model: null,
+        parts: [], byKey: {}, tokens: null, cost: null, finish: null, open: true,
+      });
+      renderMessages();
+      T('§8.101 故障态:残留 live 缓冲让头部亮成运行中',
+        q('#chatState').textContent === '● 运行中' && store.running === true,
+        q('#chatState').textContent + '/' + store.running);
+      cacheCurrentMessages();
+      stashMessagesDom('ses_a');
+      T('§8.101 故障态:有 live 残留时不做 DOM 缓存(切回来只能整表重建)',
+        msgDomCache.has('ses_a') === false);
+
+      var mcBefore = msgCalls();
+      await loadActive();
+      await pump(12);
+      T('§8.101 服务端说闲着 → loadActive 收掉本地 live 缓冲',
+        !openLiveForSid('ses_a') && !store.live.has('msg_ghost'),
+        Array.from(store.live.values()).map(function (L) { return L.id + ':' + L.open; }));
+      T('§8.101 记账记在真消息上(幽灵 id 不能顶替最后一条)',
+        store.srvIdleSid === 'ses_a' && store.srvIdleLastId === 'msg_a9',
+        store.srvIdleSid + '/' + store.srvIdleLastId);
+      T('§8.101 服务端说闲着 → 头部回「空闲」、状态条收起',
+        q('#chatState').textContent === '空闲' && store.running === false &&
+        q('#progress').hidden === true,
+        q('#chatState').textContent + '/' + store.running);
+      T('§8.101 服务端说闲着 → 绕过间隔补拉一次消息(内容别停在断流前的快照)',
+        msgCalls() === mcBefore + 1, msgCalls() - mcBefore);
+      cacheCurrentMessages();
+      msgDomCache.clear();
+      stashMessagesDom('ses_a');
+      T('§8.101 收工确认后 DOM 缓存恢复(§8.96 快路径回来了)',
+        msgDomCache.has('ses_a') === true);
+      renderMessages();
+
+      /* 收工事件已到、权威消息还没落盘:缓冲已收束(open=false),文本不会再变,
+       * 不该再拦着 DOM 缓存 —— 否则「本轮刚结束时切走」又得整表重建。 */
+      msgDomCache.clear();
+      store.live.set('msg_settled', {
+        id: 'msg_settled', sid: 'ses_a', started: 940, agent: null, model: null,
+        parts: [{ kind: 'block', type: 'text', ordinal: 0, text: '刚收工的正文', final: true }],
+        byKey: { 'text:0': { kind: 'block', type: 'text', ordinal: 0, text: '刚收工的正文', final: true } },
+        tokens: null, cost: null, finish: 'stop', open: false,
+      });
+      renderMessages();
+      cacheCurrentMessages();
+      stashMessagesDom('ses_a');
+      T('§8.101 已收束(open=false)的缓冲不再拦 DOM 缓存',
+        msgDomCache.has('ses_a') === true);
+      store.live.delete('msg_settled');
+      renderMessages();
+
+      /* 服务端确认收工时最后那条消息缺 time.completed(旧快照 / 丢事件),不能据此点亮 */
+      store.live.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.srvIdleSid = '';
+      store.srvIdleLastId = '';
+      window.SERVER['ses_a'] = [
+        { id: 'msg_u10', type: 'user', time: { created: 1000 }, text: '问题' },
+        { id: 'msg_a10', type: 'assistant', time: { created: 1010 },
+          content: [{ type: 'text', text: '还没落 completed' }] },
+      ];
+      window.SERVER['ses_a'].forEach(function (m) { store.messages.set(m.id, m); });
+      renderMessages();
+      T('§8.101 最后一条 assistant 缺 completed 时先按流式中算',
+        store.running === true && q('#chatState').textContent === '● 运行中',
+        store.running);
+      await loadActive();
+      await pump(12);
+      T('§8.101 服务端说收工 → 记下当时最后一条消息 id',
+        store.srvIdleSid === 'ses_a' && store.srvIdleLastId === 'msg_a10',
+        store.srvIdleSid + '/' + store.srvIdleLastId);
+      T('§8.101 服务端说收工 → 旧快照缺 completed 也不再点亮',
+        store.running === false && q('#chatState').textContent === '空闲',
+        q('#chatState').textContent);
+      /* 别把降噪变成「永远不亮」:新消息进来(id 变了)照旧算运行中 */
+      store.messages.set('msg_a11', {
+        id: 'msg_a11', type: 'assistant', time: { created: 1200 },
+        content: [{ type: 'text', text: '下一轮' }],
+      });
+      renderMessages();
+      T('§8.101 下一轮的新消息(id 变了)照常点亮运行中',
+        store.running === true && q('#chatState').textContent === '● 运行中', store.running);
+
+      /* 切到空闲会话时不能继承上一个会话的 running(否则先闪一下运行中) */
+      store.live.clear();
+      store.messages.clear();
+      store.pending = true;
+      store.running = true;
+      store.selected = 'ses_b';
+      updateChatStatus();
+      T('§8.101 预备:切走前上一个会话是运行中', q('#chatState').textContent === '● 运行中');
+      var selP = selectSession('ses_a');
+      T('§8.101 切到空闲会话时立刻按新会话重算,不继承运行中',
+        store.running === false && q('#chatState').textContent === '空闲',
+        store.running + '/' + q('#chatState').textContent);
+      await selP;
+      await pump(12);
+
+      /* 压缩痕迹超时:只补对账,不直接掐(压缩中途 active 会空一拍) */
+      store.live.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      store.pending = false;
+      store.compacting.clear();
+      store.compactSince.clear();
+      store.messages.set('msg_cp9', {
+        id: 'msg_cp9', type: 'compaction', time: { created: 1300 }, status: 'running',
+        reason: 'auto', summary: '',
+      });
+      renderMessages();
+      T('§8.101 压缩中:头部运行中', q('#chatState').textContent === '● 运行中');
+      store.compactSince.set('ses_a', Date.now() - 1000);
+      mcBefore = msgCalls();
+      await loadActive();
+      await pump(10);
+      T('§8.101 压缩刚开始(未超时):不补消息对账、也不直接收工',
+        msgCalls() === mcBefore && q('#chatState').textContent === '● 运行中',
+        msgCalls() - mcBefore);
+      store.compactSince.set('ses_a', Date.now() - COMPACT_STALE_MS - 1000);
+      mcBefore = msgCalls();
+      await loadActive();
+      await pump(12);
+      T('§8.101 压缩痕迹超过 2 分钟:补一次消息对账(让消息 status 说话)',
+        msgCalls() === mcBefore + 1, msgCalls() - mcBefore);
+      T('§8.101 超时对账本身不硬收工(服务端说还在压就继续亮)',
+        q('#chatState').textContent === '● 运行中', q('#chatState').textContent);
+      /* 对账后服务端那条压缩消息是 completed → 收工 */
+      window.SERVER['ses_a'] = [
+        { id: 'msg_cp9', type: 'compaction', time: { created: 1300 }, status: 'completed', reason: 'auto', summary: '摘要' },
+      ];
+      mcBefore = msgCalls();
+      await loadMessages({ older: false, auto: true, now: true });
+      await pump(4);
+      T('§8.101 对账拿到 completed 的压缩消息 → 收工',
+        q('#chatState').textContent === '空闲' && store.compacting.has('ses_a') === false,
+        q('#chatState').textContent);
+      store.messages.clear();
+      store.live.clear();
+      store.compacting.clear();
+      store.compactSince.clear();
+      store.srvIdleSid = '';
+      store.srvIdleLastId = '';
+      store.selected = 'ses_a';
+
       /* 取消选中 → 收起 */
       store.live.clear();
       store.messages.clear();

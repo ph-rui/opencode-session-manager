@@ -34,6 +34,14 @@ const store = {
   netSlow: false,
   pending: false,
   running: false,
+  /* §8.101 服务端确认「这个会话已经收工」时记下的最后一笔消息 id。
+   * SSE 断流 / 标签页挂起会整段丢掉收工事件,本地 live 缓冲或消息快照就永远停在
+   * 「还没 completed」——状态条能一直亮到刷新。loadActive() 拿 /api/session/active
+   * 对账后把 sid + 当时最后一条消息 id 记在这里,recomputeRunning() 认这一笔:
+   * 最后一条还是它,就不再按「缺 time.completed」算流式中。用 id 比对而不是时间戳,
+   * 免得面板和服务的时钟差把判定带偏。 */
+  srvIdleSid: '',
+  srvIdleLastId: '',
   // 消息区【跟随中】的状态 —— 含义是「跟着最新输出走」这个意图,不是一次几何测量。
   // 只有【用户自己往上滚】才关掉它;内容变长、容器变矮都不算(见 updateJumpLatest)。
   // 一旦关掉,只有用户自己往下滚回底部(或点「跳到最新」/End)才恢复 —— 不能因为还在
@@ -66,6 +74,11 @@ const store = {
   // metadata.sessionID 过滤)。只由 SSE 的 shell.created / shell.exited / shell.deleted 维护。
   shells: new Map(),
   compacting: new Set(), // sessionID:正在压缩上下文(SSE 的 session.compaction.started/.ended 说了算)
+  /* §8.101 压缩开工的本地时刻(浏览器时钟)。只用来判断「这条压缩痕迹是不是太老了」:
+   * 压缩中途 /api/session/active 会空一拍(见 §8.11),不能一空就收工;但 .ended 丢了
+   * 也不能让状态条亮到天荒地老。超过 COMPACT_STALE_MS 就补一次消息对账,让服务端
+   * 那条压缩消息的 status 说话。 */
+  compactSince: new Map(), // sessionID -> 开工时刻(ms)
   compactText: new Map(), // sessionID -> 概要正文的流式缓冲(session.compaction.delta 一段段吐出来的)
   inbox: new Map(), // sessionID -> [Session.Inbox.Info]
   agents: new Map(), // directory -> [Agent.Info]
@@ -284,7 +297,10 @@ function compactionRunning(sid, msgs) {
       break;
     }
   }
-  if (latest && latest.status !== 'running') store.compacting.delete(sid);
+  if (latest && latest.status !== 'running') {
+    store.compacting.delete(sid);
+    store.compactSince.delete(sid);
+  }
   return store.compacting.has(sid) || !!(latest && latest.status === 'running');
 }
 
@@ -295,6 +311,11 @@ function compactionRunning(sid, msgs) {
  * 节流重画;`.ended` 那条载荷里带着完整摘要,直接盖上来,不用等消息列表对账。
  */
 const COMPACT_TEXT_KEEP = 8; // 最多记几个会话的正文,免得页面长开着一直涨
+/* §8.101 压缩开工多久还没等到 .ended,就不再拿「压缩中」当挡箭牌。
+ * 压缩中途 /api/session/active 会空一拍(§8.11),所以这个值不能太小;
+ * 实测一份 8 KB 摘要几十秒内结束,两分钟已经很宽松。超时只做「补一次消息对账」,
+ * 收不收工仍由服务端那条压缩消息的 status 决定,不直接掐。 */
+const COMPACT_STALE_MS = 120000;
 
 function pushCompactText(sid, text) {
   if (!sid || !text) return;
@@ -385,23 +406,48 @@ async function loadActive() {
   }
   const sel = store.selected;
   const wasRunning = !!sel && prev.has(sel);
+  /* 本地自己认的「在跑」= 事件攒出来的(active / live 缓冲 / 快照里缺 completed)。
+   * 必须在用服务端结果覆盖 store.active 之前算,否则 prev 那份就没了。 */
+  const localRunning = !!(sel && (isRunning(sel) || store.running));
+  const compact = !!(sel && compactionRunning(sel));
   /* SSE 静默断流时这趟 8s 轮询是唯一还在走的眼睛:只熄状态条不补消息,内容就会
    * 一直停在断流前的快照里(用户看到「空闲了但内容不是最新」,只能刷新)。
    * 运行中 → 空闲是权威收工信号,立刻绕过间隔补拉一次;再排一次延迟收尾,
    * 兜住「事件先到、消息稍后才落盘」。压缩中途 active 会空一拍,别误判成收工。
    * 这里也要清 pending:SSE 的收工事件可能整条丢了,loadActive 是最后一道兜底。 */
-  const justIdle = sel && wasRunning && !next.has(sel) && !compactionRunning(sel);
+  const justIdle = !!(sel && wasRunning && !next.has(sel) && !compact);
   store.active = next;
+  /* §8.101 服务端说当前会话闲着 —— 这就是忙闲的权威答案,本地靠事件攒出来的运行痕迹
+   * 一律让路。原来只在「上一趟 active 里还有它」时才收尾:SSE 断流把 busy + idle 两段
+   * 一起丢掉的话(live 缓冲 / 消息快照都停在半截),这里永远走不到,状态条能亮到刷新。
+   * 压缩不在此列(active 会空一拍),超时后只补对账,收不收工由消息 status 决定。 */
+  let healed = false;
+  let resolveCompact = false;
+  if (sel && !next.has(sel) && !store.pending) {
+    if (compact) {
+      let since = store.compactSince.get(sel) || 0;
+      if (!since) { since = Date.now(); store.compactSince.set(sel, since); }
+      if (Date.now() - since > COMPACT_STALE_MS) resolveCompact = true;
+    } else {
+      if (closeLiveFor(sel)) healed = true;
+      confirmServerIdle(sel); // 先把收束过的幽灵缓冲清掉,再记「以哪条消息为准」
+      recomputeRunning(); // srvIdle 认账之后这里会把「缺 completed」的旧快照熄掉
+      if (localRunning) healed = true;
+    }
+  }
   if (justIdle) markTurnDone(sel);
-  if (changed) {
+  if (changed || healed) {
     renderSessions();
-    updateChatStatus();
+    /* markTurnDone() 自己会重画一次,别在这条路径上再整表建一遍 */
+    if (healed && !justIdle) renderMessages(); // 收掉的 live 块要就地变成收尾态
+    else updateChatStatus();
   }
   updateComposerControls();
-  if (justIdle) {
+  if (justIdle || healed) {
     loadMessages({ older: false, auto: true, now: true });
     scheduleSettle(sel);
   }
+  if (resolveCompact) loadMessages({ older: false, auto: true, now: true });
   // §8.54:SSE 一直在推,这个 8s 轮询只当「SSE 哑了」的兜底 —— 最近 12s 内已经对过账
   // 就跳过(否则在看一个正在跑的会话时,它会每 8s 再白拉一次 MB 级消息列表)。
   // msgStale:后台对账失败过,空闲时也别停,直到成功拉回一页为止。
@@ -3803,6 +3849,9 @@ async function selectSession(id) {
   renderAsks();
   renderInbox();
   renderChatOps();
+  /* §8.101 先把运行状态按新会话的消息重算一次再画。store.running 是全局缓存,
+   * 直接从上一个会话继承过来的话,切到空闲会话会先闪一下「运行中」+ 状态条动几帧。 */
+  recomputeRunning();
   updateChatStatus();
   syncNarrowView();
   revealActiveTab(); // §8.59 窄屏刚把聊天区露出来,再对齐一次当前标签
@@ -3985,7 +4034,11 @@ function msgIdsSig(msgs) {
 
 function stashMessagesDom(sid) {
   if (!sid || isRunning(sid)) return;
-  for (const L of store.live.values()) if (L && L.sid === sid) return;
+  /* 只有【还在流式】的缓冲会继续改节点,收束过的(open=false)已经定型 —— 它只是还在
+   * 等服务端权威版本落盘,文本不会再变。早先这里见到任何 buffered live 就拒绝缓存,
+   * 结果「本轮刚结束时切走」/「SSE 丢事件后刚被 8s 轮询收工」这两种情况都白白整表重建
+   * (885 条消息的会话一点标签就是两秒)。 */
+  for (const L of store.live.values()) if (L && L.sid === sid && L.open) return;
   flushProgRender(); // §8.99 还没补完的分批先补完:缓存里的 DOM 不能缺一截
   const entry = store.msgCache.get(sid);
   const box = $('#messages');
@@ -4106,6 +4159,7 @@ async function loadMessages(opts) {
         j.data.forEach((m) => store.messages.set(m.id, m));
         store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
         pruneLive();
+        if (!opts.older) dropGhostLive(id); // 只认整页对账:翻旧页那趟拿不到最新一段
         store.msgError = '';
         if (!opts.older) {
           msgStale = false;
@@ -4167,6 +4221,22 @@ function pruneLive() {
     }
     if (!L.open && L.sid !== store.selected && !store.messages.has(id)) store.live.delete(id);
   }
+}
+
+/* §8.101 服务端已经确认这个会话闲着之后,再对账仍拿不到的「已收束」本地缓冲就是幽灵:
+ * 收工事件丢了 / 消息压根没落盘。留着它有两层坏处 —— 状态条会被 openLiveForSid()
+ * 一直点亮,而且 stashMessagesDom() 见到任何 live 缓冲就不再缓存 DOM(§8.96 快路径失效,
+ * 每次切回来都整表重建)。open 的缓冲不动:那是真在跑的回合。 */
+function dropGhostLive(sid) {
+  if (!sid || store.srvIdleSid !== sid) return 0;
+  let n = 0;
+  for (const [id, L] of store.live) {
+    if (!L || L.sid !== sid || L.open) continue;
+    if (store.messages.has(id)) continue;
+    store.live.delete(id);
+    n++;
+  }
+  return n;
 }
 
 /* 简易 Markdown 渲染(输入先经 esc 转义,再处理行内标记) */
@@ -6341,6 +6411,28 @@ function currentMessages() {
 /* 运行状态只该由「当前消息 + 本地流式缓冲 + pending」现算。
  * store.running 是缓存:renderMessages() 会刷新它,收工事件也得立刻刷新,
  * 否则面板自己发的消息(pending)在服务端不再给 idle 消息时会一直亮着进度条。 */
+/* §8.101 服务端 /api/session/active 说这个会话收工了:记下「以哪条消息为准」。
+ * 只记当前选中会话那一份 —— 别的会话手里没有消息表,等它被选中 / 收到收工事件再说。 */
+function confirmServerIdle(sid) {
+  if (!sid) return;
+  store.srvIdleSid = sid;
+  /* 先清掉「服务端已确认收工、却永远不会有落盘版本」的本地缓冲,再取最后一条 ——
+   * 否则记账会记在一笔幽灵 id 上,后面「最后一条缺 completed 不点亮」的判断就永远
+   * 对不上真消息(§8.101 实测踩过)。 */
+  dropGhostLive(sid);
+  const list = currentMessages();
+  const last = list[list.length - 1];
+  store.srvIdleLastId = last ? last.id : '';
+}
+
+/* 下一轮一开工,上一次的「服务端确认收工」就作废了 —— 否则 srvIdleLastId 会把
+ * 新一轮的判断也压住,或者让幽灵缓冲清理误删刚收束的本地缓冲。 */
+function clearServerIdle(sid) {
+  if (sid && store.srvIdleSid !== sid) return;
+  store.srvIdleSid = '';
+  store.srvIdleLastId = '';
+}
+
 function recomputeRunning(msgs) {
   if (!store.selected) {
     store.running = false;
@@ -6351,10 +6443,14 @@ function recomputeRunning(msgs) {
   // currentMessages() 里可能还是服务端的半成品对象;收束状态要看它对应的本地缓冲。
   const lastLive = last && store.live.get(last.id);
   const closedLive = !!(lastLive && !lastLive.open && liveView(last.id));
+  /* §8.101 服务端已经确认这个会话收工(8s 轮询说的),而本地最后一条还是当时那一条:
+   * 它的 time.completed 缺着只可能是本地快照旧了 / 收工事件丢了,不能据此点亮状态条。 */
+  const srvIdle = !!(last && store.srvIdleSid === store.selected &&
+    store.srvIdleLastId === last.id);
   /* provisional:收工事件已到、服务端权威消息还没落盘的本地缓冲。正文继续显示,
    * 但它已经不是「流式中」,不能因为 time.completed 还没来就把状态条一直点亮。 */
   const streaming = !!(last && last.type === 'assistant' && last.time &&
-    !last.time.completed && !last.provisional && !closedLive);
+    !last.time.completed && !last.provisional && !closedLive && !srvIdle);
   store.running = store.pending || streaming ||
     compactionRunning(store.selected, list) || !!openLiveForSid(store.selected);
   return store.running;
@@ -9717,6 +9813,7 @@ async function send() {
 
   closeMentions();
   pushHistory(sid, text);
+  clearServerIdle(sid); // 自己发的新一轮:上一次「服务端确认收工」的记账作废
   store.pending = !willQueue;
   updateChatStatus();
   updateComposerControls();
@@ -9816,6 +9913,7 @@ function liveStart(e) {
   if (!id) return null;
   let L = store.live.get(id);
   if (!L) {
+    clearServerIdle(d.sessionID);
     L = {
       id: id,
       sid: d.sessionID,
@@ -10268,8 +10366,10 @@ function handleControlEvent(e) {
   if (t === 'session.status') {
     const st = (d.status && d.status.type) || null;
     if (sid) {
-      if (st === 'busy' || st === 'retry') store.active.set(sid, st);
-      else {
+      if (st === 'busy' || st === 'retry') {
+        store.active.set(sid, st);
+        clearServerIdle(sid); // 新一轮开工:上一次「服务端确认收工」作废
+      } else {
         store.active.delete(sid);
         done(sid);
       }
@@ -10296,8 +10396,10 @@ function handleControlEvent(e) {
     }
   } else if (t.indexOf('session.execution.') === 0) {
     if (sid) {
-      if (t === 'session.execution.started') store.active.set(sid, 'busy');
-      else {
+      if (t === 'session.execution.started') {
+        store.active.set(sid, 'busy');
+        clearServerIdle(sid); // 新一轮开工
+      } else {
         store.active.delete(sid);
         done(sid);
       }
@@ -10316,6 +10418,7 @@ function handleControlEvent(e) {
     //   .ended/.failed 收工;载荷里带着完整摘要,直接记下来先印上,不等消息列表对账。
     if (sid && t === 'session.compaction.started') {
       store.compacting.add(sid);
+      store.compactSince.set(sid, Date.now());
       store.compactText.delete(sid);
       // 立刻往消息流里放一块「进行中」:用事件给的 inputID 当 id,服务端那条真消息
       // 一到就同 id 覆盖(不用干等那次对账拉取 —— 正文流得快时对账会一直被推后)。
@@ -10331,6 +10434,7 @@ function handleControlEvent(e) {
     } else if (sid) {
       // .ended / .failed(以后再加别的 .xxx 也按收工处理,免得又漏)
       store.compacting.delete(sid);
+      store.compactSince.delete(sid);
       const final = typeof d.text === 'string' && d.text ? d.text : '';
       if (final) store.compactText.set(sid, final);
       // 手里那块还在「进行中」就地收工(真消息随后会原 id 覆盖掉,内容一致)

@@ -1628,7 +1628,8 @@ if has "$APPJS" 'const MSG_FETCH_TIMEOUT_MS = 30000;' &&
 else
   echo "FAIL: 消息请求超时或后台失败重试不完整"; fail=$((fail + 1))
 fi
-if has "$APPJS" 'const justIdle = sel && wasRunning && !next.has(sel) && !compactionRunning(sel);' &&
+if has "$APPJS" 'const compact = !!(sel && compactionRunning(sel));' &&
+   has "$APPJS" 'const justIdle = !!(sel && wasRunning && !next.has(sel) && !compact);' &&
    has "$APPJS" 'loadMessages({ older: false, auto: true, now: true });' &&
    has "$APPJS" '(msgStale && !isRunning(sel)' &&
    has "$(cat "$(dirname "$0")/ui-controls.html")" '运行→空闲:loadActive 立刻补拉一次消息(不等刷新)'; then
@@ -2906,6 +2907,38 @@ if has "$APPJS" 'function openTabMenu(id, x, y)' &&
   echo "PASS: §8.100 标签右键菜单(关闭此标签 / 关闭其他标签),批量关闭不进重开栈,Esc / 外点收起"; pass=$((pass + 1))
 else
   echo "FAIL: §8.100 的右键菜单 / 关闭其他逻辑 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R39 组:服务端忙闲当权威收尾 + 收束缓冲不再拦 DOM 缓存(§8.101)----
+# 用户报的故障:会话结束半小时,头部还亮「运行中」、进度条一直动,点该标签卡 2 秒。
+# 根因是收工只信 SSE:事件断流后本地 live 缓冲永远 open → store.running 恒真;
+# 而 stashMessagesDom() 见到任何 live 缓冲就不缓存 DOM(§8.96 快路径失效)。
+# 885 条消息的会话实测:修后 8s 轮询内自愈,点回标签 restore=true、最大帧间隔 ~50–66ms。
+STREAM_PAGE=$(cat "$(dirname "$0")/ui-stream.html")
+if has "$APPJS" 'srvIdleSid: ' &&
+   has "$APPJS" 'srvIdleLastId: ' &&
+   has "$APPJS" 'const COMPACT_STALE_MS = 120000;' &&
+   has "$APPJS" 'function confirmServerIdle(sid)' &&
+   has "$APPJS" 'function clearServerIdle(sid)' &&
+   has "$APPJS" 'function dropGhostLive(sid)' &&
+   has "$APPJS" 'if (closeLiveFor(sel)) healed = true;' &&
+   has "$APPJS" 'confirmServerIdle(sel); // 先把收束过的幽灵缓冲清掉' &&
+   has "$APPJS" 'if (!opts.older) dropGhostLive(id);' &&
+   has "$APPJS" 'store.compactSince.set(sid, Date.now());' &&
+   has "$APPJS" 'store.compactSince.delete(sid);' &&
+   has "$APPJS" 'if (L && L.sid === sid && L.open) return;' &&
+   has "$APPJS" 'const srvIdle = !!(last && store.srvIdleSid === store.selected' &&
+   has "$APPJS" 'recomputeRunning();
+  updateChatStatus();
+  syncNarrowView();' &&
+   has "$STREAM_PAGE" '§8.101 服务端说闲着 → loadActive 收掉本地 live 缓冲' &&
+   has "$STREAM_PAGE" '§8.101 记账记在真消息上(幽灵 id 不能顶替最后一条)' &&
+   has "$STREAM_PAGE" '§8.101 已收束(open=false)的缓冲不再拦 DOM 缓存' &&
+   has "$STREAM_PAGE" '§8.101 压缩痕迹超过 2 分钟:补一次消息对账' &&
+   has "$STREAM_PAGE" '§8.101 切到空闲会话时立刻按新会话重算'; then
+  echo "PASS: §8.101 服务端忙闲权威收尾、压缩超时补对账、收束缓冲不再拦 DOM 缓存"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.101 的权威收尾 / 记账 / 幽灵清理 / DOM 缓存判定缺了一块"; fail=$((fail + 1))
 fi
 
 echo
