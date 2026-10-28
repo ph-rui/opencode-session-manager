@@ -8170,6 +8170,10 @@ function restoreAttachments(sid) {
 
 // 发送成功 / 服务端命令消费附件后:缓存和当前显示一起清掉
 function dropSessionAttachments(sid) {
+  // 回收的是「被清掉的那一份」的预览 URL:sid 还在缓存里就清缓存那份,
+  // 没有就清当前显示这份 —— 别把别的会话还挂着 chip 的预览误回收了。
+  const arr = (sid && attachCache.get(sid)) || store.attachments;
+  arr.forEach(revokeAttachmentPreview);
   if (sid) attachCache.delete(sid);
   store.attachments = [];
   renderAttachments();
@@ -8202,9 +8206,12 @@ function renderAttachments() {
       '<span class="achip-size">@ 引用</span></span>';
   }
   for (const a of files) {
+    const canPreview = !!a.preview;
     html +=
-      '<span class="achip' + (a.busy ? ' busy' : '') + '" data-id="' + esc(a.id) + '" title="' +
-      esc(a.path || a.name) + '">' +
+      '<span class="achip' + (a.busy ? ' busy' : '') + (canPreview ? ' img' : '') +
+      '" data-id="' + esc(a.id) + '" title="' +
+      esc(a.path || a.name) + (canPreview ? '(点击预览)' : '') + '">' +
+      (canPreview ? '<img class="achip-img" alt="" src="' + esc(a.preview) + '">' : '') +
       '<span class="achip-name">' + esc(a.name) + '</span>' +
       '<span class="achip-size">' + esc(a.busy ? '上传中…' : humanSize(a.size)) + '</span>' +
       '<button type="button" class="achip-x" data-remove="' + esc(a.id) + '" title="移除">×</button></span>';
@@ -8214,12 +8221,29 @@ function renderAttachments() {
 }
 
 function clearAttachments() {
+  /* 取消选中时,这份数组还留在某个会话的 attachCache 里(切回来 chip 还在)——
+   * 此时不能回收预览 URL,浏览器还指着它画缩略图;留给发送成功 / 移除一起收。 */
+  let kept = false;
+  for (const arr of attachCache.values()) if (arr === store.attachments) { kept = true; break; }
+  if (!kept) store.attachments.forEach(revokeAttachmentPreview);
   store.attachments = [];
   renderAttachments();
 }
 
+/* §8.102 回收预览用的 object URL。发送成功 / 移除 / 上传失败时调 —— URL 只能回收
+ * 一次,所以清掉 item 上的引用,防止二次 revoke。预览框还开着时 chip 先被清掉,
+ * 框里那张图会跟着失效,无伤大雅(图已经随消息进对话区了)。 */
+function revokeAttachmentPreview(a) {
+  if (a && a.preview && typeof URL !== 'undefined' && URL.revokeObjectURL) {
+    try { URL.revokeObjectURL(a.preview); } catch (_) {}
+    a.preview = '';
+  }
+}
+
 function removeAttachment(id) {
+  const item = store.attachments.find((a) => a.id === id);
   store.attachments = store.attachments.filter((a) => a.id !== id);
+  if (item) revokeAttachmentPreview(item);
   renderAttachments();
 }
 
@@ -8274,6 +8298,11 @@ async function queueFiles(list) {
       uri: '',
       busy: true,
     };
+    /* §8.102 图片附件给 chip 留一个本地预览 URL:选文件那一刻 File 就在手里,
+     * object URL 不用把几 MB 的 base64 再抄一份。发送成功 / 移除时回收。 */
+    if (/^image\//.test(f.type || '') && typeof URL !== 'undefined' && URL.createObjectURL) {
+      try { item.preview = URL.createObjectURL(f); } catch (_) {}
+    }
     owner.push(item);
     if (store.selected === sid) renderAttachments();
     try {
@@ -8284,6 +8313,7 @@ async function queueFiles(list) {
     } catch (e) {
       const at = owner.indexOf(item);
       if (at >= 0) owner.splice(at, 1);
+      revokeAttachmentPreview(item); // 传不上的文件 chip 也不会再出现,预览 URL 一起收
       flash('上传「' + item.name + '」失败:' + e.message, 'bad');
       failed++;
     }
@@ -8438,7 +8468,17 @@ function setupAttachments() {
   if (box) {
     box.addEventListener('click', (e) => {
       const b = e.target.closest('[data-remove]');
-      if (b) removeAttachment(b.dataset.remove);
+      if (b) {
+        removeAttachment(b.dataset.remove);
+        return;
+      }
+      /* §8.102 图片附件 chip 点一下就地预览(和消息里 att-img 同一个预览框);
+       * 上传中的 chip 还没有对象 URL,点了也不会有事。 */
+      const chip = e.target.closest('.achip.img');
+      if (chip) {
+        const a = store.attachments.find((x) => x.id === chip.dataset.id);
+        if (a && a.preview) openImagePreview(a.preview, a.name);
+      }
     });
   }
   if (set) {

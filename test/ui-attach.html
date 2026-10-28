@@ -681,6 +681,110 @@
       store.attachments = [];
       renderAttachments();
 
+      /* ================= §8.102 输入区图片附件:点 chip 就地预览 ================= */
+      store.attachments = [];
+      renderAttachments();
+      store.selected = 'ses_a';
+      updateComposerControls();
+      window.__revoked = [];
+      window.__created = [];
+      var realCreate = URL.createObjectURL.bind(URL);
+      var realRevoke = URL.revokeObjectURL.bind(URL);
+      URL.createObjectURL = function (b) {
+        var u = realCreate(b);
+        window.__created.push(u);
+        return u;
+      };
+      URL.revokeObjectURL = function (u) {
+        window.__revoked.push(u);
+        return realRevoke(u);
+      };
+
+      await queueFiles([file('pic.png', 'PNGDATA', 'image/png')]);
+      T('§8.102 图片附件选文件时就有本地预览 URL(object URL,不抄 base64)',
+        store.attachments.length === 1 && !!store.attachments[0].preview &&
+        store.attachments[0].preview.indexOf('blob:') === 0,
+        store.attachments);
+      var picChip = q('#attach .achip.img');
+      T('§8.102 图片 chip 带缩略图与 img 类',
+        !!picChip && !!picChip.querySelector('.achip-img') &&
+        picChip.querySelector('.achip-img').getAttribute('src') === store.attachments[0].preview);
+      T('§8.102 点击前预览框关着', q('#dlgImage').open === false);
+      picChip.querySelector('.achip-name').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('§8.102 点 chip 本体(非 ×)打开预览框', q('#dlgImage').open === true);
+      T('§8.102 预览框显示这张图与文件名',
+        q('#imgView').getAttribute('src') === store.attachments[0].preview &&
+        q('#imgViewName').textContent === 'pic.png',
+        q('#imgView').getAttribute('src') + '/' + q('#imgViewName').textContent);
+      q('#imgViewClose').click();
+      T('§8.102 关掉预览框照旧清 src(不挂 blob URL)',
+        q('#dlgImage').open === false && !q('#imgView').getAttribute('src'));
+
+      /* × 只移除:不打开预览,并回收 URL */
+      var url1 = store.attachments[0].preview;
+      picChip = q('#attach .achip.img');
+      picChip.querySelector('.achip-x').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('§8.102 点 × 只移除、不打开预览框',
+        store.attachments.length === 0 && q('#dlgImage').open === false);
+      T('§8.102 移除后预览 URL 被回收(只收一次)',
+        window.__revoked.length === 1 && window.__revoked[0] === url1, window.__revoked);
+
+      /* 非图片附件没有预览 */
+      await queueFiles([file('doc.txt', 'x', 'text/plain')]);
+      T('§8.102 非图片附件没有 img 类、没有缩略图',
+        q('#attach .achip.img') === null &&
+        q('#attach .achip .achip-img') === null);
+      var nBefore = window.__revoked.length;
+      q('#attach .achip .achip-name').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('§8.102 点非图片 chip 不打开预览框', q('#dlgImage').open === false);
+      T('§8.102 点非图片 chip 不产生任何回收', window.__revoked.length === nBefore);
+
+      /* 切走再切回:缓存的是同一份,object URL 仍然有效 */
+      store.attachments = [];
+      renderAttachments();
+      await queueFiles([file('pic3.png', 'P3', 'image/png')]);
+      var url3 = store.attachments[0].preview;
+      await selectSession('ses_b');
+      await selectSession('ses_a');
+      T('§8.102 切回来恢复图片附件且预览 URL 没变(还能点开)',
+        store.attachments.length === 1 && store.attachments[0].preview === url3 &&
+        !!q('#attach .achip.img .achip-img'));
+      q('#attach .achip.img .achip-name').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      T('§8.102 恢复后点 chip 仍能打开预览',
+        q('#dlgImage').open === true && q('#imgView').getAttribute('src') === url3);
+      q('#imgViewClose').click();
+
+      /* 回列表(取消选中)不毁预览:chip 留在缓存里,回来 URL 照样有效 */
+      store.attachments = [];
+      renderAttachments();
+      await queueFiles([file('pic5.png', 'P5', 'image/png')]);
+      var url5 = store.attachments[0].preview;
+      clearSelection();
+      await selectSession('ses_a');
+      T('§8.102 取消选中再回来,预览 URL 没被误回收',
+        store.attachments.length === 1 && store.attachments[0].preview === url5 &&
+        !!q('#attach .achip.img .achip-img'),
+        store.attachments);
+
+      /* 发送成功:预览 URL 全部回收 */
+      q('#input').value = ''; // 只发图片,别把上一段的正文带进 prompt
+      var beforeSend = window.__revoked.length;
+      await send();
+      T('§8.102 发送成功后附件清空且预览 URL 被回收',
+        store.attachments.length === 0 && window.__revoked.length === beforeSend + 1,
+        window.__revoked);
+
+      /* 上传失败:chip 移除,URL 一并回收 */
+      var beforeFail = window.__revoked.length;
+      window.UPLOAD_FAIL = true;
+      await queueFiles([file('pic4.png', 'P4', 'image/png')]);
+      window.UPLOAD_FAIL = false;
+      T('§8.102 图片上传失败:chip 不留下,预览 URL 也回收',
+        store.attachments.length === 0 && window.__revoked.length === beforeFail + 1,
+        window.__revoked);
+      URL.createObjectURL = realCreate;
+      URL.revokeObjectURL = realRevoke;
+
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
       post(out.join('\n'));

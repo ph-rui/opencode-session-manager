@@ -1191,6 +1191,8 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
   border-radius: 999px;
 }
 .achip.busy { opacity: 0.6; }
+/* §8.102 带缩略图的图片附件:点 chip 本体预览(× 除外) */
+.achip.img { cursor: pointer; }
 .achip.skill { border-color: var(--accent); }
 .achip.skill .achip-size { color: var(--accent); }
 .achip-img { flex: none; width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }

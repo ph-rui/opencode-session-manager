@@ -2941,6 +2941,31 @@ else
   echo "FAIL: §8.101 的权威收尾 / 记账 / 幽灵清理 / DOM 缓存判定缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R40 组:输入区图片附件点 chip 就地预览(§8.102)----
+# 用户反馈:在输入区挂了图片附件,鼠标点 chip 看不了原图。消息里的图片缩略图
+# (§8.95)本来就能点开,输入区这一份没有。预览用 object URL:选文件那一刻 File
+# 就在手里,不用抄 base64、不用加服务端端点;移除 / 发送成功 / 上传失败时回收。
+ATTACH_PAGE=$(cat "$(dirname "$0")/ui-attach.html")
+if has "$APPJS" 'item.preview = URL.createObjectURL(f)' &&
+   has "$APPJS" 'function revokeAttachmentPreview(a)' &&
+   has "$APPJS" 'const canPreview = !!a.preview;' &&
+   has "$APPJS" "(canPreview ? ' img' : '')" &&
+   has "$APPJS" 'const chip = e.target.closest('"'"'.achip.img'"'"');' &&
+   has "$APPJS" 'if (a && a.preview) openImagePreview(a.preview, a.name);' &&
+   has "$APPJS" 'store.attachments.forEach(revokeAttachmentPreview);' &&
+   has "$APPJS" 'for (const arr of attachCache.values()) if (arr === store.attachments) { kept = true; break; }' &&
+   has "$APPJS" 'const arr = (sid && attachCache.get(sid)) || store.attachments;' &&
+   has "$CSS" '.achip.img { cursor: pointer; }' &&
+   has "$ATTACH_PAGE" '§8.102 点 chip 本体(非 ×)打开预览框' &&
+   has "$ATTACH_PAGE" '§8.102 移除后预览 URL 被回收(只收一次)' &&
+   has "$ATTACH_PAGE" '§8.102 取消选中再回来,预览 URL 没被误回收' &&
+   has "$ATTACH_PAGE" '§8.102 发送成功后附件清空且预览 URL 被回收' &&
+   has "$ATTACH_PAGE" '§8.102 图片上传失败:chip 不留下,预览 URL 也回收'; then
+  echo "PASS: §8.102 输入区图片附件:chip 缩略图 + 点击预览(object URL,移除/发送/失败回收)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.102 的图片 chip 预览 / object URL 回收缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]
