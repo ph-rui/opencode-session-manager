@@ -2992,6 +2992,31 @@ else
   echo "FAIL: §8.103 的 update-check/update 端点 / 更新条 / UI 断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R42 组:更新后的 What's new(§8.104)----
+# TUI 更新完会弹一页「What's new in x.y.z」,正文就是 GitHub release。面板一键
+# 更新成功后按新版本取一次,用现成的 md() 渲染;拉不到静默跳过。进场用 spring
+# 曲线缩放上浮 + 正文错峰,退场走 WAAPI;减少动效偏好下退化为无动画。
+if has "$SERVERJS" "const OPENCODE_RELEASE_URL = 'https://api.github.com/repos/anomalyco/opencode/releases/tags/v';" &&
+   has "$SERVERJS" 'if (url === '\''/__release-notes'\'')' &&
+   has "$SERVERJS" 'if (!/^\d+\.\d+\.\d+$/.test(version))' &&
+   has "$SERVERJS" 'const RELEASE_NOTES_TTL_MS = 60 * 60 * 1000;' &&
+   has "$APPJS" 'async function showWhatsNew(version)' &&
+   has "$APPJS" 'function closeWhatsNew()' &&
+   has "$APPJS" 'function setupWhatsNew()' &&
+   has "$APPJS" 'showWhatsNew(j.newVersion);' &&
+   has "$APPJS" 'prefers-reduced-motion: reduce' &&
+   has "$HOME_HTML" 'id="dlgWhatsNew"' &&
+   has "$CSS" '@keyframes wnDlgIn' &&
+   has "$CSS" 'dialog.dlgwn[open] .wn-body > *' &&
+   has "$CAP_PAGE3" "§8.104 更新成功后弹出 What\'s new 且标题带版本" &&
+   has "$CAP_PAGE3" '§8.104 正文按 Markdown 渲染(标题/粗体/列表)' &&
+   has "$CAP_PAGE3" '§8.104 关闭按钮先播退场再关闭' &&
+   has "$CAP_PAGE3" '§8.104 说明拉取失败静默不弹'; then
+  echo "PASS: §8.104 更新后的 What's new(版本路由、release 正文渲染、入场/退场动画)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.104 的 release-notes 路由 / 弹窗 / 动画缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

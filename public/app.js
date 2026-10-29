@@ -11220,6 +11220,7 @@ async function runOpencodeUpdate() {
     // 3s 后复检,版本追平就收起整条。
     updateBarSet('已更新到 v' + j.newVersion + ',服务已重启,本页会自动重连…', false);
     updateRunning = false;
+    showWhatsNew(j.newVersion); // §8.104 照 TUI 弹更新说明(拿不到就静默跳过)
     // 服务刚重启:给它几秒恢复,再强制复检(版本追平后自动收起)并刷新列表
     setTimeout(() => {
       updateLastCheck = 0;
@@ -11253,6 +11254,78 @@ function setupUpdateBar() {
   checkForUpdate(); // 首屏查一次(异步,不挡渲染)
 }
 
+/* ------------------------- §8.104 更新后的 What's new -------------------------
+ * TUI 更新完会弹一页「What's new in x.y.z」,正文就是 GitHub release。面板在
+ * 一键更新成功后按新版本取一次,用现成的 md() 渲染成同样的页面;拉不到就
+ * 静默跳过(断网 / 限流),不让一个附加说明挡着更新本身。 */
+let whatsNewShownFor = '';
+
+function closeWhatsNew() {
+  const dlg = $('#dlgWhatsNew');
+  if (!dlg || !dlg.open) return;
+  const reduce = typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || typeof dlg.animate !== 'function') {
+    closeDlg(dlg);
+    return;
+  }
+  // 退场照进场的反方向播一遍(WAAPI 不依赖定时器,测试页也跑得动)
+  const a = dlg.animate(
+    [
+      { opacity: 1, transform: 'translateY(0) scale(1)' },
+      { opacity: 0, transform: 'translateY(8px) scale(0.98)' },
+    ],
+    { duration: 140, easing: 'ease-in' }
+  );
+  a.finished.then(() => closeDlg(dlg)).catch(() => closeDlg(dlg));
+}
+
+async function showWhatsNew(version) {
+  if (!version || whatsNewShownFor === version) return;
+  let j = null;
+  try {
+    j = await api('/__release-notes?version=' + encodeURIComponent(version));
+  } catch (_) {
+    return; // 附加说明拿不到不算更新失败
+  }
+  if (!j || j.ok !== true || !j.body) return;
+  const dlg = $('#dlgWhatsNew');
+  if (!dlg) return;
+  whatsNewShownFor = version;
+  const title = $('#wnTitle');
+  if (title) title.textContent = "What's new in " + version;
+  const sub = $('#wnSub');
+  if (sub) sub.textContent = 'OpenCode 已更新到 v' + version + ',下面是从官方 release 带回来的更新说明。';
+  const body = $('#wnBody');
+  if (body) body.innerHTML = md(j.body);
+  const link = $('#wnLink');
+  if (link) {
+    if (j.url) {
+      link.href = j.url;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+      link.removeAttribute('href');
+    }
+  }
+  if (!dlg.open) openDlg(dlg);
+}
+
+function setupWhatsNew() {
+  const dlg = $('#dlgWhatsNew');
+  if (!dlg || dlg.dataset.wired === '1') return;
+  dlg.dataset.wired = '1';
+  const b = $('#wnClose');
+  if (b) b.addEventListener('click', closeWhatsNew);
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg) closeWhatsNew(); // 点遮罩关(同 §8.95 图片预览)
+  });
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault(); // Esc 先播退场,再由 closeDlg 真正关闭
+    closeWhatsNew();
+  });
+}
+
 function init() {
   // §8.59 先把上次的标签栏画出来(标题是刷新前的快照),再拉列表对账
   store.tabs = readTabs();
@@ -11283,6 +11356,7 @@ function init() {
   setupDiffView(); // diff 卡片的并排 / 统一视图切换(§8.52,仅桌面)
   setupAttachments();
   setupUpdateBar(); // §8.103 OpenCode 新版提示条(照 TUI 的 /update)
+  setupWhatsNew(); // §8.104 更新后的 What's new 弹窗
   setupReasonLazy(); // §8.99 折着的思考块:展开时再补正文
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)

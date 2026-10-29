@@ -255,6 +255,12 @@ table#list { width: 100%; border-collapse: collapse; }
   white-space: nowrap;
 }
 #updateBar.busy .ubtext { color: var(--muted); }
+/* §8.104 更新条的入场:从上方轻轻落下,不再硬切 */
+#updateBar:not([hidden]) { animation: ubIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes ubIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 #sessionTabs[hidden] { display: none; }
 #tabStrip {
   display: flex;
@@ -1459,6 +1465,114 @@ dialog.dlg.dlgimage::backdrop { background: rgba(0, 0, 0, 0.82); }
   background: #000;
 }
 .dlgimage .chip { flex: none; background: #2a2a2a; border-color: #444; color: #eee; }
+
+/* §8.104 更新后的 What's new:TUI 更新完成那一页的网页版。进场照 OpenChamber
+   那种 spring 曲线缩放上浮,正文逐块错峰;退场在 closeWhatsNew() 里用 WAAPI
+   反着播一次。屏幕阅读器 / 减少动效偏好下全部退化为无动画。 */
+dialog.dlg.dlgwn {
+  min-width: 0;
+  width: min(92vw, 760px);
+  max-width: min(92vw, 760px);
+  max-height: 84vh;
+  overflow: hidden;
+}
+dialog.dlg.dlgwn[open] { animation: wnDlgIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+dialog.dlg.dlgwn[open]::backdrop { animation: wnFade 180ms ease-out both; }
+@keyframes wnDlgIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes wnFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wnItemIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dlgwn .wn { display: flex; flex-direction: column; max-height: 84vh; }
+.dlgwn .wn-head {
+  flex: none;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #fbfdff, var(--bg));
+}
+.dlgwn .wn-kicker {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.dlgwn .wn-head h3 { margin: 4px 0; font-size: 18px; }
+.dlgwn .wn-sub { margin: 0; font-size: 12px; color: var(--muted); }
+.dlgwn .wn-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 22px 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overscroll-behavior: contain;
+}
+.dlgwn .wn-body h1,
+.dlgwn .wn-body h2 { font-size: 15px; margin: 14px 0 6px; }
+.dlgwn .wn-body h3 { font-size: 13.5px; margin: 14px 0 6px; }
+.dlgwn .wn-body h4,
+.dlgwn .wn-body h5,
+.dlgwn .wn-body h6 { font-size: 12.5px; margin: 12px 0 4px; }
+.dlgwn .wn-body p { margin: 6px 0; }
+.dlgwn .wn-body ul,
+.dlgwn .wn-body ol { margin: 6px 0; padding-left: 20px; }
+.dlgwn .wn-body li { margin: 4px 0; }
+.dlgwn .wn-body a { color: var(--accent); }
+.dlgwn .wn-body hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
+.dlgwn .wn-body code {
+  background: var(--panel);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+.dlgwn .wn-body pre {
+  background: var(--panel);
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow: auto;
+}
+.dlgwn .wn-body pre code { background: none; padding: 0; }
+.dlgwn .wn-foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 22px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.dlgwn .wn-foot .chip { text-decoration: none; }
+dialog.dlgwn[open] .wn-head { animation: wnItemIn 300ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+dialog.dlgwn[open] .wn-body > * { animation: wnItemIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+dialog.dlgwn[open] .wn-body > *:nth-child(1) { animation-delay: 50ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(2) { animation-delay: 105ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(3) { animation-delay: 160ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(4) { animation-delay: 215ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(5) { animation-delay: 270ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(6) { animation-delay: 325ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(7) { animation-delay: 380ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(8) { animation-delay: 435ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(9) { animation-delay: 490ms; }
+dialog.dlgwn[open] .wn-body > *:nth-child(10) { animation-delay: 545ms; }
+html.narrow dialog.dlg.dlgwn { width: 96vw; max-width: 96vw; max-height: 88vh; }
+html.narrow .dlgwn .wn { max-height: 88vh; }
+html.narrow .dlgwn .wn-head { padding: 14px 16px 10px; }
+html.narrow .dlgwn .wn-body { padding: 2px 16px 12px; }
+html.narrow .dlgwn .wn-foot { padding: 8px 16px 12px; }
+@media (prefers-reduced-motion: reduce) {
+  #updateBar:not([hidden]),
+  dialog.dlgwn[open],
+  dialog.dlgwn[open]::backdrop,
+  dialog.dlgwn[open] .wn-head,
+  dialog.dlgwn[open] .wn-body > * { animation: none; }
+}
 .dlgform { padding: 16px 18px 14px; }
 .dlgform h3 { margin: 0 0 14px; font-size: 14px; }
 .fld { display: block; margin-bottom: 12px; font-size: 12px; color: var(--muted); }

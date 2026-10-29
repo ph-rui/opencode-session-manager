@@ -18,6 +18,20 @@
     <button type="button" class="chip primary" id="btnUpdateNow">更新</button>
     <button type="button" class="chip nf" id="btnUpdateLater">稍后</button>
   </div>
+  <dialog id="dlgWhatsNew" class="dlg dlgwn" aria-labelledby="wnTitle">
+    <div class="wn">
+      <div class="wn-head">
+        <span class="wn-kicker">OpenCode 已更新</span>
+        <h3 id="wnTitle">What's new</h3>
+        <p class="wn-sub" id="wnSub"></p>
+      </div>
+      <div class="wn-body" id="wnBody"></div>
+      <div class="wn-foot">
+        <a class="chip" id="wnLink" href="#" target="_blank" rel="noopener" hidden>在 GitHub 查看</a>
+        <button type="button" class="chip primary" id="wnClose">开始使用</button>
+      </div>
+    </div>
+  </dialog>
   <main>
     <section id="listpane"><table id="list"><tbody></tbody></table><div id="listState" class="msgstate" hidden><span id="listStateText"></span><button type="button" id="lsRetry" class="chip" hidden>重试</button></div><button id="loadMore" hidden></button></section>
     <div class="resizer" id="resizer-mid"></div>
@@ -247,14 +261,9 @@
         if (window.__updateFail) return fail(500, { ok: false, step: 'update', error: 'download failed' });
         return json(window.__updateReply || { ok: true, newVersion: '9.9.9' });
       }
-      if (u === '/__update-check') {
-        if (window.__updateCheckFail) return fail(500, { message: 'check boom' });
-        return json(window.__updateCheckReply || { ok: false });
-      }
-      if (method === 'POST' && u === '/__update') {
-        if (window.__updateConflict) return fail(409, { error: '已有更新在进行中' });
-        if (window.__updateFail) return fail(500, { ok: false, step: 'update', error: 'download failed' });
-        return json(window.__updateReply || { ok: true, newVersion: '9.9.9' });
+      if (u.indexOf('/__release-notes') === 0) {
+        if (window.__notesFail) return fail(500, { message: 'notes boom' });
+        return json(window.__notesReply || { ok: false });
       }
       if (u.indexOf('/api/config') === 0) {
         if (window.__statusFail.config) return fail(500, { message: 'config boom' });
@@ -1699,10 +1708,14 @@
       window.__updateFail = false;
       window.__updateConflict = false;
       window.__updateReply = null;
+      window.__notesReply = null;
+      window.__notesFail = false;
+      whatsNewShownFor = '';
       q('#updateBar').hidden = true;
       q('#btnUpdateNow').disabled = false;
       q('#btnUpdateLater').disabled = false;
       setupUpdateBar(); // 测试页 init 不跑,手动接线(同 §8.100 的做法)
+      setupWhatsNew();
 
       // 拿不到版本(ok:false)→ 静默不弹
       await checkForUpdate();
@@ -1751,6 +1764,14 @@
       T('§8.103 复位后再次弹出', q('#updateBar').hidden === false);
 
       // 一键更新:确认 + 请求 + 进度态
+      window.__updateReply = { ok: true, newVersion: '2.2.1' };
+      window.__notesReply = {
+        ok: true,
+        version: '2.2.1',
+        name: 'v2.2.1',
+        url: 'https://github.com/anomalyco/opencode/releases/tag/v2.2.1',
+        body: '### Highlights\n\n- Keep **working** toward a goal\n- Generate images\n',
+      };
       window.confirmMsg = null;
       q('#btnUpdateNow').click();
       T('§8.103 点「更新」先弹确认框',
@@ -1768,6 +1789,51 @@
         q('#updateText').textContent.indexOf('已更新到') >= 0 &&
         q('#btnUpdateNow').disabled === false,
         q('#updateText').textContent);
+
+      /* ---- §8.104 更新后的 What's new(照 TUI 更新完弹的那一页) ---- */
+      var wnCalls = window.calls.filter(function (c) { return c.url.indexOf('/__release-notes') === 0; });
+      T('§8.104 更新成功后按新版本拉更新说明',
+        wnCalls.length === 1 && wnCalls[0].url.indexOf('version=2.2.1') >= 0,
+        wnCalls.map(function (c) { return c.url; }));
+      T('§8.104 更新成功后弹出 What\'s new 且标题带版本',
+        q('#dlgWhatsNew').open === true && q('#wnTitle').textContent.indexOf('2.2.1') >= 0,
+        { open: q('#dlgWhatsNew').open, title: q('#wnTitle').textContent });
+      T('§8.104 正文按 Markdown 渲染(标题/粗体/列表)',
+        !!q('#wnBody').querySelector('h3') &&
+        !!q('#wnBody').querySelector('strong') &&
+        q('#wnBody').querySelectorAll('li').length === 2,
+        q('#wnBody').innerHTML);
+      T('§8.104 GitHub 链接指向对应 release',
+        q('#wnLink').hidden === false &&
+        q('#wnLink').getAttribute('href').indexOf('releases/tag/v2.2.1') >= 0,
+        q('#wnLink').getAttribute('href'));
+
+      // 关闭:先播退场再真正 close(测试里把动画直接拨到终点)
+      q('#wnClose').click();
+      var wnStillOpen = q('#dlgWhatsNew').open;
+      q('#dlgWhatsNew').getAnimations().forEach(function (a) { a.finish(); });
+      for (var i = 0; i < 10; i++) await Promise.resolve();
+      T('§8.104 关闭按钮先播退场再关闭',
+        wnStillOpen === true && q('#dlgWhatsNew').open === false,
+        { stillOpen: wnStillOpen, open: q('#dlgWhatsNew').open });
+
+      // 同一版本只弹一次
+      await showWhatsNew('2.2.1');
+      T('§8.104 同一版本只弹一次', q('#dlgWhatsNew').open === false);
+
+      // 拉不到说明 / 服务端 ok:false:静默跳过
+      whatsNewShownFor = '';
+      window.__notesFail = true;
+      await showWhatsNew('2.2.2');
+      T('§8.104 说明拉取失败静默不弹',
+        q('#dlgWhatsNew').open === false);
+      window.__notesFail = false;
+      whatsNewShownFor = '';
+      window.__notesReply = { ok: false };
+      await showWhatsNew('2.2.3');
+      T('§8.104 服务端 ok:false 静默不弹',
+        q('#dlgWhatsNew').open === false);
+      window.__notesReply = null;
       // 手动模拟「服务恢复后的复检」(真实代码在 setTimeout 3s 回调里做)
       updateLastCheck = 0;
       window.__updateCheckReply = { ok: true, current: '2.2.0', latest: '2.2.0', updateAvailable: false };

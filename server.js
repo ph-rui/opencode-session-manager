@@ -808,8 +808,10 @@ async function health(res) {
  * 内网机器可能根本连不上 GitHub —— 检查失败一律静默(ok:false),前端不弹。
  */
 const OPENCODE_TAGS_URL = 'https://api.github.com/repos/anomalyco/opencode/tags';
+const OPENCODE_RELEASE_URL = 'https://api.github.com/repos/anomalyco/opencode/releases/tags/v';
 const OPENCODE_VERSION_TTL_MS = 5 * 60 * 1000; // 当前版本缓存(--version 很快,短缓存即可)
 const OPENCODE_LATEST_TTL_MS = 60 * 60 * 1000; // 最新版缓存(GitHub 限流,长缓存)
+const RELEASE_NOTES_TTL_MS = 60 * 60 * 1000; // 更新说明按版本缓存,同一版不会变
 let updateCurrent = { version: '', at: 0 };
 let updateLatest = { version: '', at: 0 };
 let updateInFlight = false;
@@ -942,6 +944,59 @@ async function doUpdateHandler(req, res) {
   }
 }
 
+/* --------------- 更新说明(§8.104):TUI 更新后弹的那份 What's new ---------------
+ * TUI 的更新说明就是 GitHub release 的正文(逐字一致),所以这里按 tag 取一份
+ * 原样交给前端,由面板现成的 md() 渲染。版本号只收 x.y.z(拼进 URL),拒绝
+ * 其它任何输入;拉不到就 ok:false,前端静默不弹 —— 与更新检查同一套策略。
+ */
+const releaseNotesCache = new Map(); // version -> { at, data }
+
+async function fetchReleaseNotes(version) {
+  const hit = releaseNotesCache.get(version);
+  if (hit && Date.now() - hit.at < RELEASE_NOTES_TTL_MS) return hit.data;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const r = await fetch(OPENCODE_RELEASE_URL + version, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'opencode-session-manager',
+      },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error('GitHub HTTP ' + r.status);
+    const j = await r.json();
+    const body = String((j && j.body) || '');
+    if (!body.trim()) throw new Error('release 没有正文');
+    const data = {
+      version,
+      name: String((j && j.name) || 'v' + version),
+      body,
+      url: String((j && j.html_url) || ''),
+    };
+    releaseNotesCache.set(version, { at: Date.now(), data });
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function releaseNotesHandler(req, res) {
+  res.setHeader('cache-control', 'no-store');
+  const q = new URL(req.url, 'http://localhost').searchParams;
+  const version = String(q.get('version') || '').replace(/^v/i, '');
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    return sendJson(res, 400, { ok: false, error: '版本号不合法' });
+  }
+  try {
+    const data = await fetchReleaseNotes(version);
+    sendJson(res, 200, { ok: true, ...data });
+  } catch (_) {
+    // 断网 / 限流 / release 没有正文:静默,更新条那边已经报过成功了
+    sendJson(res, 200, { ok: false, version });
+  }
+}
+
 /* ------------------------------- 路由 ------------------------------- */
 
 const server = http.createServer((req, res) => {
@@ -982,6 +1037,12 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__update') {
     doUpdateHandler(req, res).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { error: String(e) });
+    });
+    return;
+  }
+  if (url === '/__release-notes') {
+    releaseNotesHandler(req, res).catch((e) => {
       if (!res.headersSent) sendJson(res, 500, { error: String(e) });
     });
     return;
