@@ -234,6 +234,27 @@ table#list { width: 100%; border-collapse: collapse; }
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+/* §8.103 OpenCode 更新提示条:只在新版可用(或更新进行中)时露出,
+ * 一条琥珀细栏,不挤占会话区高度。 */
+#updateBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 3px 16px;
+  background: #fff8e1;
+  border-bottom: 1px solid #ead9a0;
+  font-size: 12px;
+}
+#updateBar[hidden] { display: none; }
+#updateBar .ubtext {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#updateBar.busy .ubtext { color: var(--muted); }
 #sessionTabs[hidden] { display: none; }
 #tabStrip {
   display: flex;

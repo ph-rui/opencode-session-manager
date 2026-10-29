@@ -46,6 +46,13 @@
     <div id="status" class="status">连接中…</div>
   </header>
 
+  <!-- §8.103 OpenCode 更新提示条(照 TUI 的 /update to install vX.Y.Z):服务端发现新版才显示 -->
+  <div id="updateBar" hidden>
+    <span id="updateText" class="ubtext"></span>
+    <button type="button" class="chip primary" id="btnUpdateNow">更新</button>
+    <button type="button" class="chip nf" id="btnUpdateLater">稍后</button>
+  </div>
+
   <main>
     <section id="listpane">
       <table id="list">

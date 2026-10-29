@@ -13,6 +13,11 @@
     <span id="count"></span><span id="archivedCount"></span>
     <div id="status" class="status"></div>
   </header>
+  <div id="updateBar" hidden>
+    <span id="updateText" class="ubtext"></span>
+    <button type="button" class="chip primary" id="btnUpdateNow">更新</button>
+    <button type="button" class="chip nf" id="btnUpdateLater">稍后</button>
+  </div>
   <main>
     <section id="listpane"><table id="list"><tbody></tbody></table><div id="listState" class="msgstate" hidden><span id="listStateText"></span><button type="button" id="lsRetry" class="chip" hidden>重试</button></div><button id="loadMore" hidden></button></section>
     <div class="resizer" id="resizer-mid"></div>
@@ -232,6 +237,24 @@
       if (u === '/__health') {
         if (window.__statusFail.health) return fail(500, { message: 'health boom' });
         return json(window.__healthReply);
+      }
+      if (u === '/__update-check') {
+        if (window.__updateCheckFail) return fail(500, { message: 'check boom' });
+        return json(window.__updateCheckReply || { ok: false });
+      }
+      if (method === 'POST' && u === '/__update') {
+        if (window.__updateConflict) return fail(409, { error: '已有更新在进行中' });
+        if (window.__updateFail) return fail(500, { ok: false, step: 'update', error: 'download failed' });
+        return json(window.__updateReply || { ok: true, newVersion: '9.9.9' });
+      }
+      if (u === '/__update-check') {
+        if (window.__updateCheckFail) return fail(500, { message: 'check boom' });
+        return json(window.__updateCheckReply || { ok: false });
+      }
+      if (method === 'POST' && u === '/__update') {
+        if (window.__updateConflict) return fail(409, { error: '已有更新在进行中' });
+        if (window.__updateFail) return fail(500, { ok: false, step: 'update', error: 'download failed' });
+        return json(window.__updateReply || { ok: true, newVersion: '9.9.9' });
       }
       if (u.indexOf('/api/config') === 0) {
         if (window.__statusFail.config) return fail(500, { message: 'config boom' });
@@ -1666,6 +1689,125 @@
         q('#toast').textContent.indexOf('move boom') >= 0 &&
         store.sessions.get('ses_a').location.directory === '/proj/a',
         { toast: q('#toast').textContent, loc: store.sessions.get('ses_a').location });
+
+      /* ================= §8.103 OpenCode 更新提示条 ================= */
+      updateBarDismissed = false;
+      updateRunning = false;
+      updateLastCheck = 0;
+      window.__updateCheckReply = null;
+      window.__updateCheckFail = false;
+      window.__updateFail = false;
+      window.__updateConflict = false;
+      window.__updateReply = null;
+      q('#updateBar').hidden = true;
+      q('#btnUpdateNow').disabled = false;
+      q('#btnUpdateLater').disabled = false;
+      setupUpdateBar(); // 测试页 init 不跑,手动接线(同 §8.100 的做法)
+
+      // 拿不到版本(ok:false)→ 静默不弹
+      await checkForUpdate();
+      T('§8.103 版本检查失败(ok:false)不弹提示条',
+        q('#updateBar').hidden === true);
+
+      // 已是最新版 → 不弹
+      updateLastCheck = 0;
+      window.__updateCheckReply = { ok: true, current: '2.2.0', latest: '2.2.0', updateAvailable: false };
+      await checkForUpdate();
+      T('§8.103 已是最新版不弹提示条',
+        q('#updateBar').hidden === true);
+
+      // 有新版本 → 弹条,文案含新旧版本
+      updateLastCheck = 0;
+      window.__updateCheckReply = { ok: true, current: '2.1.4', latest: '2.2.0', updateAvailable: true };
+      await checkForUpdate();
+      T('§8.103 有新版本弹出更新条且文案含新旧版本',
+        q('#updateBar').hidden === false &&
+        q('#updateText').textContent.indexOf('2.2.0') >= 0 &&
+        q('#updateText').textContent.indexOf('2.1.4') >= 0,
+        q('#updateText').textContent);
+      T('§8.103 更新/稍后按钮可用',
+        q('#btnUpdateNow').disabled === false && q('#btnUpdateLater').disabled === false);
+
+      // 1 小时窗口内重复检查不重发请求(窗口刚过才真正打服务端)
+      var ucBefore = window.calls.filter(function (c) { return c.url === '/__update-check'; }).length;
+      await checkForUpdate();
+      T('§8.103 检查窗口(1h)内重复调用不重发请求',
+        window.calls.filter(function (c) { return c.url === '/__update-check'; }).length === ucBefore,
+        window.calls.filter(function (c) { return c.url === '/__update-check'; }).length - ucBefore);
+      updateLastCheck = 0;
+
+      // 稍后 → 收起且本次会话内不再弹
+      q('#btnUpdateLater').click();
+      T('§8.103 点「稍后」收起提示条', q('#updateBar').hidden === true);
+      updateLastCheck = 0;
+      await checkForUpdate();
+      T('§8.103 「稍后」后有新版本也不再弹',
+        q('#updateBar').hidden === true && updateBarDismissed === true);
+
+      // 复位 dismissed → 再弹
+      updateBarDismissed = false;
+      updateLastCheck = 0;
+      await checkForUpdate();
+      T('§8.103 复位后再次弹出', q('#updateBar').hidden === false);
+
+      // 一键更新:确认 + 请求 + 进度态
+      window.confirmMsg = null;
+      q('#btnUpdateNow').click();
+      T('§8.103 点「更新」先弹确认框',
+        typeof window.confirmMsg === 'string' && window.confirmMsg.indexOf('更新') >= 0,
+        window.confirmMsg);
+      T('§8.103 更新中按钮禁用且显示进度文案',
+        q('#btnUpdateNow').disabled === true &&
+        q('#updateText').textContent.indexOf('正在更新') >= 0,
+        q('#updateText').textContent);
+      T('§8.103 更新走 POST /__update',
+        window.calls.some(function (c) { return c.url === '/__update' && c.method === 'POST'; }));
+      // 测试页 setTimeout 被桩掉:用微任务排空 runOpencodeUpdate 的 Promise 链
+      for (var i = 0; i < 20; i++) await Promise.resolve();
+      T('§8.103 更新成功后显示新版本并恢复按钮',
+        q('#updateText').textContent.indexOf('已更新到') >= 0 &&
+        q('#btnUpdateNow').disabled === false,
+        q('#updateText').textContent);
+      // 手动模拟「服务恢复后的复检」(真实代码在 setTimeout 3s 回调里做)
+      updateLastCheck = 0;
+      window.__updateCheckReply = { ok: true, current: '2.2.0', latest: '2.2.0', updateAvailable: false };
+      await checkForUpdate();
+      T('§8.103 更新成功复检到最新后自动收起',
+        q('#updateBar').hidden === true && updateRunning === false);
+
+      // 失败路径:显示服务端原因,按钮恢复
+      updateBarDismissed = false;
+      window.__updateCheckReply = { ok: true, current: '2.2.0', latest: '2.2.1', updateAvailable: true };
+      updateLastCheck = 0;
+      await checkForUpdate();
+      window.__updateFail = true;
+      q('#btnUpdateNow').click();
+      for (var i = 0; i < 20; i++) await Promise.resolve();
+      T('§8.103 更新失败显示原因且按钮恢复',
+        q('#updateText').textContent.indexOf('更新失败') >= 0 &&
+        q('#updateText').textContent.indexOf('download failed') >= 0 &&
+        q('#btnUpdateNow').disabled === false,
+        q('#updateText').textContent);
+      window.__updateFail = false;
+
+      // 409 冲突路径
+      window.__updateConflict = true;
+      q('#btnUpdateNow').click();
+      for (var i = 0; i < 20; i++) await Promise.resolve();
+      T('§8.103 更新冲突(409)显示原因',
+        q('#updateText').textContent.indexOf('在进行中') >= 0,
+        q('#updateText').textContent);
+      window.__updateConflict = false;
+
+      // 检查端点 500:不崩、提示条维持原状
+      updateBarHide();
+      window.__updateCheckFail = true;
+      updateLastCheck = 0;
+      await checkForUpdate();
+      T('§8.103 检查端点失败不崩溃且不误弹',
+        q('#updateBar').hidden === true);
+      window.__updateCheckFail = false;
+      window.__updateCheckReply = null;
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;

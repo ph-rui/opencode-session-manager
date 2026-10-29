@@ -797,6 +797,151 @@ async function health(res) {
   });
 }
 
+/* ------------------- OpenCode 版本检查与更新(§8.103) -------------------
+ * TUI 的 /update 本质是:查新版 → 更新二进制 → 重启服务。面板把这串流程
+ * 包成两个本地端点,让 UI 能一键触发。注意 /api/* 是透传给上游的,本地端点
+ * 必须走 /__ 前缀(与 /__health、/__config/diffs 同一约定)。
+ *
+ * 版本来源是 GitHub tags(anomalyco/opencode):npm 上的 opencode-ai 还停在
+ * V1 线(1.x),不能当 V2 的最新版来源。tags 接口按创建时间倒序,但为保证
+ * 严谨,取全部合法 semver 里的最大值。未认证限流 60 次/h/IP,所以缓存 1h。
+ * 内网机器可能根本连不上 GitHub —— 检查失败一律静默(ok:false),前端不弹。
+ */
+const OPENCODE_TAGS_URL = 'https://api.github.com/repos/anomalyco/opencode/tags';
+const OPENCODE_VERSION_TTL_MS = 5 * 60 * 1000; // 当前版本缓存(--version 很快,短缓存即可)
+const OPENCODE_LATEST_TTL_MS = 60 * 60 * 1000; // 最新版缓存(GitHub 限流,长缓存)
+let updateCurrent = { version: '', at: 0 };
+let updateLatest = { version: '', at: 0 };
+let updateInFlight = false;
+
+function parseSemver(s) {
+  const m = String(s).match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function cmpSemver(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 「opencode --version」的输出形如 "opencode v2.1.4";拿不到就返回空串。
+function currentOpencodeVersion() {
+  return new Promise((resolve) => {
+    execFile('opencode', ['--version'], { timeout: 8000 }, (err, stdout) => {
+      if (err) return resolve('');
+      const m = String(stdout).match(/(\d+\.\d+\.\d+)/);
+      resolve(m ? m[0] : '');
+    });
+  });
+}
+
+async function latestOpencodeVersion() {
+  if (Date.now() - updateLatest.at < OPENCODE_LATEST_TTL_MS) return updateLatest.version;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const r = await fetch(OPENCODE_TAGS_URL, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'opencode-session-manager',
+      },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error('GitHub HTTP ' + r.status);
+    const tags = await r.json();
+    let best = null;
+    if (Array.isArray(tags)) {
+      for (const t of tags) {
+        const v = parseSemver(t && t.name);
+        if (v && (!best || cmpSemver(v, best) > 0)) best = v;
+      }
+    }
+    if (best) updateLatest = { version: best.join('.'), at: Date.now() };
+  } finally {
+    clearTimeout(timer);
+  }
+  return updateLatest.version;
+}
+
+async function updateCheckHandler(res) {
+  res.setHeader('cache-control', 'no-store');
+  const now = Date.now();
+  if (now - updateCurrent.at >= OPENCODE_VERSION_TTL_MS) {
+    const v = await currentOpencodeVersion();
+    if (v) updateCurrent = { version: v, at: now };
+  }
+  let latest = '';
+  try {
+    latest = await latestOpencodeVersion();
+  } catch (_) {
+    // 断网 / 限流 / 超时:宁可不提示,也不能让面板报错
+    return sendJson(res, 200, { ok: false, current: updateCurrent.version });
+  }
+  const c = parseSemver(updateCurrent.version);
+  const l = parseSemver(latest);
+  if (!c || !l) return sendJson(res, 200, { ok: false, current: updateCurrent.version, latest });
+  sendJson(res, 200, {
+    ok: true,
+    current: updateCurrent.version,
+    latest,
+    updateAvailable: cmpSemver(l, c) > 0,
+  });
+}
+
+// 跑一条 opencode CLI 子命令,把 stdout+stderr 拼回来(更新日志要给用户看)
+function runOpencodeCli(args, timeoutMs) {
+  return new Promise((resolve) => {
+    execFile('opencode', args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const out = String(stdout || '') + String(stderr || '');
+        resolve({ code: err ? 1 : 0, out: out.trim() });
+      });
+  });
+}
+
+const clipUpdateOut = (s) => {
+  s = String(s).trim();
+  return s.length > 400 ? s.slice(-400) : s; // 更新日志很长时只留尾巴(错误通常在最后)
+};
+
+async function doUpdateHandler(req, res) {
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '只支持 POST' });
+  if (updateInFlight) return sendJson(res, 409, { error: '已有更新在进行中' });
+  updateInFlight = true;
+  try {
+    // ① CLI 自己识别安装方式(standalone 走重新下载二进制),换上新版
+    const up = await runOpencodeCli(['update'], 5 * 60 * 1000);
+    if (up.code !== 0) {
+      return sendJson(res, 500, { ok: false, step: 'update', error: clipUpdateOut(up.out) || 'opencode update 失败' });
+    }
+    // ② 重启后台服务让新二进制生效(运行中的进程持有旧 inode,替换文件不会冲突)
+    const rs = await runOpencodeCli(['service', 'restart'], 30 * 1000);
+    if (rs.code !== 0) {
+      return sendJson(res, 500, { ok: false, step: 'restart', error: clipUpdateOut(rs.out) || 'service restart 失败' });
+    }
+    // ③ 等服务恢复:版本号 + 服务地址都要拿得回来,面板的服务发现状态顺手重建
+    let newVersion = '';
+    const waitStart = Date.now();
+    while (Date.now() - waitStart < 30000) {
+      await sleepMs(2000);
+      newVersion = await currentOpencodeVersion();
+      if (newVersion && await discoverBase()) break;
+    }
+    if (!newVersion) {
+      return sendJson(res, 500, { ok: false, step: 'wait', error: '服务 30s 内未恢复,请手动 opencode service start' });
+    }
+    state.base = await discoverBase();
+    readPassword();
+    state.discoveredAt = Date.now();
+    updateCurrent = { version: newVersion, at: Date.now() }; // 版本缓存必须刷新,否则提示条还报旧版
+    sendJson(res, 200, { ok: true, newVersion });
+  } finally {
+    updateInFlight = false;
+  }
+}
+
 /* ------------------------------- 路由 ------------------------------- */
 
 const server = http.createServer((req, res) => {
@@ -825,6 +970,18 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__config/diffs') {
     configDiffs(req, res).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { error: String(e) });
+    });
+    return;
+  }
+  if (url === '/__update-check') {
+    updateCheckHandler(res).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { error: String(e) });
+    });
+    return;
+  }
+  if (url === '/__update') {
+    doUpdateHandler(req, res).catch((e) => {
       if (!res.headersSent) sendJson(res, 500, { error: String(e) });
     });
     return;

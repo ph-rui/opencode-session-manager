@@ -2966,6 +2966,32 @@ else
   echo "FAIL: §8.102 的图片 chip 预览 / object URL 回收缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R41 组:OpenCode 版本检查与一键更新(§8.103)----
+# 照 TUI 的「/update to install vX.Y.Z」:服务端拿 opencode --version 与 GitHub
+# tags 最新版比对,面板顶栏下露更新条;一键更新 = opencode update + service
+# restart + 等服务恢复。断网 / 限流静默(ok:false),更新单飞 409。
+CAP_PAGE3=$(cat "$(dirname "$0")/ui-capabilities.html")
+if has "$SERVERJS" "const OPENCODE_TAGS_URL = 'https://api.github.com/repos/anomalyco/opencode/tags';" &&
+   has "$SERVERJS" 'if (url === '\''/__update-check'\'')' &&
+   has "$SERVERJS" 'if (url === '\''/__update'\'')' &&
+   has "$SERVERJS" "runOpencodeCli(['update'], 5 * 60 * 1000)" &&
+   has "$SERVERJS" "['service', 'restart']" &&
+   has "$SERVERJS" 'let updateInFlight = false;' &&
+   has "$APPJS" 'async function checkForUpdate()' &&
+   has "$APPJS" 'async function runOpencodeUpdate()' &&
+   has "$APPJS" 'function setupUpdateBar()' &&
+   has "$APPJS" 'const UPDATE_CHECK_EVERY_MS = 60 * 60 * 1000;' &&
+   has "$HOME_HTML" 'id="updateBar"' &&
+   has "$CSS" '#updateBar {' &&
+   has "$CAP_PAGE3" '§8.103 检查窗口(1h)内重复调用不重发请求' &&
+   has "$CAP_PAGE3" '§8.103 更新成功后显示新版本并恢复按钮' &&
+   has "$CAP_PAGE3" '§8.103 更新失败显示原因且按钮恢复' &&
+   has "$CAP_PAGE3" '§8.103 更新冲突(409)显示原因'; then
+  echo "PASS: §8.103 OpenCode 版本检查与一键更新(update-check/update 端点、更新条、服务重启恢复)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.103 的 update-check/update 端点 / 更新条 / UI 断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

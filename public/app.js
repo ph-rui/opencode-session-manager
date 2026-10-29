@@ -11156,6 +11156,103 @@ function setupNarrow() {
   syncNarrowView();
 }
 
+/* ----------------------------- §8.103 OpenCode 更新提示条 -----------------------------
+ * 照 TUI 欢迎屏的「/update to install vX.Y.Z」:服务端检查当前版本
+ * (opencode --version)与最新版(GitHub tags),有新版时 topbar 与主区之间露出
+ * 一条细栏。点「更新」由服务端跑 opencode update + service restart;「稍后」
+ * 只在本页面会话内收起。断网时服务端返回 ok:false,这里保持静默。 */
+let updateBarDismissed = false;
+let updateRunning = false;
+let updateLastCheck = 0;
+const UPDATE_CHECK_EVERY_MS = 60 * 60 * 1000; // 与服务端最新版缓存同频,更频繁没有意义
+
+function updateBarSet(text, busy) {
+  const bar = $('#updateBar');
+  if (!bar) return;
+  bar.hidden = false;
+  bar.classList.toggle('busy', !!busy);
+  const t = $('#updateText');
+  if (t) t.textContent = text || '';
+  const b = $('#btnUpdateNow');
+  const l = $('#btnUpdateLater');
+  if (b) b.disabled = !!busy;
+  if (l) l.disabled = !!busy;
+}
+
+function updateBarHide() {
+  const bar = $('#updateBar');
+  if (bar) bar.hidden = true;
+}
+
+async function checkForUpdate() {
+  if (updateRunning || Date.now() - updateLastCheck < UPDATE_CHECK_EVERY_MS) return;
+  updateLastCheck = Date.now();
+  let j = null;
+  try {
+    j = await api('/__update-check');
+  } catch (_) {
+    return; // 服务没起 / 鉴权失败:静默,健康检查那条会说话
+  }
+  if (!j || j.ok !== true) return; // 断网 / 版本拿不全:不弹,也不报错
+  if (j.updateAvailable) {
+    if (!updateBarDismissed) {
+      updateBarSet('OpenCode ' + j.latest + ' 可用(当前 ' + j.current + ')', false);
+    }
+  } else {
+    updateBarHide(); // 已是最新
+  }
+}
+
+async function runOpencodeUpdate() {
+  if (updateRunning) return;
+  updateRunning = true;
+  updateBarSet('正在更新…(下载新二进制,视网速可能几分钟)', true);
+  let j = null;
+  try {
+    j = await api('/__update', { method: 'POST' });
+  } catch (e) {
+    updateBarSet('更新失败:' + String(e.message || e).slice(0, 160), false);
+    updateRunning = false;
+    return;
+  }
+  if (j && j.ok) {
+    // 更新已完成,按钮恢复可用(防双跑靠 updateRunning 与服务端单飞,不靠禁用);
+    // 3s 后复检,版本追平就收起整条。
+    updateBarSet('已更新到 v' + j.newVersion + ',服务已重启,本页会自动重连…', false);
+    updateRunning = false;
+    // 服务刚重启:给它几秒恢复,再强制复检(版本追平后自动收起)并刷新列表
+    setTimeout(() => {
+      updateLastCheck = 0;
+      checkForUpdate();
+      loadSessions({ auto: true });
+      loadActive();
+    }, 3000);
+  } else {
+    const msg = (j && (j.error || j.step)) || '未知错误';
+    updateBarSet('更新失败:' + String(msg).slice(0, 160), false);
+    updateRunning = false;
+  }
+}
+
+function setupUpdateBar() {
+  const bar = $('#updateBar');
+  if (!bar || bar.dataset.wired === '1') return;
+  bar.dataset.wired = '1';
+  const b = $('#btnUpdateNow');
+  const l = $('#btnUpdateLater');
+  if (b) b.addEventListener('click', () => {
+    if (updateRunning) return;
+    if (!window.confirm('要更新 OpenCode 到最新版吗?后台服务会重启(会话短暂断线后自动恢复)。')) return;
+    runOpencodeUpdate();
+  });
+  if (l) l.addEventListener('click', () => {
+    updateBarDismissed = true;
+    updateBarHide();
+  });
+  setInterval(checkForUpdate, UPDATE_CHECK_EVERY_MS);
+  checkForUpdate(); // 首屏查一次(异步,不挡渲染)
+}
+
 function init() {
   // §8.59 先把上次的标签栏画出来(标题是刷新前的快照),再拉列表对账
   store.tabs = readTabs();
@@ -11185,6 +11282,7 @@ function init() {
   setupRepinWatch(); // 盯内容高度的补贴底(§8.46)
   setupDiffView(); // diff 卡片的并排 / 统一视图切换(§8.52,仅桌面)
   setupAttachments();
+  setupUpdateBar(); // §8.103 OpenCode 新版提示条(照 TUI 的 /update)
   setupReasonLazy(); // §8.99 折着的思考块:展开时再补正文
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)
