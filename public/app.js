@@ -4891,11 +4891,20 @@ async function loadDiffPref() {
   }
 }
 
-// 面板(聊天区)够不够宽放两栏;量 #messages,拿不到就退回窗口宽度
+/* 面板(聊天区)够不够宽放两栏;量 #messages,拿不到就退回窗口宽度。
+ *
+ * 这个值【必须】缓存。diffHtml() 是逐张卡问一次的,而读 clientWidth 是在脏树上强制
+ * 一次整篇排版:整表重建时每插一条消息 DOM 就脏一次,紧接着下一张卡又问宽度 ——
+ * 6000 条消息 / 30 万节点的会话实测 1146 张 diff 卡共花 55s(真正拼 HTML 只占 3s),
+ * 这就是「对话久了切标签要等十几秒」的根因。宽度变了由 setupDiffView 的
+ * ResizeObserver 清缓存(syncDiffWidth),判定口径与每次现量完全一致。 */
+let diffWideCache = null;
 function diffWide() {
+  if (diffWideCache !== null) return diffWideCache;
   const box = document.getElementById('messages');
   const w = box ? box.clientWidth : window.innerWidth;
-  return w >= DIFF_SPLIT_MIN_PX;
+  diffWideCache = w >= DIFF_SPLIT_MIN_PX;
+  return diffWideCache;
 }
 
 // 渲染时的完整条件:窄屏一票否决,桌面再看宽度
@@ -5071,6 +5080,7 @@ function toggleDiffView(btn) {
 // (TUI 的 splitAvailable() 也是这么随宽度重算的);平时的 resize 不动 DOM。
 let diffWideSeen = null;
 function syncDiffWidth() {
+  diffWideCache = null; // 宽度真的变了:上一次量到的值作废,这一趟重新量
   const wide = diffCanSplit();
   if (diffWideSeen === null) { diffWideSeen = wide; return; }
   if (wide === diffWideSeen) return;

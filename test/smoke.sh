@@ -3017,6 +3017,23 @@ else
   echo "FAIL: §8.104 的 release-notes 路由 / 弹窗 / 动画缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R43 组:面板宽度只量一次(§8.105)----
+# diffHtml() 逐张卡问「够不够宽分栏」,每次现量 clientWidth 就是在脏树上强制整篇
+# 排版:整表重建时每插一条消息 DOM 就脏一次,接着下一张卡又问 —— 用户实测「对话久
+# 了切标签十几秒」就是这么来的。缓存一次、宽度变了(syncDiffWidth)才作废。
+if has "$APPJS" 'let diffWideCache = null;' &&
+   has "$APPJS" 'if (diffWideCache !== null) return diffWideCache;' &&
+   has "$APPJS" 'diffWideCache = w >= DIFF_SPLIT_MIN_PX;' &&
+   has "$APPJS" 'diffWideCache = null; // 宽度真的变了' &&
+   has "$APPJS" 'function syncDiffWidth(' &&
+   has "$APPJS" 'new ResizeObserver(' &&
+   has "$TOOLS_PAGE" '§8.105 同一宽度下 diffWide 只查一次 #messages(再问都走缓存)' &&
+   has "$TOOLS_PAGE" '§8.105 宽度变了(syncDiffWidth)才作废缓存、重新量一次'; then
+  echo "PASS: §8.105 面板宽度只量一次(diff 卡片不再逐张强制排版)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.105 的 diffWide 缓存 / 宽度变化作废 / UI 断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

@@ -1486,6 +1486,44 @@
       window.diffWide = realWide;
       diffWideSeen = diffCanSplit();
 
+      /* ============ §8.105 面板宽度只量一次(长会话切标签不再逐张卡强制排版) ============
+       * diffHtml() 逐张卡问「够不够宽分栏」。每次现量 clientWidth 就是在脏树上强制一次
+       * 整篇排版:整表重建时每插一条消息 DOM 就脏一次,接着下一张卡又问 —— 6000 条消息
+       * 的会话实测 1146 张卡合计 55s(拼 HTML 只占 3s),这就是「对话久了切标签十几秒」
+       * 的根因。这里锁住:同一宽度只量一次;宽度变了(syncDiffWidth)才作废重量。 */
+      var realGetById = document.getElementById;
+      var idReads = 0;
+      document.getElementById = function (id) {
+        if (id === 'messages') idReads++;
+        return realGetById.call(document, id);
+      };
+      diffWideCache = null;
+      var w1 = diffWide();
+      var w2 = diffWide();
+      var many = diffHtml([
+        { file: 'a.js', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-a\n+b' },
+        { file: 'b.js', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-c\n+d' },
+        { file: 'c.js', status: 'modified', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+e' },
+      ], { pid: 'pid_many' });
+      document.getElementById = realGetById;
+      T('§8.105 同一宽度下 diffWide 只查一次 #messages(再问都走缓存)',
+        idReads === 1 && w1 === w2 && many.indexOf('dfile') >= 0,
+        { reads: idReads, w1: w1 });
+
+      diffWideCache = null;
+      diffWide();
+      idReads = 0;
+      document.getElementById = function (id) {
+        if (id === 'messages') idReads++;
+        return realGetById.call(document, id);
+      };
+      syncDiffWidth(); // ResizeObserver 那条路
+      var w3 = diffWide(); // 这次该吃刚量到的值
+      document.getElementById = realGetById;
+      T('§8.105 宽度变了(syncDiffWidth)才作废缓存、重新量一次',
+        idReads === 1 && w3 === diffWide(),
+        { reads: idReads, w3: w3 });
+
       /* ================= 复制转录(§8.72) ================= */
       store.selected = 'ses_a';
       var txMsgs = [
