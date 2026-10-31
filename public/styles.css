@@ -1604,6 +1604,104 @@ html.narrow .dlgwn .wn-foot { padding: 8px 16px 12px; }
 .dlgerr { margin: 0 0 12px; font-size: 12px; color: var(--danger); white-space: pre-wrap; word-break: break-all; }
 .dlgerr[hidden] { display: none; }
 .dlgacts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* §8.106 目录选择器:路径栏 + 快捷入口 + 目录列表 + 内联新建文件夹。
+   列表自己滚,窄屏也不会把对话框撑出屏幕;点按高度走 html.narrow .chip 的 44px。 */
+.dirrow { display: flex; gap: 8px; }
+.dirrow input { flex: 1; min-width: 0; width: auto; }
+.dirrow .chip { flex: none; }
+.dlgbrowse { width: 640px; }
+.browsebar { display: flex; gap: 8px; margin-bottom: 8px; }
+.browsebar .chip { flex: none; min-width: 40px; }
+.browsepath {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-family: var(--mono);
+  color: var(--fg);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.browsepath:focus { outline: none; border-color: var(--accent); }
+.browsequick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.browsequick .chip {
+  max-width: 22em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.browsequick:empty { display: none; }
+.browselist {
+  max-height: min(46vh, 340px);
+  overflow: auto;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.browselist:focus { outline: none; border-color: var(--accent); }
+.browse-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+.browse-item + .browse-item { border-top: 1px solid #f1f1f1; }
+.browse-item.active { background: #eef6ff; }
+.browse-item .bi-ico { flex: none; width: 1.3em; text-align: center; color: var(--muted); }
+.browse-item .bi-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse-item .bi-sub {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.browse-item.hid .bi-name { color: var(--muted); }
+.browse-empty { padding: 10px; color: var(--muted); }
+.browsnew { display: flex; gap: 8px; margin-top: 10px; }
+.browsnew[hidden] { display: none; }
+.browsnew input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.browsnew input:focus { outline: none; border-color: var(--accent); }
+.browses { align-items: center; }
+.browses .bspacer { flex: 1; }
+html.narrow .browselist { max-height: max(120px, calc(100vh - 380px)); }
+html.narrow .browse-item { padding: 11px 12px; }
+/* 横屏只剩三百来像素高时,把对话框撑满可用高度,目录列表吃掉剩下的空间 —— 路径栏、
+   快捷入口和「选择此目录」都留在眼前;新建文件夹那一行展开时不够就整张表单自己滚。 */
+html.short dialog.dlgbrowse {
+  height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
+}
+html.short .dlgbrowse .dlgform {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+}
+html.short .dlgbrowse .dlgform > * { flex: none; }
+html.short .dlgbrowse .browselist { flex: 1 1 auto; min-height: 32px; max-height: none; }
+html.short .browsequick { flex-wrap: nowrap; overflow-x: auto; }
+html.short .browsequick .chip { flex: none; }
+
 /* §8.81 /status:标签 + 值两列,长路径/长模型名自己折行;手机只收窄标签列。 */
 .stbody {
   display: flex;

@@ -111,6 +111,15 @@ const store = {
   pickCurrent: undefined, // 「当前值」那一条的 key(照 TUI 的 DialogSelect 印一枚 ●)
   pickOnPick: null, // 选中回调
   pickReadonly: false, // §8.79 只读列表(/mcps):Enter / 点击只浏览,不关框也不回调
+  /* §8.106 目录选择器:当前绝对路径、子目录名、过滤词、高亮行、取数代号、
+   * 选中回调(把结果写回发起浏览的输入框)、是否正在读取。 */
+  browseAt: '',
+  browseItems: [],
+  browseFilter: '',
+  browseHi: 0,
+  browseSeq: 0,
+  browseOnPick: null,
+  browseBusy: false,
   msgError: '', // 最近一次拉消息失败的原文(空 = 没在失败);画成 #messages 末尾那条状态行
   msgLoading: false, // 「正在加载消息…」是不是真露出来了(慢到 MSG_LOADING_DELAY_MS 才露)
   msgSeq: 0, // 拉消息的「代」号:切会话或新请求一来,旧的重试/在途响应就作废
@@ -1684,6 +1693,335 @@ async function submitImport() {
   }
   setBusy(btn, false);
   showDlgErr(err, '导入失败:' + (lastErr ? lastErr.message : '未知错误'));
+}
+
+/* ------------------------- §8.106 目录选择器 -------------------------
+ * 新建 / 导入要填「工程目录」,在手机上把一个绝对路径一个字一个字敲进去太难。
+ * 这里做一个文件管理器式的浏览框:逐级进入子目录、上一级、快捷入口(主目录 / 根 /
+ * 最近用过的工程目录)、边打边筛,还能就地新建文件夹。
+ *
+ * 列目录用上游已有的 GET /api/fs/list(经面板代理,不新增取数端点);新建文件夹
+ * 上游没有 mkdir,走本面板的 POST /__fs/mkdir。
+ *
+ * 取数只认 seq 最新的那次:连续点几个目录时,先发的慢响应不能把画面拉回旧目录。
+ * 渲染与取数分开 —— 读取中也要立刻给出「读取中…」,别让旧列表停在那儿。
+ */
+
+function browseParent(dir) {
+  const d = normPath(dir || '/');
+  return d === '/' ? '/' : normPath(d + '/..');
+}
+
+function browseJoin(dir, name) {
+  return normPath(String(dir || '/') + '/' + name);
+}
+
+// 只列目录;上游的目录项带结尾斜杠(".git/"),去掉才是名字。
+function browseDirNames(data) {
+  return (Array.isArray(data) ? data : [])
+    .filter((it) => it && it.type === 'directory')
+    .map((it) => String(it.path || '').replace(/\/+$/, ''))
+    .filter((n) => n && n !== '.' && n !== '..')
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+}
+
+function browseErr(msg) {
+  const el = $('#browseErr');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.hidden = !msg;
+}
+
+function browseRows() {
+  const q = (store.browseFilter || '').trim().toLowerCase();
+  if (!q) return store.browseItems;
+  return store.browseItems.filter((n) => n.toLowerCase().indexOf(q) >= 0);
+}
+
+// 列表里的行数:根目录没有「..」那一行
+function browseRowCount() {
+  return browseRows().length + (store.browseAt && store.browseAt !== '/' ? 1 : 0);
+}
+
+function paintBrowseList() {
+  const box = $('#browseList');
+  if (!box) return;
+  const canUp = !!store.browseAt && store.browseAt !== '/';
+  const rows = browseRows();
+  const n = rows.length + (canUp ? 1 : 0);
+  if (store.browseHi >= n) store.browseHi = n ? n - 1 : 0;
+  let html = '';
+  if (store.browseBusy) {
+    html = '<div class="browse-empty">读取中…</div>';
+  } else {
+    if (canUp) {
+      html +=
+        '<div class="browse-item up' + (store.browseHi === 0 ? ' active' : '') +
+        '" role="option" data-hi="0">' +
+        '<span class="bi-ico">↰</span><span class="bi-name">..</span>' +
+        '<span class="bi-sub">' + esc(browseParent(store.browseAt)) + '</span></div>';
+    }
+    const off = canUp ? 1 : 0;
+    rows.forEach((name, i) => {
+      html +=
+        '<div class="browse-item' + (store.browseHi === i + off ? ' active' : '') +
+        (name[0] === '.' ? ' hid' : '') + '" role="option" data-hi="' + (i + off) + '">' +
+        '<span class="bi-ico">▸</span><span class="bi-name">' + esc(name) + '</span></div>';
+    });
+    if (!rows.length) {
+      html +=
+        '<div class="browse-empty">' +
+        ((store.browseFilter || '').trim() ? '没有匹配的目录' : '这里没有子目录') +
+        '</div>';
+    }
+  }
+  box.innerHTML = html;
+  const act = box.querySelector('.browse-item.active');
+  if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
+}
+
+function paintBrowseQuick() {
+  const box = $('#browseQuick');
+  if (!box) return;
+  const out = [];
+  const home = String(store.home || '').trim();
+  if (home && home[0] === '/') out.push({ label: '主目录', path: home });
+  out.push({ label: '根目录', path: '/' });
+  Array.from(store.seenDirs || []).forEach((d) => {
+    if (out.length >= 6) return;
+    if (!d || d[0] !== '/' || out.some((x) => x.path === d)) return;
+    out.push({ label: dirBase(d) || d, path: d });
+  });
+  box.innerHTML = out
+    .map(
+      (x) =>
+        '<button type="button" class="chip" data-path="' + esc(x.path) +
+        '" title="' + esc(x.path) + '">' + esc(x.label) + '</button>'
+    )
+    .join('');
+}
+
+// 进入某个绝对目录;返回 Promise 方便测试等它落地。
+function browseGo(dir) {
+  const raw = String(dir == null ? '' : dir).trim();
+  if (!raw) return Promise.resolve();
+  if (raw[0] !== '/') {
+    browseErr('目录需要是绝对路径');
+    return Promise.resolve();
+  }
+  const at = normPath(raw);
+  const seq = ++store.browseSeq;
+  store.browseAt = at;
+  store.browseBusy = true;
+  browseErr('');
+  const input = $('#browsePath');
+  if (input) input.value = at;
+  paintBrowseList();
+  const qs = new URLSearchParams({ 'location[directory]': at }).toString();
+  return api('/api/fs/list?' + qs)
+    .then((j) => {
+      if (seq !== store.browseSeq) return; // 已经被后一次请求取代
+      store.browseBusy = false;
+      const base = normPath((j && j.location && j.location.directory) || at);
+      store.browseAt = base;
+      if (input) input.value = base;
+      store.browseItems = browseDirNames(j && j.data);
+      store.browseHi = 0;
+      paintBrowseList();
+    })
+    .catch((e) => {
+      if (seq !== store.browseSeq) return;
+      store.browseBusy = false;
+      store.browseItems = [];
+      store.browseHi = 0;
+      const msg = e && e.status === 404 ? '目录不存在或无法访问' : '读取失败:' + e.message;
+      browseErr(msg);
+      paintBrowseList();
+    });
+}
+
+// 列表里第 hi 行(含最上面的「..」)被点/被回车
+function browseActivate(hi) {
+  const canUp = !!store.browseAt && store.browseAt !== '/';
+  if (canUp && hi === 0) return browseGo(browseParent(store.browseAt));
+  const name = browseRows()[hi - (canUp ? 1 : 0)];
+  if (!name) return Promise.resolve();
+  return browseGo(browseJoin(store.browseAt, name));
+}
+
+function browseConfirm() {
+  const raw = String(($('#browsePath') && $('#browsePath').value) || '').trim();
+  if (!raw || raw[0] !== '/') return browseErr('目录需要是绝对路径');
+  const at = normPath(raw);
+  const fn = store.browseOnPick;
+  store.browseOnPick = null;
+  closeDlg($('#dlgBrowse'));
+  if (fn) fn(at);
+}
+
+function browseNewFolderOpen() {
+  const row = $('#browseNewRow');
+  if (!row) return;
+  row.hidden = false;
+  const n = $('#browseNewName');
+  if (n) {
+    n.value = '';
+    n.focus();
+  }
+  browseErr('');
+}
+
+function submitBrowseNewFolder() {
+  const name = String(($('#browseNewName') && $('#browseNewName').value) || '').trim();
+  if (!name) {
+    browseErr('请填写文件夹名字');
+    return Promise.resolve();
+  }
+  if (name.indexOf('/') >= 0 || name.indexOf('\0') >= 0 || name === '.' || name === '..') {
+    browseErr('名字不能包含 /,也不能是 . 或 ..');
+    return Promise.resolve();
+  }
+  if (!store.browseAt || store.browseAt[0] !== '/') {
+    browseErr('还没有选中目录');
+    return Promise.resolve();
+  }
+  const target = browseJoin(store.browseAt, name);
+  const btn = $('#browseNewOk');
+  setBusy(btn, true, '创建中…');
+  return api('/__fs/mkdir', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: target }),
+  })
+    .then(() => {
+      const row = $('#browseNewRow');
+      if (row) row.hidden = true;
+      const n = $('#browseNewName');
+      if (n) n.value = '';
+      // 新建完直接进去:建文件夹就是为了用它
+      store.browseFilter = '';
+      const f = $('#browseFilter');
+      if (f) f.value = '';
+      setBusy(btn, false);
+      return browseGo(target);
+    })
+    .catch((e) => {
+      setBusy(btn, false);
+      browseErr('新建文件夹失败:' + e.message);
+    });
+}
+
+/* 打开目录选择器:inputSel 是要回填的输入框,onPick 可选(如新建会话要刷新
+ * agent/model 列表)。起始目录按「输入框里的绝对路径 → 上次选的工程目录 →
+ * home → /」退让;手输的相对路径不拿来当起点。 */
+function browseOpen(inputSel, onPick) {
+  const input = inputSel ? $(inputSel) : null;
+  const typed = String((input && input.value) || '').trim();
+  let start = typed && typed[0] === '/' ? typed : '';
+  if (!start && store.directory && store.directory[0] === '/') start = store.directory;
+  if (!start && store.home && store.home[0] === '/') start = store.home;
+  if (!start) start = '/';
+
+  store.browseFilter = '';
+  store.browseHi = 0;
+  store.browseBusy = false;
+  store.browseItems = [];
+  const f = $('#browseFilter');
+  if (f) f.value = '';
+  const row = $('#browseNewRow');
+  if (row) row.hidden = true;
+  const n = $('#browseNewName');
+  if (n) n.value = '';
+  browseErr('');
+  paintBrowseQuick();
+  store.browseOnPick = (p) => {
+    if (input) input.value = p;
+    if (onPick) onPick(p);
+  };
+  openDlg($('#dlgBrowse'));
+  const box = $('#browseList');
+  if (box && box.focus) box.focus();
+  return browseGo(start);
+}
+
+function browseKey(e) {
+  const t = e.target;
+  if (t && t.closest && t.closest('button')) return; // 按钮的 Enter 归按钮自己
+  // 这几个输入框自己有 Enter 语义,别抢
+  if (t && (t.id === 'browsePath' || t.id === 'browseFilter' || t.id === 'browseNewName')) return;
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+  const n = browseRowCount();
+  if (!n) return;
+  if (e.preventDefault) e.preventDefault();
+  if (e.key === 'Enter') {
+    browseActivate(store.browseHi);
+    return;
+  }
+  store.browseHi = (store.browseHi + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+  paintBrowseList();
+}
+
+function setupBrowse() {
+  const dlg = $('#dlgBrowse');
+  if (!dlg) return;
+  const up = $('#browseUp');
+  if (up) up.addEventListener('click', () => browseGo(browseParent(store.browseAt || '/')));
+  const path = $('#browsePath');
+  if (path) {
+    path.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      browseGo(path.value);
+    });
+  }
+  const filter = $('#browseFilter');
+  if (filter) {
+    filter.addEventListener('input', () => {
+      store.browseFilter = filter.value;
+      store.browseHi = 0;
+      paintBrowseList();
+    });
+  }
+  const list = $('#browseList');
+  if (list) {
+    list.addEventListener('click', (e) => {
+      const row = e.target.closest('.browse-item');
+      if (row) browseActivate(Number(row.dataset.hi));
+    });
+  }
+  const quick = $('#browseQuick');
+  if (quick) {
+    quick.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-path]');
+      if (b) browseGo(b.dataset.path);
+    });
+  }
+  const nf = $('#browseNewFolder');
+  if (nf) nf.addEventListener('click', browseNewFolderOpen);
+  const nok = $('#browseNewOk');
+  if (nok) nok.addEventListener('click', submitBrowseNewFolder);
+  const nc = $('#browseNewCancel');
+  if (nc) {
+    nc.addEventListener('click', () => {
+      const row = $('#browseNewRow');
+      if (row) row.hidden = true;
+      browseErr('');
+    });
+  }
+  const nn = $('#browseNewName');
+  if (nn) {
+    nn.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      submitBrowseNewFolder();
+    });
+  }
+  const pick = $('#browsePick');
+  if (pick) pick.addEventListener('click', browseConfirm);
+  dlg.addEventListener('keydown', browseKey);
+  dlg.addEventListener('close', () => {
+    store.browseOnPick = null;
+  });
 }
 
 /* §8.80 导出格式照 TUI 的 DialogExportOptions:Markdown(转录) / JSON。
@@ -11370,6 +11708,7 @@ function init() {
   setupReasonLazy(); // §8.99 折着的思考块:展开时再补正文
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)
+  setupBrowse(); // §8.106 目录选择器(新建 / 导入的「浏览…」)
   setupExport(); // §8.80 导出格式在 Markdown / JSON 间切换
   paintDelivery();
 
@@ -11400,6 +11739,9 @@ function init() {
   $('#opParent').addEventListener('click', () => goParent(store.selected));
   $('#newOk').addEventListener('click', submitNew);
   $('#newDir').addEventListener('change', fillNewSelectors);
+  // §8.106 目录选择器:选完回填输入框;新建会话还要按新目录重拉 agent/model
+  $('#newBrowse').addEventListener('click', () => browseOpen('#newDir', fillNewSelectors));
+  $('#importBrowse').addEventListener('click', () => browseOpen('#importDir'));
   $('#newWt').addEventListener('change', paintNewWorktree);
   $('#newWtGen').addEventListener('click', () => {
     $('#newWtName').value = wtSlug();

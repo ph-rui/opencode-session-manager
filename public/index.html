@@ -201,9 +201,12 @@
   <dialog id="dlgNew" class="dlg">
     <div class="dlgform">
       <h3>新建会话</h3>
-      <label class="fld"><span>工程目录</span>
-        <input id="newDir" list="dirList" placeholder="/绝对/路径" autocomplete="off">
-      </label>
+      <div class="fld"><span>工程目录</span>
+        <div class="dirrow">
+          <input id="newDir" list="dirList" placeholder="/绝对/路径" autocomplete="off">
+          <button type="button" class="chip" id="newBrowse" title="浏览文件系统">浏览…</button>
+        </div>
+      </div>
       <label class="chkfld"><input type="checkbox" id="newWt"><span>在 worktree 中新建</span></label>
       <div class="fldrow" id="newWtRow" hidden>
         <label class="fld"><span>worktree 名字</span>
@@ -236,9 +239,12 @@
       <label class="fld"><span>JSON 文件</span>
         <input type="file" id="importFile" accept=".json,application/json">
       </label>
-      <label class="fld"><span>目标工程目录</span>
-        <input id="importDir" list="dirList" placeholder="留空 = 用文件里记录的目录" autocomplete="off">
-      </label>
+      <div class="fld"><span>目标工程目录</span>
+        <div class="dirrow">
+          <input id="importDir" list="dirList" placeholder="留空 = 用文件里记录的目录" autocomplete="off">
+          <button type="button" class="chip" id="importBrowse" title="浏览文件系统">浏览…</button>
+        </div>
+      </div>
       <p class="dlghint">
         接受本面板「导出」得到的文件(也可交给 <code>opencode session import</code>)。
         服务端会为新会话分配目录与项目,导入时<b>必须换新 ID</b>,因此文件名冲突时会自动重试。
@@ -247,6 +253,33 @@
       <div class="dlgacts">
         <button type="button" class="chip" data-close>取消</button>
         <button type="button" class="chip primary" id="importOk">导入</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- §8.106 目录选择器:新建 / 导入的「工程目录」像文件管理器一样逐级浏览。
+       列目录走上游已有的 /api/fs/list(经面板代理),新建文件夹走本面板的 /__fs/mkdir。 -->
+  <dialog id="dlgBrowse" class="dlg dlgbrowse" aria-label="选择目录">
+    <div class="dlgform">
+      <h3>选择目录</h3>
+      <div class="browsebar">
+        <button type="button" class="chip" id="browseUp" title="上一级" aria-label="上一级">↑</button>
+        <input id="browsePath" class="browsepath" autocomplete="off" spellcheck="false" placeholder="/绝对/路径">
+      </div>
+      <div class="browsequick" id="browseQuick" aria-label="快捷入口"></div>
+      <input id="browseFilter" class="pickfilter" type="text" autocomplete="off" placeholder="筛选目录…">
+      <div id="browseList" class="browselist" role="listbox" aria-label="子目录" tabindex="-1"></div>
+      <p class="dlgerr" id="browseErr" hidden></p>
+      <div class="browsnew" id="browseNewRow" hidden>
+        <input id="browseNewName" placeholder="新文件夹名字" autocomplete="off">
+        <button type="button" class="chip primary" id="browseNewOk">创建</button>
+        <button type="button" class="chip" id="browseNewCancel">取消</button>
+      </div>
+      <div class="dlgacts browses">
+        <button type="button" class="chip" id="browseNewFolder">新建文件夹</button>
+        <span class="bspacer"></span>
+        <button type="button" class="chip" data-close>取消</button>
+        <button type="button" class="chip primary" id="browsePick">选择此目录</button>
       </div>
     </div>
   </dialog>

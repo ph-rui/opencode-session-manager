@@ -997,6 +997,46 @@ async function releaseNotesHandler(req, res) {
   }
 }
 
+/* §8.106 目录选择器的「新建文件夹」。
+ * 上游的 fs 组只有 list / read / find / write,没有 mkdir(写空文件冒充不了目录),
+ * 所以本面板补一个本地端点。约定同 /__config/diffs:POST + JSON { path }。
+ * 只建一层(父目录必须已存在),path 必须是绝对路径;已存在给 409,前端照实提示。
+ * 鉴权与来源白名单都在路由入口统一做,这里不用再判断。 */
+async function fsMkdir(req, res) {
+  res.setHeader('cache-control', 'no-store');
+  if (req.method !== 'POST') {
+    res.setHeader('allow', 'POST');
+    return sendJson(res, 405, { ok: false, error: '只支持 POST' });
+  }
+  let body = null;
+  try {
+    const raw = await readRequestBody(req);
+    if (raw.length > 4096) return sendJson(res, 413, { ok: false, error: '请求正文过长' });
+    body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
+  } catch (_) {
+    return sendJson(res, 400, { ok: false, error: '请求正文不是合法 JSON' });
+  }
+  const p = body && body.path;
+  if (typeof p !== 'string' || !p || p[0] !== '/') {
+    return sendJson(res, 400, { ok: false, error: 'path 需要是绝对路径' });
+  }
+  if (p.indexOf('\0') >= 0) return sendJson(res, 400, { ok: false, error: 'path 含非法字符' });
+  // resolve 收掉 ./ ../ 与重复斜杠;非递归 mkdir 把「父目录不存在」留成 404。
+  const target = path.resolve(p);
+  try {
+    await fs.promises.mkdir(target);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'EEXIST') return sendJson(res, 409, { ok: false, error: '同名目录或文件已存在' });
+    if (code === 'EACCES' || code === 'EPERM') {
+      return sendJson(res, 403, { ok: false, error: '没有权限在这里新建目录' });
+    }
+    if (code === 'ENOENT') return sendJson(res, 404, { ok: false, error: '上级目录不存在' });
+    return sendJson(res, 500, { ok: false, error: '新建目录失败:' + String((e && e.message) || e) });
+  }
+  sendJson(res, 200, { ok: true, path: target });
+}
+
 /* ------------------------------- 路由 ------------------------------- */
 
 const server = http.createServer((req, res) => {
@@ -1038,6 +1078,12 @@ const server = http.createServer((req, res) => {
   if (url === '/__update') {
     doUpdateHandler(req, res).catch((e) => {
       if (!res.headersSent) sendJson(res, 500, { error: String(e) });
+    });
+    return;
+  }
+  if (url === '/__fs/mkdir') {
+    fsMkdir(req, res).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e) });
     });
     return;
   }

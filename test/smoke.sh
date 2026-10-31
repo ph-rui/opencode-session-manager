@@ -3034,6 +3034,37 @@ else
   echo "FAIL: §8.105 的 diffWide 缓存 / 宽度变化作废 / UI 断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R44 组:目录选择器(§8.106)----
+# 新建 / 导入的「工程目录」不再只能手输:点「浏览…」逐级进目录,列表走
+# /api/fs/list(上游已有),新建文件夹走本面板的 /__fs/mkdir(上游没有 mkdir)。
+if has "$SERVERJS" 'async function fsMkdir(req, res)' &&
+   has "$SERVERJS" "if (url === '/__fs/mkdir')" &&
+   has "$SERVERJS" 'await fs.promises.mkdir(target)' &&
+   has "$SERVERJS" "if (code === 'EEXIST')" &&
+   has "$APPJS" 'function browseOpen(inputSel, onPick)' &&
+   has "$APPJS" "return api('/api/fs/list?' + qs)" &&
+   has "$APPJS" "return api('/__fs/mkdir', {" &&
+   has "$APPJS" 'function browseDirNames(data)' &&
+   has "$APPJS" 'function browseParent(dir)' &&
+   has "$APPJS" 'function browseConfirm()' &&
+   has "$APPJS" 'function submitBrowseNewFolder()' &&
+   has "$APPJS" 'function setupBrowse()' &&
+   has "$APPJS" 'setupBrowse(); // §8.106' &&
+   has "$HOME_HTML" 'id="dlgBrowse"' &&
+   has "$HOME_HTML" 'id="newBrowse"' &&
+   has "$HOME_HTML" 'id="importBrowse"' &&
+   has "$HOME_HTML" 'id="browseNewFolder"' &&
+   has "$CSS" '.browselist {' &&
+   has "$CSS" '.browse-item.active {' &&
+   has "$TOOLS_PAGE" '§8.106 打开:从输入框的绝对路径开始,只列目录、文件被过滤' &&
+   has "$TOOLS_PAGE" '§8.106 过滤后点条目仍进入正确目录(不按过滤后的下标拼路径)' &&
+   has "$TOOLS_PAGE" '§8.106 新建文件夹:POST 绝对路径,成功后直接进入' &&
+   has "$TOOLS_PAGE" '§8.106 选择此目录:写回输入框并关闭对话框'; then
+  echo "PASS: §8.106 目录选择器(逐级浏览、筛选、新建文件夹、回填新建/导入)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.106 的 fs/list 浏览 / mkdir 端点 / 对话框 / UI 断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

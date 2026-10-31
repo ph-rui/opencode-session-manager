@@ -9,6 +9,7 @@
 #   2. GET  /api/fs/find?query=&location[directory]=    给 @ 补全用的相对路径
 #   3. POST /api/session/:sid/prompt  files[].uri 只认 file: URI,服务端自己读文件并补 data/mime
 #   4. 裸路径 / 相对路径 / https 一律 400(所以前端只在「补全确认过」时才生成附件)
+#   5. §8.106 目录选择器的 POST /__fs/mkdir:建一层目录 / 已存在 409 / 相对路径 400
 set -uo pipefail
 
 PORT="${OCS_PORT:-49450}"
@@ -138,6 +139,20 @@ has "$ST" "#mentions" "@ 补全下拉有样式"
 has "$ST" ".att-img" "图片附件有缩略图样式"
 has "$IX" "id=\"btnAttach\"" "输入区有附件按钮"
 has "$IX" "id=\"filePick\"" "有隐藏的文件选择框"
+
+echo
+echo "== 6) 目录选择器的新建文件夹端点(§8.106) =="
+MKD="$DIR/newdir"
+ck "$(code -X POST -H 'content-type: application/json' -d "{\"path\":\"$MKD\"}" "$PROXY/__fs/mkdir")" "200" \
+  "__fs/mkdir 建出一层目录"
+if [ -d "$MKD" ]; then echo "PASS: 目录确实落盘"; pass=$((pass + 1)); else echo "FAIL: 目录没建出来"; fail=$((fail + 1)); fi
+ck "$(code -X POST -H 'content-type: application/json' -d "{\"path\":\"$MKD\"}" "$PROXY/__fs/mkdir")" "409" \
+  "重名回 409(不覆盖)"
+ck "$(code -X POST -H 'content-type: application/json' -d '{"path":"relative/x"}' "$PROXY/__fs/mkdir")" "400" \
+  "相对路径回 400"
+ck "$(code -X POST -H 'content-type: application/json' -d "{\"path\":\"$DIR/no-such-parent/x\"}" "$PROXY/__fs/mkdir")" "404" \
+  "父目录不存在回 404(不递归建)"
+ck "$(code "$PROXY/__fs/mkdir")" "405" "GET 回 405(只收 POST)"
 
 echo
 echo "结果: $pass 通过, $fail 失败"

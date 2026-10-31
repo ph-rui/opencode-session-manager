@@ -38,6 +38,36 @@
     </section>
   </main>
   <div id="toast" hidden></div>
+  <!-- §8.106 目录选择器:只摆断言要用到的输入框与浏览框 -->
+  <dialog id="dlgNew" class="dlg"><div class="dlgform">
+    <input id="newDir"><button type="button" id="newBrowse">浏览…</button>
+  </div></dialog>
+  <dialog id="dlgImport" class="dlg"><div class="dlgform">
+    <input id="importDir"><button type="button" id="importBrowse">浏览…</button>
+  </div></dialog>
+  <dialog id="dlgBrowse" class="dlg dlgbrowse">
+    <div class="dlgform">
+      <h3>选择目录</h3>
+      <div class="browsebar">
+        <button type="button" class="chip" id="browseUp">↑</button>
+        <input id="browsePath" class="browsepath">
+      </div>
+      <div class="browsequick" id="browseQuick"></div>
+      <input id="browseFilter" class="pickfilter" type="text">
+      <div id="browseList" class="browselist" role="listbox" tabindex="-1"></div>
+      <p class="dlgerr" id="browseErr" hidden></p>
+      <div class="browsnew" id="browseNewRow" hidden>
+        <input id="browseNewName">
+        <button type="button" class="chip primary" id="browseNewOk">创建</button>
+        <button type="button" class="chip" id="browseNewCancel">取消</button>
+      </div>
+      <div class="dlgacts browses">
+        <button type="button" class="chip" id="browseNewFolder">新建文件夹</button>
+        <button type="button" class="chip" data-close>取消</button>
+        <button type="button" class="chip primary" id="browsePick">选择此目录</button>
+      </div>
+    </div>
+  </dialog>
   <pre id="results"></pre>
 
   <script>
@@ -63,10 +93,52 @@
     window.__prefServerMtime = 0;
     window.__prefMtime = 100;
     window.__prefFail = false;
+    /* §8.106 目录选择器的假文件系统:目录项照上游那样带结尾斜杠,文件混在里面。 */
+    window.__browse = {
+      '/proj': { data: [{ path: 'a/', type: 'directory' }, { path: 'b/', type: 'directory' }] },
+      '/proj/a': {
+        data: [
+          { path: 'src/', type: 'directory' },
+          { path: 'b2/', type: 'directory' },
+          { path: 'b10/', type: 'directory' },
+          { path: '.git/', type: 'directory' },
+          { path: 'README.md', type: 'file' },
+        ],
+      },
+      '/proj/a/src': {
+        data: [{ path: 'main.c', type: 'file' }, { path: 'lib/', type: 'directory' }],
+      },
+      '/proj/a/b10': { data: [] },
+      '/proj/a/newdir': { data: [] },
+      '/home/u': { data: [] },
+    };
+    window.__mkdirs = [];
+    window.__mkdirFail = false;
     window.fetch = async function (url, opts) {
       var u = String(url);
       var m = u.match(/^\/api\/session\/([^/?]+)\/message/);
       if (m) return json({ data: window.SERVER[decodeURIComponent(m[1])] || [], cursor: {} });
+      if (u.indexOf('/api/fs/list') === 0) {
+        var bd = new URL(u, 'http://test').searchParams.get('location[directory]');
+        if (!window.__browse[bd]) {
+          return { ok: false, status: 404, text: async function () {
+            return JSON.stringify({ message: 'Location not found: ' + bd });
+          } };
+        }
+        return json({ location: { directory: bd }, data: window.__browse[bd].data });
+      }
+      if (u.indexOf('/__fs/mkdir') === 0) {
+        var mb = {};
+        try { mb = JSON.parse((opts && opts.body) || '{}'); } catch (_) {}
+        window.__mkdirs.push(mb.path);
+        if (window.__mkdirFail) {
+          return { ok: false, status: 409, text: async function () {
+            return JSON.stringify({ ok: false, error: '同名目录或文件已存在' });
+          } };
+        }
+        window.__browse[mb.path] = { data: [] };
+        return json({ ok: true, path: mb.path });
+      }
       if (u.indexOf('/__config/diffs') === 0) {
         if (opts && opts.method === 'PATCH') {
           var pb = {};
@@ -1892,6 +1964,90 @@
       T('冷启分批:清空选中丢掉没补完的队列',
         progQueue === null && domRows().length === 0,
         { queue: !!progQueue, nodes: domRows().length });
+
+      /* ================= §8.106 目录选择器 ================= */
+      setupBrowse();
+      store.directory = '/proj';
+      store.home = '/home/u';
+      store.seenDirs.add('/proj/a');
+      q('#newDir').value = '/proj/a';
+      await browseOpen('#newDir', function (p) { q('#newDir').value = p; });
+      T('§8.106 打开:从输入框的绝对路径开始,只列目录、文件被过滤',
+        store.browseAt === '/proj/a' && store.browseItems.join(',') === '.git,b2,b10,src',
+        { at: store.browseAt, items: store.browseItems });
+      T('§8.106 目录排序数字感知(b2 在 b10 前)',
+        store.browseItems.indexOf('b2') < store.browseItems.indexOf('b10'), store.browseItems);
+      T('§8.106 隐藏目录照常列出但弱化显示',
+        !!q('#browseList .browse-item.hid') &&
+        q('#browseList .browse-item.hid .bi-name').textContent === '.git',
+        q('#browseList').textContent);
+      T('§8.106 路径栏与快捷入口就位(主目录 / 根目录 / 最近工程目录)',
+        q('#browsePath').value === '/proj/a' &&
+        q('#browseQuick').textContent.indexOf('主目录') >= 0 &&
+        q('#browseQuick').textContent.indexOf('根目录') >= 0 &&
+        q('#browseQuick').textContent.indexOf('a') >= 0,
+        q('#browseQuick').textContent);
+      T('§8.106 ↑/↓ 移动高亮(.. 之后第一条)',
+        (function () {
+          q('#dlgBrowse').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+          var act = q('#browseList .browse-item.active');
+          return store.browseHi === 1 && !!act && act.textContent.indexOf('.git') >= 0;
+        })(),
+        store.browseHi);
+      T('§8.106 筛选只留匹配项,但「..」始终在',
+        (function () {
+          q('#browseFilter').value = 'b1';
+          q('#browseFilter').dispatchEvent(new Event('input'));
+          var names = qa('#browseList .browse-item .bi-name').map(function (n) { return n.textContent; });
+          return names.length === 2 && names[0] === '..' && names[1] === 'b10';
+        })(),
+        q('#browseList').textContent);
+      q('#browseFilter').value = '';
+      q('#browseFilter').dispatchEvent(new Event('input'));
+      await browseGo(browseParent('/proj/a'));
+      T('§8.106 上一级走到父目录', store.browseAt === '/proj', store.browseAt);
+      await browseGo('/proj/a/src');
+      T('§8.106 进入子目录后只列它下面的目录', store.browseItems.join(',') === 'lib', store.browseItems);
+      await browseGo('/proj/nope');
+      T('§8.106 目录不存在:就地报错,不关框',
+        /不存在|无法访问/.test(q('#browseErr').textContent) && !q('#browseErr').hidden &&
+        q('#dlgBrowse').open === true,
+        q('#browseErr').textContent);
+      await browseGo('/proj/a');
+      q('#browseFilter').value = 'b10';
+      q('#browseFilter').dispatchEvent(new Event('input'));
+      await browseActivate(1); // 第 0 行是 ..,第 1 行是 b10
+      T('§8.106 过滤后点条目仍进入正确目录(不按过滤后的下标拼路径)',
+        store.browseAt === '/proj/a/b10', store.browseAt);
+      await browseGo('/proj/a');
+      q('#browseNewName').value = 'newdir';
+      await submitBrowseNewFolder();
+      T('§8.106 新建文件夹:POST 绝对路径,成功后直接进入',
+        window.__mkdirs[0] === '/proj/a/newdir' && store.browseAt === '/proj/a/newdir' &&
+        q('#browseNewRow').hidden === true,
+        { posts: window.__mkdirs, at: store.browseAt });
+      q('#browseNewName').value = 'bad/name';
+      await submitBrowseNewFolder();
+      T('§8.106 新建文件夹:名字含 / 就地拒绝,不发请求',
+        window.__mkdirs.length === 1 && q('#browseErr').textContent.indexOf('/') >= 0,
+        { posts: window.__mkdirs.length, err: q('#browseErr').textContent });
+      q('#browseNewName').value = 'again';
+      window.__mkdirFail = true;
+      await submitBrowseNewFolder();
+      window.__mkdirFail = false;
+      T('§8.106 新建文件夹:已存在(409)显示服务端原因', /已存在/.test(q('#browseErr').textContent),
+        q('#browseErr').textContent);
+      await browseGo('/proj/a/src');
+      q('#browsePath').value = '/proj/a/src/lib';
+      browseConfirm();
+      T('§8.106 选择此目录:写回输入框并关闭对话框',
+        q('#newDir').value === '/proj/a/src/lib' && q('#dlgBrowse').open === false,
+        { value: q('#newDir').value, open: q('#dlgBrowse').open });
+      q('#importDir').value = '/proj/a';
+      await browseOpen('#importDir');
+      await browseGo('/proj');
+      browseConfirm();
+      T('§8.106 导入对话框复用同一个目录选择器', q('#importDir').value === '/proj', q('#importDir').value);
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
