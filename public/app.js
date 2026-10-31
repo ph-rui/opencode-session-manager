@@ -1716,12 +1716,14 @@ function browseJoin(dir, name) {
   return normPath(String(dir || '/') + '/' + name);
 }
 
-// 只列目录;上游的目录项带结尾斜杠(".git/"),去掉才是名字。
+/* 只列目录;上游的目录项带结尾斜杠(".git/"),去掉才是名字。
+ * 用户明确要求 . 开头的目录不显示(主目录里 __pycache__ / .cache / .config 这类
+ * 太多,真正要选的工程目录会被挤到下面),所以这里直接滤掉,不做「弱化显示」。 */
 function browseDirNames(data) {
   return (Array.isArray(data) ? data : [])
     .filter((it) => it && it.type === 'directory')
     .map((it) => String(it.path || '').replace(/\/+$/, ''))
-    .filter((n) => n && n !== '.' && n !== '..')
+    .filter((n) => n && n !== '.' && n !== '..' && n[0] !== '.')
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
@@ -1765,7 +1767,7 @@ function paintBrowseList() {
     rows.forEach((name, i) => {
       html +=
         '<div class="browse-item' + (store.browseHi === i + off ? ' active' : '') +
-        (name[0] === '.' ? ' hid' : '') + '" role="option" data-hi="' + (i + off) + '">' +
+        '" role="option" data-hi="' + (i + off) + '">' +
         '<span class="bi-ico">▸</span><span class="bi-name">' + esc(name) + '</span></div>';
     });
     if (!rows.length) {

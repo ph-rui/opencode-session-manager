@@ -1972,14 +1972,14 @@
       store.seenDirs.add('/proj/a');
       q('#newDir').value = '/proj/a';
       await browseOpen('#newDir', function (p) { q('#newDir').value = p; });
-      T('§8.106 打开:从输入框的绝对路径开始,只列目录、文件被过滤',
-        store.browseAt === '/proj/a' && store.browseItems.join(',') === '.git,b2,b10,src',
+      T('§8.106 打开:从输入框的绝对路径开始,只列目录、文件与 . 开头的目录被过滤',
+        store.browseAt === '/proj/a' && store.browseItems.join(',') === 'b2,b10,src',
         { at: store.browseAt, items: store.browseItems });
       T('§8.106 目录排序数字感知(b2 在 b10 前)',
         store.browseItems.indexOf('b2') < store.browseItems.indexOf('b10'), store.browseItems);
-      T('§8.106 隐藏目录照常列出但弱化显示',
-        !!q('#browseList .browse-item.hid') &&
-        q('#browseList .browse-item.hid .bi-name').textContent === '.git',
+      T('§8.106 . 开头的目录整条不显示(留 .git / .cache 这类给文件管理器)',
+        store.browseItems.indexOf('.git') < 0 &&
+        q('#browseList').textContent.indexOf('.git') < 0,
         q('#browseList').textContent);
       T('§8.106 路径栏与快捷入口就位(主目录 / 根目录 / 最近工程目录)',
         q('#browsePath').value === '/proj/a' &&
@@ -1991,7 +1991,7 @@
         (function () {
           q('#dlgBrowse').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
           var act = q('#browseList .browse-item.active');
-          return store.browseHi === 1 && !!act && act.textContent.indexOf('.git') >= 0;
+          return store.browseHi === 1 && !!act && act.textContent.indexOf('b2') >= 0;
         })(),
         store.browseHi);
       T('§8.106 筛选只留匹配项,但「..」始终在',

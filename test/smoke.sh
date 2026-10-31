@@ -3045,6 +3045,7 @@ if has "$SERVERJS" 'async function fsMkdir(req, res)' &&
    has "$APPJS" "return api('/api/fs/list?' + qs)" &&
    has "$APPJS" "return api('/__fs/mkdir', {" &&
    has "$APPJS" 'function browseDirNames(data)' &&
+   has "$APPJS" "n[0] !== '.'" &&
    has "$APPJS" 'function browseParent(dir)' &&
    has "$APPJS" 'function browseConfirm()' &&
    has "$APPJS" 'function submitBrowseNewFolder()' &&
@@ -3056,7 +3057,8 @@ if has "$SERVERJS" 'async function fsMkdir(req, res)' &&
    has "$HOME_HTML" 'id="browseNewFolder"' &&
    has "$CSS" '.browselist {' &&
    has "$CSS" '.browse-item.active {' &&
-   has "$TOOLS_PAGE" '§8.106 打开:从输入框的绝对路径开始,只列目录、文件被过滤' &&
+   has "$TOOLS_PAGE" '§8.106 打开:从输入框的绝对路径开始,只列目录、文件与 . 开头的目录被过滤' &&
+   has "$TOOLS_PAGE" '§8.106 . 开头的目录整条不显示' &&
    has "$TOOLS_PAGE" '§8.106 过滤后点条目仍进入正确目录(不按过滤后的下标拼路径)' &&
    has "$TOOLS_PAGE" '§8.106 新建文件夹:POST 绝对路径,成功后直接进入' &&
    has "$TOOLS_PAGE" '§8.106 选择此目录:写回输入框并关闭对话框'; then

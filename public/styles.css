@@ -1665,7 +1665,6 @@ html.narrow .dlgwn .wn-foot { padding: 8px 16px 12px; }
   color: var(--muted);
   font-size: 11px;
 }
-.browse-item.hid .bi-name { color: var(--muted); }
 .browse-empty { padding: 10px; color: var(--muted); }
 .browsnew { display: flex; gap: 8px; margin-top: 10px; }
 .browsnew[hidden] { display: none; }
