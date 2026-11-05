@@ -24,7 +24,7 @@
   <main>
     <section id="listpane">
       <table id="list">
-        <thead><tr><th>标题</th><th>工程目录</th><th>更新</th><th>Tokens</th><th>Cost</th><th>操作</th></tr></thead>
+        <thead><tr><th>标题</th><th>更新</th><th>Tokens</th><th class="actions"></th></tr></thead>
         <tbody></tbody>
       </table>
       <button id="loadMore" hidden></button>
@@ -74,6 +74,7 @@
     </section>
   </main>
   <div id="toast" hidden></div>
+  <div id="rowMenu" hidden></div>
   <dialog id="dlgHelp" class="dlg"><div class="dlgform"><h3>命令与快捷键</h3>
     <div class="keys" id="helpKeys"></div>
     <div class="dlgacts"><button type="button" class="chip primary" data-close>关闭</button></div>
@@ -242,6 +243,9 @@
       T('B5 窄屏:行变块级卡片', rowA() && cs(rowA()).display === 'block', rowA() && cs(rowA()).display);
       T('B6 窄屏:卡片里的 td 不再吃 max-width', cs(rowA().querySelector('td.title')).maxWidth === 'none',
         cs(rowA().querySelector('td.title')).maxWidth);
+      T('B6b 窄屏:工程目录也在标题第二行(窄侧边栏不用拉宽就看得到)',
+        (function () { var d = rowA().querySelector('.tdir'); return !!d && d.textContent !== ''; })(),
+        rowA().querySelector('.tdir') && rowA().querySelector('.tdir').textContent);
       T('B7 窄屏:分栏条与折叠手柄一起隐掉', !vis(q('.resizer')));
 
       var more = rowA().querySelector('.actions .more');
@@ -427,8 +431,30 @@
       q('#chatState').textContent = '空闲';
       T('D3g 桌面:标题行那枚状态徽章还在', vis(q('#chatState')) && q('#chatState').textContent === '空闲',
         q('#chatState').textContent);
-      T('D4 桌面:原来那六个按钮回来了', vis(rowA().querySelector('.actions button[data-act="open"]')) &&
-        vis(rowA().querySelector('.actions button[data-act="del"]')));
+      T('D4 桌面:操作列收掉,改成行右键菜单(#rowMenu 在,按钮不再露出)',
+        !!q('#rowMenu') &&
+        !vis(rowA().querySelector('.actions button[data-act="open"]')) &&
+        !vis(rowA().querySelector('.actions button[data-act="del"]')));
+      T('D4b 桌面:工程目录挪到标题下面当第二行(.tdir 有名字、悬停是完整路径)',
+        (function () {
+          var d = rowA().querySelector('.tdir');
+          return !!d && d.textContent !== '' && d.title.indexOf('/') === 0;
+        })(),
+        rowA().querySelector('.tdir') && rowA().querySelector('.tdir').title);
+      T('D4c 桌面:右键菜单就是这九个动作(删除红色),关掉后收起',
+        (function () {
+          if (typeof openRowMenu !== 'function') return false;
+          openRowMenu('ses_a', 10, 10);
+          var m = q('#rowMenu');
+          var items = qa('#rowMenu .tabmenu-item');
+          var labels = items.map(function (i) { return i.textContent; }).join(',');
+          var ok = m.hidden === false && items.length === 9 &&
+            labels === '打开,改名,移动,分叉,置顶,复制会话 ID,复制转录,归档,删除' &&
+            !!items[items.length - 1].classList.contains('danger');
+          closeRowMenu();
+          return ok;
+        })(),
+        '见断言');
       T('D5 桌面:表头回来了', vis(q('#list thead')));
       T('D6 桌面:次要控件都在明面上(工程目录)', vis(q('#dirFilter')));
       T('D7 桌面:排序/归档/导入/刷新也都在', vis(q('#order')) && vis(q('#showArchived')) &&

@@ -3291,6 +3291,86 @@ function setupTabMenu() {
   }, true);
 }
 
+/* ------------------------- §8.107 会话行右键菜单 -------------------------
+ * 桌面把「操作」列的 6 个按钮收掉了(占宽,还把工程目录挤到要拉宽才看得到),
+ * 改成在会话行上右键唤出菜单,内容与窄屏那个「⋯」收进选择框的一致 ——
+ * 打开 / 改名 / 移动 / 分叉 / 置顶 / 复制会话 ID / 复制转录 / 归档 / 删除。
+ * 手机触屏没有右键,窄屏照旧保留行末那个「⋯」,桌面才靠这套菜单。
+ * 定位 / 收起机制照抄标签菜单(#tabMenu),两个菜单共用一套样式。 */
+let rowMenuSessionId = null;
+
+function rowMenuOpen() {
+  const m = $('#rowMenu');
+  return !!(m && !m.hidden);
+}
+
+function closeRowMenu() {
+  const m = $('#rowMenu');
+  if (!m) return;
+  m.hidden = true;
+  m.innerHTML = '';
+  rowMenuSessionId = null;
+}
+
+function openRowMenu(id, x, y) {
+  const m = $('#rowMenu');
+  if (!m || !id) return;
+  const s = store.sessions.get(id);
+  if (!s) return;
+  rowMenuSessionId = id;
+  const arch = isArchived(s);
+  const pin = isPinned(id);
+  m.innerHTML =
+    '<div class="tabmenu-item" data-act="open">打开</div>' +
+    '<div class="tabmenu-item" data-act="rename">改名</div>' +
+    '<div class="tabmenu-item" data-act="move">移动</div>' +
+    '<div class="tabmenu-item" data-act="fork">分叉</div>' +
+    '<div class="tabmenu-item" data-act="pin">' + (pin ? '取消置顶' : '置顶') + '</div>' +
+    '<div class="tabmenu-item" data-act="copyid">复制会话 ID</div>' +
+    '<div class="tabmenu-item" data-act="transcript">复制转录</div>' +
+    '<div class="tabmenu-item" data-act="archive">' + (arch ? '取消归档' : '归档') + '</div>' +
+    '<div class="tabmenu-item danger" data-act="del">删除</div>';
+  m.hidden = false;
+  m.style.left = '0px';
+  m.style.top = '0px';
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(x, (window.innerWidth || 0) - r.width - 4)) + 'px';
+  m.style.top = Math.max(4, Math.min(y, (window.innerHeight || 0) - r.height - 4)) + 'px';
+}
+
+function setupRowMenu() {
+  const list = $('#list');
+  const m = $('#rowMenu');
+  if (!list || !m || m.dataset.wired === '1') return;
+  m.dataset.wired = '1';
+  list.addEventListener('contextmenu', (e) => {
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return; // 表头 / 空白处不弹
+    e.preventDefault();
+    e.stopPropagation();
+    openRowMenu(tr.dataset.id, e.clientX, e.clientY);
+  });
+  m.addEventListener('click', (e) => {
+    const item = e.target.closest('.tabmenu-item');
+    if (!item) return;
+    const act = item.dataset.act;
+    const id = rowMenuSessionId;
+    closeRowMenu(); // 点菜单(含禁用项)一律先收起,再执行动作
+    onAction(act, id);
+  });
+  // 在菜单外按下 / 右键,菜单先收掉(右键另一行时由上面的 handler 接着重开)
+  document.addEventListener('pointerdown', (e) => {
+    if (!rowMenuOpen()) return;
+    if (e.target.closest && e.target.closest('#rowMenu')) return;
+    closeRowMenu();
+  });
+  document.addEventListener('contextmenu', (e) => {
+    if (!rowMenuOpen()) return;
+    if (e.target.closest && e.target.closest('#rowMenu')) return;
+    closeRowMenu();
+  }, true);
+}
+
 function setupSessionTabs() {
   const nav = document.getElementById('sessionTabs');
   if (!nav || nav.dataset.wired === '1') return;
@@ -3378,7 +3458,6 @@ function renderSessions() {
       (s.location && s.location.directory) || '',
       rel(s.time && s.time.updated),
       fmtTokens(s.tokens),
-      fmtCost(s.cost),
     ]),
   ]);
   if (sig === sessionsSig) {
@@ -3403,16 +3482,19 @@ function renderSessions() {
     const nAsk = askCountFor(s.id);
     const st = runStatus(s.id) || (compactionRunning(s.id) ? 'busy' : null);
     tr.innerHTML =
-      '<td class="title" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
+      '<td class="title">' +
+      '<div class="tmain" title="' + esc(s.id) + '">' + esc(s.title || '(无标题)') +
       (pinned.has(s.id) ? ' <span class="pin-badge" title="已置顶">📌 置顶</span>' : '') +
       (st ? ' <span class="run-badge" title="正在执行">' + (st === 'retry' ? '◌ 重试中' : '● 运行中') + '</span>' : '') +
       (arch ? ' <span class="arch-badge" title="已在面板中归档">📦 已归档</span>' : '') +
       (nAsk ? ' <span class="ask-badge" title="有待处理问询">⚑ ' + nAsk + '</span>' : '') +
+      '</div>' +
+      // §8.107 工程目录从独立列挪到标题下面当第二行:窄侧边栏也能看到,不用拉宽。
+      // 直接印全路径(不再是 dirBase):放得下就整条显示,放不下 ellipsis + 悬停 title 兜底。
+      '<div class="tdir" title="' + esc(dir) + '">' + esc(dir || '—') + '</div>' +
       '</td>' +
-      '<td class="dir" title="' + esc(dir) + '">' + esc(dirBase(dir) || '—') + '</td>' +
       '<td class="upd">' + esc(rel(s.time && s.time.updated)) + '</td>' +
       '<td class="tok">' + esc(fmtTokens(s.tokens)) + '</td>' +
-      '<td class="cost">' + esc(fmtCost(s.cost)) + '</td>' +
       '<td class="actions">' +
       '<button data-act="more" class="more" title="更多操作" aria-label="更多操作">⋯</button>' +
       '<button data-act="open">打开</button>' +
@@ -10072,6 +10154,11 @@ function setupTuiKeys() {
         closeTabMenu();
         return;
       }
+      if (rowMenuOpen()) { // §8.107:会话行右键菜单同理
+        e.preventDefault();
+        closeRowMenu();
+        return;
+      }
       if (mentionsOpen()) {
         e.preventDefault();
         closeMentions();
@@ -11154,6 +11241,13 @@ let peekHoldTimer = 0;
 let peekLastX = -1; // 指针最后一次真实 mousemove 停在哪
 let listPeekHold = null; // 由列表临时展开那段接线装上,onAction() 动手前叫一声
 
+/* 列表右键菜单(#rowMenu)/ 标签右键菜单(#tabMenu)是 position:fixed 浮层,可能伸到
+ * 列表右沿之外(贴到对话区那块)。列表在临时展开(list-peek)时,「往右移到菜单项」
+ * 这一动会越过分栏槽右沿,被 peek 逻辑当成「移开了」把列表收掉。菜单开着期间先冻结。 */
+function anyListMenuOpen() {
+  return rowMenuOpen() || tabMenuOpen();
+}
+
 /* -------------------- 鼠标靠左边缘:列表临时拉出来 --------------------
  * 列表收起之后,左侧那条 16px 分栏槽是鼠标最容易撞到的边界(它就在最左边)。
  * 靠上去就把列表临时拉出来,移开就收回去 —— 省掉「点手柄 → 看一眼 → 再点回去」。
@@ -11188,6 +11282,7 @@ function setupListPeek() {
       return;
     }
     if (document.documentElement.classList.contains('narrow')) return;
+    if (anyListMenuOpen()) return; // 右键菜单开着时别收:往右挪去点菜单项不该触发收回
     if (Date.now() < peekHoldUntil) return; // 宽限期里连真实移动也不收(用户要「等个几秒」)
     if (e.clientX < rz.getBoundingClientRect().right) main.classList.add('list-peek');
     else hide();
@@ -11200,6 +11295,7 @@ function setupListPeek() {
     peekHoldTimer = 0;
     peekHoldUntil = 0;
     if (!main.classList.contains('list-peek')) return;
+    if (anyListMenuOpen()) return; // 复查时菜单还开着就不收
     if (peekLastX >= 0 && peekLastX >= rz.getBoundingClientRect().right) hide(true);
   };
   const peekHold = () => {
@@ -11214,7 +11310,10 @@ function setupListPeek() {
   if (main.dataset.peekWired !== '1') {
     main.dataset.peekWired = '1';
     main.addEventListener('mousemove', onMove);
-    main.addEventListener('mouseleave', () => hide(false)); // 移出整个主区(含移出窗口)就收回
+    main.addEventListener('mouseleave', () => { // 移出整个主区(含移出窗口)就收回
+      if (anyListMenuOpen()) return; // 移到悬浮在 main 外的右键菜单上不算「离开」
+      hide(false);
+    });
     const btn = document.getElementById('btnList');
     // 临时展开期间点手柄 = 显式展开并保持(setupListToggle 已经写好记忆与类),这里只摘掉临时态
     if (btn) btn.addEventListener('click', () => hide(true));
@@ -11681,6 +11780,7 @@ function init() {
   store.tabs = readTabs();
   setupSessionTabs();
   setupTabMenu(); // §8.100 标签右键菜单:关闭此标签 / 关闭其他标签
+  setupRowMenu(); // §8.107 会话行右键菜单:桌面把「操作」列收掉,行上右键唤出操作
   renderTabs();
   health();
   setInterval(health, 15000);

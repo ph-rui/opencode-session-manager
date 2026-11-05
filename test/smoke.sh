@@ -2898,7 +2898,7 @@ if has "$APPJS" 'function openTabMenu(id, x, y)' &&
    has "$APPJS" 'store.tabs = store.tabs.filter((t) => t.id === id);' &&
    has "$APPJS" "if (tabDrag && tabDrag.active) return; // 触摸长按已进拖拽,别弹菜单" &&
    has "$HOME_HTML" 'id="tabMenu"' &&
-   has "$CSS" '#tabMenu {' && has "$CSS" '.tabmenu-item {' &&
+   has "$CSS" '#tabMenu,' && has "$CSS" '#rowMenu {' && has "$CSS" '.tabmenu-item {' &&
    has "$CAP_PAGE" '右键标签:菜单弹出且默认被阻止(压掉原生右键)' &&
    has "$CAP_PAGE" '关闭其他:只剩右键的标签并切到它' &&
    has "$CAP_PAGE" '关闭其他:批量关的不进「最近关闭」栈(用户要求)' &&
@@ -3065,6 +3065,29 @@ if has "$SERVERJS" 'async function fsMkdir(req, res)' &&
   echo "PASS: §8.106 目录选择器(逐级浏览、筛选、新建文件夹、回填新建/导入)"; pass=$((pass + 1))
 else
   echo "FAIL: §8.106 的 fs/list 浏览 / mkdir 端点 / 对话框 / UI 断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R45 组:会话行右键菜单 + 目录副行(§8.107)----
+# 桌面把「操作」列的六个按钮收掉(占宽,还把工程目录挤到要拉宽才看得到):
+# 目录挪到标题下面当第二行(.tdir,窄屏也看得见),操作改成行右键菜单(#rowMenu)。
+# 触屏没有右键,窄屏靠卡片那套保留行末那个 ⋯。
+MOBILE_PAGE=$(cat "$(dirname "$0")/ui-mobile.html")
+if has "$APPJS" 'function openRowMenu(id, x, y)' &&
+   has "$APPJS" 'function closeRowMenu()' &&
+   has "$APPJS" 'function setupRowMenu()' &&
+   has "$APPJS" 'setupRowMenu(); // §8.107' &&
+   has "$APPJS" "e.target.closest('tr[data-id]')" &&
+   has "$APPJS" "'<div class=\"tdir\" title=\"'" &&
+   has "$APPJS" "esc(dir || '—')" &&
+   has "$APPJS" 'function anyListMenuOpen()' &&
+   has "$APPJS" '右键菜单开着时别收' &&
+   has "$HOME_HTML" 'id="rowMenu"' &&
+   has "$CSS" '#list .tdir {' &&
+   has "$CSS" '#list td.actions, #list th.actions { display: none; }' &&
+   has "$MOBILE_PAGE" 'D4c 桌面:右键菜单就是这九个动作(删除红色),关掉后收起'; then
+  echo "PASS: §8.107 会话行右键菜单 + 目录副行(桌面收操作列,目录挪到标题下,行上右键唤出操作)"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.107 的行右键菜单 / 目录副行 / 操作列收起缺了一块"; fail=$((fail + 1))
 fi
 
 echo

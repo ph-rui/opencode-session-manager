@@ -42,6 +42,7 @@
     </section>
   </main>
   <div id="toast" hidden></div>
+  <div id="rowMenu" hidden></div>
   <pre id="results"></pre>
 
   <script>
@@ -290,6 +291,22 @@
       T('再靠回去还能拉出来', main.classList.contains('list-peek'));
       main.dispatchEvent(new MouseEvent('mouseleave'));
       T('鼠标移出主区(含移出窗口)→ 收回', !main.classList.contains('list-peek'));
+
+      /* §8.107 右键菜单开着时别把列表收掉:菜单可能伸到列表右沿之外,往右挪去点
+       * 菜单项不能触发「离开」收回。菜单是 position:fixed 浮层在 main 外,悬停它
+       * 会触发 main 的 mouseleave —— mousemove 与 mouseleave 两条路径都得冻结。 */
+      mv(5);
+      T('(前置)又拉出来了(要验菜单冻结)', main.classList.contains('list-peek'));
+      var rm = q('#rowMenu');
+      rm.hidden = false; // 模拟右键菜单弹出(anyListMenuOpen 只认 hidden)
+      var rzEdgePeekM = resizer.getBoundingClientRect().right;
+      mv(rzEdgePeekM + 5);
+      T('右键菜单开着时,往右越过列表右沿去点菜单项 → 不收', main.classList.contains('list-peek'));
+      main.dispatchEvent(new MouseEvent('mouseleave'));
+      T('右键菜单开着时,mouseleave(悬停到 main 外的浮层)也不收', main.classList.contains('list-peek'));
+      rm.hidden = true; // 关掉菜单
+      mv(rzEdgePeekM + 5);
+      T('菜单关掉后,再往右挪就正常收回', !main.classList.contains('list-peek'));
 
       /* 临时展开期间点手柄 = 显式展开并保持 */
       mv(5);

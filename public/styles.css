@@ -194,15 +194,25 @@ table#list { width: 100%; border-collapse: collapse; }
 #list tbody tr:hover { background: var(--panel); }
 #list tbody tr.selected { background: #d6ebff; }
 #list td { padding: 8px 10px; vertical-align: top; font-size: 12px; }
-#list td.title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#list td.dir { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#list td.upd, #list td.tok, #list td.cost { color: var(--muted); white-space: nowrap; }
-#list td.actions, #list th.actions {
-  position: sticky;
-  right: 0;
+/* §8.107 标题格两行:主行标题 + 副行工程目录。目录从独立列挪进来,
+   窄侧边栏也能看到(不用再拉宽),标题列也不再被目录挤。 */
+#list td.title { max-width: none; }
+#list .tmain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#list .tdir {
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.12);
 }
+#list td.upd, #list td.tok { color: var(--muted); white-space: nowrap; }
+/* §8.107 桌面:操作列收掉(占宽且把目录挤走),改成行右键菜单。
+   窄屏是触屏没有右键,靠下面 §8 卡片那套把行末的 ⋯ 顶回右上角 ——
+   `html.narrow #list td { display:block }` 的特异度比这条高,窄屏会被重新显示,
+   所以这里只声明「桌面默认隐藏」即可,不用另写窄屏恢复。 */
+#list td.actions, #list th.actions { display: none; }
 #list th.actions { background: var(--panel); z-index: 2; }
 #list td.actions { background: var(--bg); }
 #list tbody tr:hover td.actions { background: var(--panel); }
@@ -342,8 +352,9 @@ table#list { width: 100%; border-collapse: collapse; }
 .tab.active .tabx { display: flex; }
 .tabx:hover { color: var(--danger); background: var(--panel); }
 
-/* §8.100 标签右键菜单:光标处的小浮层,外观与命令面板一致 */
-#tabMenu {
+/* §8.100 标签右键菜单 / §8.107 会话行右键菜单:光标处的小浮层,外观与命令面板一致 */
+#tabMenu,
+#rowMenu {
   position: fixed;
   z-index: 60;
   min-width: 132px;
@@ -354,13 +365,15 @@ table#list { width: 100%; border-collapse: collapse; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
   font-size: 0.92em;
 }
-#tabMenu[hidden] { display: none; }
+#tabMenu[hidden], #rowMenu[hidden] { display: none; }
 .tabmenu-item {
   padding: 5px 14px;
   white-space: nowrap;
   cursor: pointer;
 }
 .tabmenu-item:hover { background: var(--bg); }
+.tabmenu-item.danger { color: var(--danger); }
+.tabmenu-item.danger:hover { background: #fff5f5; }
 .tabmenu-item.disabled { color: var(--muted); cursor: default; }
 .tabmenu-item.disabled:hover { background: none; }
 
@@ -2050,13 +2063,11 @@ html.narrow #list tbody tr {
 }
 html.narrow #list td { display: block; padding: 0; border: none; max-width: none; }
 html.narrow #list td.title { white-space: normal; font-size: 13px; }
-/* 第 2 行的几项并排(桌面靠列间距,窄屏自己补「·」) */
-html.narrow #list td.dir,
+/* 目录已经挪进标题格当第二行(.tdir),窄屏这里只剩「更新 · Tokens」一行;
+   首个词不再补「·」前缀(§8.107 之前目录行首那个点现在会露在行首)。 */
 html.narrow #list td.upd,
 html.narrow #list td.tok { display: inline; color: var(--muted); font-size: 11.5px; }
-html.narrow #list td.upd::before,
 html.narrow #list td.tok::before { content: " · "; }
-html.narrow #list td.cost { display: none; } /* 窄屏让位给更重要的信息 */
 
 /* 动作按钮:窄屏全收进右上角的「⋯」 */
 html.narrow #list td.actions {
