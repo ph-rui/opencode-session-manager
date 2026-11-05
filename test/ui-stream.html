@@ -1371,6 +1371,103 @@
       store.srvIdleLastId = '';
       store.selected = 'ses_a';
 
+      /* ---------------- 本地模型 reasoning 只流式不落盘:补回与空块 ---------------- */
+      /* 远端 Qwen(本地)的 reasoning 正文只在流式 delta 里出现,落盘 part 的 text 是空的。
+       * 收工后服务端权威版本覆盖本地缓冲,「Thought」块点开就是空的。
+       * 这里锁住三条行为:①收工对账时把本地缓冲的流式正文补进空 part;
+       * ②缓冲已被回收后,再拉回的空 part 仍按记账补回;
+       * ③补不回来(页面刷新,记账也没了)的空块不画壳;服务端带全文的(云模型)一个字不动。 */
+      var AD1 = 'msg_ad1';
+      var AD1_REASON = '先想一步:定位问题\n再想一步:验证假设';
+      feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: AD1, started: 8000,
+        model: { id: 'qwen-local', providerID: 'local' } });
+      feed('session.reasoning.started', { sessionID: 'ses_a', assistantMessageID: AD1, ordinal: 0 });
+      feed('session.reasoning.delta', { sessionID: 'ses_a', assistantMessageID: AD1, ordinal: 0, delta: '先想一步:定位问题\n' });
+      feed('session.reasoning.delta', { sessionID: 'ses_a', assistantMessageID: AD1, ordinal: 0, delta: '再想一步:验证假设' });
+      feed('session.reasoning.ended', { sessionID: 'ses_a', assistantMessageID: AD1, ordinal: 0, text: AD1_REASON });
+      T('流式期间本地缓冲攒着思考全文', view(AD1) && view(AD1).byKey['reasoning:0'] &&
+        view(AD1).byKey['reasoning:0'].text === AD1_REASON,
+        view(AD1) && view(AD1).byKey['reasoning:0'] && view(AD1).byKey['reasoning:0'].text);
+      /* 服务端权威版本先到,reasoning part 是空的(本地模型落盘实况) */
+      window.SERVER['ses_a'] = [{
+        id: AD1, type: 'assistant', agent: 'build',
+        time: { created: 8000, completed: 8500 },
+        model: { id: 'qwen-local', providerID: 'local' },
+        content: [{ type: 'reasoning', text: '' }, { type: 'text', text: '结论:问题在配置' }],
+      }];
+      await loadMessages({ older: false });
+      T('收工后本地缓冲被回收', !store.live.has(AD1));
+      T('第一次对账:空 reasoning part 补回流式正文',
+        store.messages.get(AD1).content[0].text === AD1_REASON,
+        store.messages.get(AD1).content[0].text);
+      T('补回记入账本(按消息 id,刷新前可重复使用)',
+        adoptedReason.has(AD1) && adoptedReason.get(AD1).length === 1,
+        { has: adoptedReason.has(AD1) });
+      var adEl = el(AD1);
+      var adD = adEl && adEl.querySelector('details.reasoning');
+      T('补回后思考块画得出、展开看得到流式全文',
+        !!adD && adD.textContent.indexOf('验证假设') >= 0,
+        adD && adD.textContent.slice(0, 40));
+      T('同一消息的 text part 照常渲染', adEl && adEl.textContent.indexOf('结论:问题在配置') >= 0);
+      /* 二次对账:服务端再拉回一个新的空 part 对象,live 已没,只能靠账本 */
+      window.SERVER['ses_a'] = [{
+        id: AD1, type: 'assistant', agent: 'build',
+        time: { created: 8000, completed: 8500 },
+        model: { id: 'qwen-local', providerID: 'local' },
+        content: [{ type: 'reasoning', text: '' }, { type: 'text', text: '结论:问题在配置' }],
+      }];
+      await loadMessages({ older: false });
+      T('二次对账:live 已回收,空 part 仍从账本补回',
+        store.messages.get(AD1).content[0].text === AD1_REASON,
+        store.messages.get(AD1).content[0].text);
+      adEl = el(AD1);
+      T('二次对账后思考块仍在、内容仍在',
+        adEl && !!adEl.querySelector('details.reasoning') &&
+        adEl.querySelector('details.reasoning').textContent.indexOf('验证假设') >= 0);
+      /* 刷新页面:账本没了、live 没了、服务端还是空 part —— 不画点开即空的壳 */
+      adoptedReason.clear();
+      store.messages.clear();
+      store.live.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      window.SERVER['ses_a'] = [{
+        id: 'msg_ad3', type: 'assistant', agent: 'build',
+        time: { created: 9000, completed: 9500 },
+        model: { id: 'qwen-local', providerID: 'local' },
+        content: [{ type: 'reasoning', text: '' }, { type: 'text', text: '只有结论' }],
+      }];
+      await loadMessages({ older: false });
+      T('补不回来的空思考块:不画「Thought」空壳',
+        q('#messages details.reasoning') === null,
+        q('#messages details.reasoning') && q('#messages details.reasoning').outerHTML.slice(0, 80));
+      T('同一条消息的其他部分照常画',
+        qa('#messages .msg.assistant').length === 1 &&
+        q('#messages').textContent.indexOf('只有结论') >= 0,
+        qa('#messages .msg.assistant').length);
+      T('补不回来也不伪造正文(store 里 part 保持原样)',
+        store.messages.get('msg_ad3').content[0].text === '');
+      /* 云模型:服务端落盘带全文 —— 一个字都不动,也不记账 */
+      var AD4 = 'msg_ad4';
+      feed('session.step.started', { sessionID: 'ses_a', assistantMessageID: AD4, started: 10000,
+        model: { id: 'deepseek-v4-flash', providerID: 'company' } });
+      feed('session.reasoning.started', { sessionID: 'ses_a', assistantMessageID: AD4, ordinal: 0 });
+      feed('session.reasoning.delta', { sessionID: 'ses_a', assistantMessageID: AD4, ordinal: 0, delta: '本地流式的思考' });
+      window.SERVER['ses_a'] = [{
+        id: AD4, type: 'assistant', agent: 'build',
+        time: { created: 10000, completed: 10500 },
+        model: { id: 'deepseek-v4-flash', providerID: 'company' },
+        content: [{ type: 'reasoning', text: '服务端全文的思考过程' }, { type: 'text', text: '正文' }],
+      }];
+      await loadMessages({ older: false });
+      T('服务端带全文时不动(云模型落盘有全文)',
+        store.messages.get(AD4).content[0].text === '服务端全文的思考过程',
+        store.messages.get(AD4).content[0].text);
+      T('服务端带全文时也不记账', !adoptedReason.has(AD4), { has: adoptedReason.has(AD4) });
+      T('渲染的是服务端全文,不是本地流式文本',
+        el(AD4) && el(AD4).textContent.indexOf('服务端全文的思考过程') >= 0 &&
+        el(AD4).textContent.indexOf('本地流式的思考') < 0);
+      T('带全文的收工消息:思考块照常画', !!el(AD4).querySelector('details.reasoning'));
+
       /* 取消选中 → 收起 */
       store.live.clear();
       store.messages.clear();

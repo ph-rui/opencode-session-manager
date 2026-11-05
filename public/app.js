@@ -4578,7 +4578,10 @@ async function loadMessages(opts) {
         if (seq !== store.msgSeq || store.selected !== id) return;
         // 「空数组」和「没拿到」必须分得开:响应不成形就当失败去重试,别画成「这个会话没有消息」
         if (!j || !Array.isArray(j.data)) throw new Error('响应里没有消息数组');
-        j.data.forEach((m) => store.messages.set(m.id, m));
+        j.data.forEach((m) => {
+          store.messages.set(m.id, m);
+          applyAdoptedReason(m); // 本地模型的 reasoning 只流式不落盘:把流式正文补进空 part
+        });
         store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
         pruneLive();
         if (!opts.older) dropGhostLive(id); // 只认整页对账:翻旧页那趟拿不到最新一段
@@ -4659,6 +4662,45 @@ function dropGhostLive(sid) {
     n++;
   }
   return n;
+}
+
+/* 本地模型(及部分 provider)的 reasoning 只走流式 delta,落盘时 part 的 text 是空的 ——
+ * 收工后服务端权威版本一到,「Thought」块点开是空的(用户报「刷新后思考块展不开」)。
+ * 本地缓冲里其实攒着流式全文:第一次拿到权威版本时(趁 pruneLive() 还没回收)取走,
+ * 以后每次对账拉回的都是新的空对象,再按 message id 从这份记账里补回去。
+ * 只在 text 为空时补,云模型(落盘有全文)一个字节都不动;按出现顺序对齐,
+ * 常见情形一段思考只有一个 part,逐段对齐足够。 */
+const adoptedReason = new Map(); // messageId -> [reasoning 正文]
+
+function applyAdoptedReason(m) {
+  if (!m || m.type !== 'assistant') return;
+  const content = m.content;
+  if (!Array.isArray(content)) return;
+  if (!content.some((p) => p && p.type === 'reasoning' && (p.text == null || String(p.text) === ''))) return;
+  // live 缓冲还在就现读(最新全文,顺带刷新记账 —— 流式中途的半成品别把旧的不全文本钉死);
+  // 缓冲已被 pruneLive 回收,才退回记账。
+  const L = store.live.get(m.id);
+  let texts = null;
+  if (L) {
+    texts = L.parts
+      .filter((p) => p && p.kind === 'block' && p.type === 'reasoning' && p.text)
+      .map((p) => p.text);
+    if (texts.length) {
+      adoptedReason.set(m.id, texts);
+      if (adoptedReason.size > 100) adoptedReason.delete(adoptedReason.keys().next().value);
+    }
+  } else {
+    texts = adoptedReason.get(m.id) || null;
+  }
+  if (!texts || !texts.length) return;
+  let li = 0;
+  for (const p of content) {
+    if (!p || p.type !== 'reasoning') continue;
+    if ((p.text == null || String(p.text) === '') && li < texts.length) {
+      p.text = texts[li];
+      li++;
+    }
+  }
 }
 
 /* 简易 Markdown 渲染(输入先经 esc 转义,再处理行内标记) */
@@ -6668,6 +6710,10 @@ function renderMessage(m, opts) {
         // (增量重绘 paintLiveText 就是按「同类型里的第几个」定位的)。
         const run = [p];
         while (i + 1 < content.length && content[i + 1].type === 'reasoning') run.push(content[++i]);
+        /* 收工后空的思考块:本地模型的 reasoning 只流式不落盘,页面刷新后本地缓冲也没了,
+         * 服务端 part 的 text 是空的 —— 这时画一个「Thought」空壳,点开什么都没有,
+         * 用户只会以为坏了(远端 Qwen 本地模型实测正是这样)。不画。流式中保留(正文要来了)。 */
+        if (!m.live && reasoningRunChars(run) === 0) continue;
         /* §8.99 收工后的思考块默认是折着的:正文照常 md + 拼 HTML 的话,这一段就是
          * 几万字的死重(实测这一页 92 段 / 54 万字,占整页 HTML 的 1/4),而用户
          * 十有八九永远不点开。超过门槛就先只留一个空壳,展开时再补正文。 */
