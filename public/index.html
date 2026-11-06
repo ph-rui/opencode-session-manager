@@ -82,14 +82,11 @@
 
     <section id="chatpane">
       <!-- §8.59 最近会话标签栏:聊天区顶部一条横向 tab(左列表照旧保留)。
-           打开过的会话自动进来;点 tab 直切,× 只移出 tab、不删会话;最右 + 新建复用
-           现有新建框。窄屏也显示,可横向滑;没有 tab 时整条收起来(一个像素都不占)。 -->
+           打开过的会话自动进来;点 tab 直切,× 只移出 tab、不删会话。窄屏也显示,
+            可横向滑;没有 tab 时整条收起来(一个像素都不占)。§8.109:栏右侧的
+            ↺ 重开 / + 新建已撤(顶栏本就有「+ 新建」,重开入口多余)。 -->
       <nav id="sessionTabs" aria-label="最近打开的会话" hidden>
         <div id="tabStrip"></div>
-        <button type="button" id="tabReopen" title="重开刚关闭的标签" aria-label="重开刚关闭的标签" hidden>↺</button>
-        <button type="button" id="tabNew" title="新建会话" aria-label="新建会话">
-          <span class="tnFull">+ 新建</span><span class="tnShort" aria-hidden="true">+</span>
-        </button>
       </nav>
       <!-- 头部两行:标题行(‹ 会话 / 标题 / 状态)与元信息行(更新 1 天前 · 项目号)。
            §8.43:手机上元信息行整行收掉(styles.css 的 html.narrow #chatMeta),而用量那格

@@ -2308,12 +2308,12 @@ fi
 NAV_POS=$(printf '%s' "$HOME_HTML" | grep -bo 'id="sessionTabs"' 2>/dev/null | head -1 | cut -d: -f1)
 HEAD_POS=$(printf '%s' "$HOME_HTML" | grep -bo 'id="chatHeader"' 2>/dev/null | head -1 | cut -d: -f1)
 if [ -n "$NAV_POS" ] && [ -n "$HEAD_POS" ] && [ "$NAV_POS" -lt "$HEAD_POS" ] &&
-   has "$HOME_HTML" 'id="tabStrip"' && has "$HOME_HTML" 'id="tabNew"' &&
-   has "$HOME_HTML" 'id="tabReopen"' &&
-   has "$HOME_HTML" '<span class="tnFull">+ 新建</span>'; then
-  echo "PASS: 标签栏挂在 #chatpane 顶部、#chatHeader 之前(左列表保留),含 tabStrip、+ 新建与 ↺ 重开"; pass=$((pass + 1))
+   has "$HOME_HTML" 'id="tabStrip"' &&
+   ! printf '%s' "$HOME_HTML" | grep -q 'id="tabNew"' &&
+   ! printf '%s' "$HOME_HTML" | grep -q 'id="tabReopen"'; then
+  echo "PASS: 标签栏挂在 #chatpane 顶部、#chatHeader 之前(左列表保留),只留 tabStrip;右侧 + 新建 / ↺ 已撤(§8.109)"; pass=$((pass + 1))
 else
-  echo "FAIL: 标签栏节点缺失 / 顺序不对 / 没有 + 新建"; fail=$((fail + 1))
+  echo "FAIL: 标签栏节点缺失 / 顺序不对 / 旧按钮没删干净"; fail=$((fail + 1))
 fi
 if has "$APPJS" "const TABS_KEY = 'ocs.tabs';" && has "$APPJS" 'const TABS_MAX = 8;' &&
    has "$APPJS" 'function readTabs()' && has "$APPJS" 'function saveTabs()' &&
@@ -2762,25 +2762,22 @@ else
   echo "FAIL: §8.99 的分批渲染 / 思考块懒壳 / flush 接线或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
-# ---- R31 组:重开最近关闭的标签(§8.75)----
-if has "$APPJS" 'const CLOSED_MAX = 8;' &&
-   has "$APPJS" 'const closedTabs = [];' &&
-   has "$APPJS" 'function rememberClosedTab(id, title)' &&
-   has "$APPJS" 'function renderTabReopen()' &&
-   has "$APPJS" 'async function reopenTab()' &&
-   has "$APPJS" 'rememberClosedTab(id, store.tabs[i] && store.tabs[i].title);' &&
-   has "$APPJS" 'const ci = closedTabs.findIndex((t) => t.id === id);' &&
-   has "$APPJS" 'nav.hidden = store.tabs.length === 0 && closedTabs.length === 0;' &&
-   has "$APPJS" "name: 'tab-reopen', description: '重开最近关闭的标签'" &&
-   has "$APPJS" "e.target.closest('#tabReopen')" &&
-   has "$HOME_HTML" 'id="tabReopen"' && has "$HOME_HTML" 'aria-label="重开刚关闭的标签"' &&
-   has "$CSS" '#tabReopen[hidden] { display: none; }' &&
-   has "$CSS" 'html.narrow #tabReopen {' &&
-   has "$(cat "$(dirname "$0")/ui-capabilities.html")" '重开最近关闭的标签并切过去' &&
-   has "$(cat "$(dirname "$0")/ui-capabilities.html")" '关掉最后一个标签:回到未选择,但重开入口还在'; then
-  echo "PASS: §8.75 最近关闭栈 / ↺ 按钮 / 空栏仍可重开 / 命令面板入口与窄屏样式都在"; pass=$((pass + 1))
+# ---- R31 组:最近关闭栈 / ↺ / 标签栏 + 新建 已撤(§8.109)----
+# 顶栏本就有「+ 新建」,标签栏右侧的入口多余;「最近关闭」栈(内存 8 个)与
+# /tab-reopen 命令连同 CSS 一起撤掉,反向锁住节点 / 函数 / 样式都不在。
+CAP_PAGE=$(cat "$(dirname "$0")/ui-capabilities.html")
+if ! has "$APPJS" 'const CLOSED_MAX = 8;' &&
+   ! has "$APPJS" 'const closedTabs = [];' &&
+   ! has "$APPJS" 'function rememberClosedTab(id, title)' &&
+   ! has "$APPJS" 'function renderTabReopen()' &&
+   ! has "$APPJS" 'async function reopenTab()' &&
+   ! has "$APPJS" "name: 'tab-reopen'" &&
+   ! has "$HOME_HTML" 'id="tabReopen"' && ! has "$HOME_HTML" 'id="tabNew"' &&
+   ! has "$CSS" '#tabReopen' && ! has "$CSS" '#tabNew' &&
+   ! printf '%s' "$CAP_PAGE" | grep -q 'reopenTab'; then
+  echo "PASS: §8.109 「最近关闭」栈 / ↺ / 标签栏 +新建 连同 CSS 与命令全部撤掉,测试页也不留残留"; pass=$((pass + 1))
 else
-  echo "FAIL: §8.75 的关闭栈 / 重开入口 / 空栏可见性或浏览器断言缺了一块"; fail=$((fail + 1))
+  echo "FAIL: §8.109 删除不干净,还留着最近关闭栈 / 旧按钮 / 旧样式"; fail=$((fail + 1))
 fi
 
 # ---- R32 组:切走前贴着底,切回来仍贴底(§8.76)----
@@ -2888,8 +2885,8 @@ else
 fi
 
 # ---- R38 组:标签右键菜单,关闭此标签 / 关闭其他标签(§8.100)----
-# 用户要求:右键某标签能「关闭其他 TAB」。批量关掉的标签不进「最近关闭」栈
-# (单关 × / 中键仍记一笔,可用 ↺ 逐个捡回)。
+# 用户要求:右键某标签能「关闭其他 TAB」。§8.109 撤掉「最近关闭」栈后,
+# 关闭只移出栏,重开从会话列表再点。
 CAP_PAGE=$(cat "$(dirname "$0")/ui-capabilities.html")
 if has "$APPJS" 'function openTabMenu(id, x, y)' &&
    has "$APPJS" 'function closeOtherTabs(id)' &&
@@ -2901,10 +2898,9 @@ if has "$APPJS" 'function openTabMenu(id, x, y)' &&
    has "$CSS" '#tabMenu,' && has "$CSS" '#rowMenu {' && has "$CSS" '.tabmenu-item {' &&
    has "$CAP_PAGE" '右键标签:菜单弹出且默认被阻止(压掉原生右键)' &&
    has "$CAP_PAGE" '关闭其他:只剩右键的标签并切到它' &&
-   has "$CAP_PAGE" '关闭其他:批量关的不进「最近关闭」栈(用户要求)' &&
-   has "$CAP_PAGE" '关闭此标签:移出标签栏并进重开栈' &&
+   has "$CAP_PAGE" '关闭此标签:移出标签栏(不删会话)' &&
    has "$CAP_PAGE" '单标签:点禁用的「关闭其他」无效'; then
-  echo "PASS: §8.100 标签右键菜单(关闭此标签 / 关闭其他标签),批量关闭不进重开栈,Esc / 外点收起"; pass=$((pass + 1))
+  echo "PASS: §8.100 标签右键菜单(关闭此标签 / 关闭其他标签),Esc / 外点收起"; pass=$((pass + 1))
 else
   echo "FAIL: §8.100 的右键菜单 / 关闭其他逻辑 / 样式或浏览器断言缺了一块"; fail=$((fail + 1))
 fi

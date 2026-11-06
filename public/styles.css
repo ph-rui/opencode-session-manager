@@ -377,38 +377,6 @@ table#list { width: 100%; border-collapse: collapse; }
 .tabmenu-item.disabled { color: var(--muted); cursor: default; }
 .tabmenu-item.disabled:hover { background: none; }
 
-#tabNew {
-  display: flex;
-  align-items: center;
-  flex: none;
-  padding: 0 12px;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 0.92em;
-  white-space: nowrap;
-  cursor: pointer;
-}
-#tabNew:hover { background: var(--bg); }
-#tabNew .tnShort { display: none; }
-/* §8.75 重开刚关闭的标签:窄屏也放在标签栏右侧,不占 tab 区的横向空间 */
-#tabReopen {
-  display: flex;
-  align-items: center;
-  flex: none;
-  padding: 0 10px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 1.15em;
-  line-height: 1;
-  cursor: pointer;
-}
-#tabReopen[hidden] { display: none; }
-#tabReopen:hover { background: var(--bg); color: var(--accent); }
-
 #chatHeader { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .chline { display: flex; align-items: center; gap: 10px; }
 #chatTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2099,18 +2067,15 @@ html.narrow #input,
 html.narrow #ctoolbar .ctl select { font-size: 16px; }
 
 /* ---- 对话区 ---- */
-/* §8.59 手机上的标签栏:再压 2px、tab 更窄、+ 只留一个加号;
-   横屏(矮)再收 4px。当前 tab 才露 ×,别的 tab 先点一下再关,少一排小叉。 */
+/* §8.59 手机上的标签栏:再压 2px、tab 更窄;横屏(矮)再收 4px。
+   当前 tab 才露 ×,别的 tab 先点一下再关,少一排小叉。
+   §8.109:栏右侧的 + 新建 / ↺ 按钮已撤,窄屏跟着少两条规则。 */
 html.narrow #sessionTabs { height: 34px; }
 html.narrow .tab { max-width: 150px; min-width: 84px; }
 html.narrow .tabmain { padding: 0 5px 0 8px; font-size: 12px; }
 html.narrow .tabx { width: 26px; font-size: 1.2em; }
 html.narrow .tab .tabx { display: none; }
 html.narrow .tab.active .tabx { display: flex; }
-html.narrow #tabNew { min-width: 40px; justify-content: center; padding: 0 8px; font-size: 12px; }
-html.narrow #tabNew .tnFull { display: none; }
-html.narrow #tabReopen { min-width: 34px; justify-content: center; padding: 0 6px; font-size: 14px; }
-html.narrow #tabNew .tnShort { display: inline; }
 html.narrow.short #sessionTabs { height: 30px; }
 /* 横屏宽度够,别把每格都压成 150px;竖屏仍收窄给后面的 tab 留位置 */
 html.narrow.short .tab { max-width: 220px; }
