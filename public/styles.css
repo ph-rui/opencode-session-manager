@@ -1096,8 +1096,8 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
   overflow-y: auto;
 }
 #send {
-  /* §8.110 输入框长高时发送钮不再跟着长,贴右下角(与 📎 同一规矩) */
-  align-self: flex-end;
+  /* §8.110 输入框长高时发送钮不再跟着长,与正文垂直居中(与 📎 同一规矩) */
+  align-self: center;
   padding: 0 18px;
   background: var(--accent);
   color: #fff;
@@ -1174,7 +1174,8 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
 
 .attachbtn {
   flex: none;
-  align-self: flex-end;
+  /* §8.110 输入框长高时与正文垂直居中,不再孤零零贴底 */
+  align-self: center;
   padding: 0 10px;
   height: 38px;
   font-size: 1.08em;

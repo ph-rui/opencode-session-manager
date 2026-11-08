@@ -506,6 +506,16 @@
       T('L2 六行输入自动长到放得下(框内无需滚动)',
         hSix > hBase + 2 && inp.scrollHeight <= inp.clientHeight + 1,
         { base: hBase, six: hSix });
+      /* 框长高后,📎 与发送钮要跟正文垂直居中,不能孤零零贴在底边 */
+      var trR = inp.getBoundingClientRect();
+      var atR = q('#btnAttach').getBoundingClientRect();
+      var sdR = q('#send').getBoundingClientRect();
+      T('L2b 框长高时 📎 与正文垂直居中(上下空隙均衡)',
+        Math.abs((atR.top - trR.top) - (trR.bottom - atR.bottom)) <= 3,
+        { above: atR.top - trR.top, below: trR.bottom - atR.bottom });
+      T('L2c 框长高时发送钮与正文垂直居中',
+        Math.abs((sdR.top - trR.top) - (trR.bottom - sdR.bottom)) <= 3,
+        { above: sdR.top - trR.top, below: trR.bottom - sdR.bottom });
       inp.value = ('这是一行足够长的文字,用来在行数很多的时候把高度顶到上限之上\n').repeat(60);
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       var vhCap = Math.round(window.innerHeight * 0.45);
