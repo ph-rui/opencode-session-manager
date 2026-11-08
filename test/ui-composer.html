@@ -486,6 +486,54 @@
       T('J3 手柄回来了 → 该收起还是收起', collapsed());
       T('J4 手柄回到原位(仍是 #composer 的子元素)', q('#btnComposer').parentElement.id === 'composer');
 
+
+      /* ===================== L. 输入框按多行正文自动长高(§8.110) ===================== */
+      /* 用户反馈:塞几行进输入框后,2 行高的定高框里只能靠 ↑/↓ 找行 —— 往上移看不到
+         下面那句、往下移看不到上面那句。现在:打字时量全文高度写回,45vh 封顶后在框里
+         滚;手动拖过高度的,自动调整不会把它缩回去;切会话恢复草稿、↑ 翻历史这类
+         编程改 value 的路径也要跟着量。 */
+      setNarrow(false);
+      setupComposerKeys(); // init 被 DOMContentLoaded 桩挡住,手动接线(同 §8.100 的做法)
+      var inp = q('#input');
+      T('L0 桌面展开,输入框可见', vis(inp));
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      var hBase = inp.clientHeight;
+      T('L1 空输入框是两行基线高', hBase > 20 && hBase < 100, hBase);
+      inp.value = '第一行\n第二行\n第三行\n第四行\n第五行\n第六行';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      var hSix = inp.clientHeight;
+      T('L2 六行输入自动长到放得下(框内无需滚动)',
+        hSix > hBase + 2 && inp.scrollHeight <= inp.clientHeight + 1,
+        { base: hBase, six: hSix });
+      inp.value = ('这是一行足够长的文字,用来在行数很多的时候把高度顶到上限之上\n').repeat(60);
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      var vhCap = Math.round(window.innerHeight * 0.45);
+      T('L3 超长正文停在 45vh 上限', inp.clientHeight <= vhCap + 2,
+        { h: inp.clientHeight, cap: vhCap });
+      T('L4 到顶之后框内可滚(scrollHeight 大于可视高)',
+        inp.scrollHeight > inp.clientHeight + 1,
+        { sh: inp.scrollHeight, ch: inp.clientHeight });
+      inp.value = '回到一行';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      T('L5 删回一行时缩回基线', Math.abs(inp.clientHeight - hBase) <= 2,
+        { h: inp.clientHeight, base: hBase });
+      inp.style.height = '200px';
+      inp.dispatchEvent(new UIEvent('resize', { bubbles: true }));
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      T('L6 手动拖过的高度被记住,自动调整不会缩回', inp.clientHeight >= 195, inp.clientHeight);
+      inp.style.height = '';
+      inputUserH = 0;
+      try { localStorage.removeItem('ocs.drafts'); } catch (_) {}
+      saveDraft('ses_a', '草稿第一行\n草稿第二行\n草稿第三行\n草稿第四行');
+      restoreDraft('ses_a');
+      T('L7 切会话恢复多行草稿,高度也立刻跟上',
+        inp.scrollHeight <= inp.clientHeight + 1 && inp.clientHeight > hBase,
+        { sh: inp.scrollHeight, ch: inp.clientHeight, base: hBase });
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inputUserH = 0;
+
       window.matchMedia = realMM;
 
       document.getElementById('results').textContent = out.join('\n');

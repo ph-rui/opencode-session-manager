@@ -562,7 +562,7 @@ else
   echo "FAIL: 缺「按两下 Esc 才打断」的实现 (got '$ESC_ARM')"; fail=$((fail + 1))
 fi
 # 输入框一有动静就归零(照 TUI 的 handleInputClear):半次 Esc 不能悬在那儿等手滑
-if has "$APPJS" "inp.addEventListener('input', () => disarmInterrupt())"; then
+if has "$APPJS" "inp.addEventListener('input', () => { disarmInterrupt(); syncInputHeight(); });"; then
   echo "PASS: 输入框有动静就撤掉「Esc 上膛」"; pass=$((pass + 1))
 else
   echo "FAIL: 输入框改动后没撤掉上膛状态"; fail=$((fail + 1))
@@ -3084,6 +3084,40 @@ if has "$APPJS" 'function openRowMenu(id, x, y)' &&
   echo "PASS: §8.107 会话行右键菜单 + 目录副行(桌面收操作列,目录挪到标题下,行上右键唤出操作)"; pass=$((pass + 1))
 else
   echo "FAIL: §8.107 的行右键菜单 / 目录副行 / 操作列收起缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R46 组:本地模型 reasoning 回补 + 空块不画(§8.108)----
+# 本地模型的 reasoning 只走流式 delta,落盘 part 是空的:收工对账把流式正文
+# 补进空 part(记账按消息 id,刷新前可重复用);收工后补不回的空块整段不画。
+if has "$APPJS" 'const adoptedReason = new Map();' &&
+   has "$APPJS" 'function applyAdoptedReason(m)' &&
+   has "$APPJS" 'applyAdoptedReason(m);' &&
+   has "$APPJS" 'if (!m.live && reasoningRunChars(run) === 0) continue;' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '第一次对账:空 reasoning part 补回流式正文' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '二次对账:live 已回收,空 part 仍从账本补回' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '补不回来的空思考块:不画「Thought」空壳' &&
+   has "$(cat "$(dirname "$0")/ui-stream.html")" '服务端带全文时不动(云模型落盘有全文)'; then
+  echo "PASS: §8.108 本地模型 reasoning 回补 / 记账 / 空块不画 / 带全文不动,ui-stream 浏览器断言都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.108 的回补接线 / 空块跳过 / 浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R47 组:输入框按多行正文自动长高(§8.110)----
+# 打字时量全文高度写回;CSS 45vh 封顶后框内滚;手动拖过的高度经 resize 事件
+# 记住,自动调整不把它缩回;恢复草稿 / 翻历史等编程改 value 的路径也量。
+COMP_PAGE=$(cat "$(dirname "$0")/ui-composer.html")
+if has "$APPJS" 'function syncInputHeight()' &&
+   has "$APPJS" 'let inputUserH = 0;' &&
+   has "$APPJS" "inp.addEventListener('input', () => { disarmInterrupt(); syncInputHeight(); });" &&
+   has "$APPJS" "inp.addEventListener('resize', () => { inputUserH = inp.clientHeight; });" &&
+   has "$APPJS" 'if (el) { el.value = draftText(sid); syncInputHeight(); }' &&
+   has "$CSS" 'max-height: 45vh;' &&
+   has "$COMP_PAGE" 'L2 六行输入自动长到放得下(框内无需滚动)' &&
+   has "$COMP_PAGE" 'L3 超长正文停在 45vh 上限' &&
+   has "$COMP_PAGE" 'L7 切会话恢复多行草稿,高度也立刻跟上'; then
+  echo "PASS: §8.110 输入框自动长高(量全文 / 45vh 封顶 / 手动高度不被缩回)与浏览器断言都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.110 的高度同步接线 / CSS 上限 / 浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
 echo

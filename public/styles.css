@@ -1091,8 +1091,13 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
   border-radius: 8px;
   font: inherit;
   font-family: var(--mono);
+  /* §8.110 多行正文由 syncInputHeight() 按全文长高;45vh 封顶,超出在框里滚 */
+  max-height: 45vh;
+  overflow-y: auto;
 }
 #send {
+  /* §8.110 输入框长高时发送钮不再跟着长,贴右下角(与 📎 同一规矩) */
+  align-self: flex-end;
   padding: 0 18px;
   background: var(--accent);
   color: #fff;

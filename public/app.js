@@ -3548,6 +3548,7 @@ function clearSelection() {
   $('#chatTitle').textContent = '未选择会话';
   $('#chatMeta').textContent = '';
   $('#input').value = ''; // §8.71:草稿已存在那个会话名下,输入框回到空态
+  syncInputHeight();
   clearAttachments();
   closeMentions();
   closeCommands();
@@ -8841,6 +8842,7 @@ function acceptMention(i) {
   closeMentions();
   el.focus();
   renderAttachments();
+  syncInputHeight();
 }
 
 // 补全列表开着时,把方向键/Enter/Tab/Esc 抢过来;返回 true 表示已消费
@@ -9016,7 +9018,7 @@ const HELP_KEYS = [
 
 function clearInput() {
   const el = $('#input');
-  if (el) el.value = '';
+  if (el) { el.value = ''; syncInputHeight(); }
   saveDraft(store.selected, ''); // §8.71:/clear 也把草稿一起清掉
   dropSessionSkills(store.selected); // §8.77:草稿没了,技能选择也一起撤掉
   store.histAt = -1; // 清空后别停在输入历史里(否则按 ↓ 又能把旧草稿翻回来)
@@ -9451,6 +9453,7 @@ function insertSkill(id, name) {
   renderAttachments();
   el.focus();
   updateComposerControls();
+  syncInputHeight();
 }
 
 /* /mcps:照 TUI 的 mcp.list / DialogMcp,只读列出服务器与状态;不接连接 / 断开 / 增删。
@@ -9746,6 +9749,7 @@ function acceptCommand(i) {
   closeCommands();
   el.focus();
   renderAttachments();
+  syncInputHeight();
   return it;
 }
 
@@ -9764,6 +9768,7 @@ function commandExecute(idx) {
   const range = store.cmdRange;
   if (!it || !el || !range) return;
   el.value = el.value.slice(0, range.start) + '/' + it.name + el.value.slice(range.end);
+  syncInputHeight();
   closeCommands();
   send();
 }
@@ -9896,7 +9901,7 @@ function saveCurrentDraft(sid) {
 
 function restoreDraft(sid) {
   const el = $('#input');
-  if (el) el.value = draftText(sid);
+  if (el) { el.value = draftText(sid); syncInputHeight(); }
   store.histAt = -1;
   store.histDraft = '';
 }
@@ -9941,6 +9946,7 @@ function historyKey(e) {
     el.value = text;
     if (el.setSelectionRange) el.setSelectionRange(text.length, text.length);
     renderAttachments();
+    syncInputHeight();
   }
   return true;
 }
@@ -10051,12 +10057,29 @@ async function runCommand(parsed, sid, files, busy) {
 }
 
 // 输入框内的按键优先级:命令面板 → @ 补全 → 输入历史 → 发送
+/* §8.110 输入框按正文行数自动长高:先量 height:auto 下的全文高度再写回,
+ * 上限交给 CSS 的 max-height(45vh),超出后在框里自己滚。用户手动拖 grip 调过
+ * 高度时记一笔(resize 事件),自动调整只会比用户的高度更大、不会把它缩回去;
+ * 浏览器不发 resize 时 inputUserH 一直是 0,自动调整全权负责,互不影响。 */
+let inputUserH = 0;
+function syncInputHeight() {
+  const el = $('#input');
+  if (!el || !el.offsetWidth) return; // 底板收起(display:none)量不到高度,别把高度写成 0
+  const cs = getComputedStyle(el);
+  const border = parseFloat(cs.borderTopWidth || '0') + parseFloat(cs.borderBottomWidth || '0');
+  el.style.height = 'auto';
+  // scrollHeight 与 inputUserH 都是【内高】口径,写回 style 时补上边框(border-box)
+  const h = Math.max(el.scrollHeight, inputUserH) + border;
+  el.style.height = h + 'px';
+}
+
 function setupComposerKeys() {
   const inp = $('#input');
   if (!inp) return;
   /* 输入框一有动静就把「Esc 上膛」收掉(照 TUI 的 handleInputClear:改了输入就等于
-   * 放弃这次中断),免得几秒前的半次 Esc 突然把回合砍了。 */
-  inp.addEventListener('input', () => disarmInterrupt());
+   * 放弃这次中断),免得几秒前的半次 Esc 突然把回合砍了。顺手把高度量到全文。 */
+  inp.addEventListener('input', () => { disarmInterrupt(); syncInputHeight(); });
+  inp.addEventListener('resize', () => { inputUserH = inp.clientHeight; });
   inp.addEventListener('keydown', (e) => {
     /* Ctrl+C = TUI 的 prompt.clear:输入框有内容就清掉。只在【输入框聚焦 + 没有
      * 选中文本】时接管 —— 有选区时 Ctrl+C 仍是浏览器的复制,不能把网页复制弄坏;
@@ -10257,6 +10280,7 @@ async function send() {
       // 命令确实执行了才清输入框(§8.74):失败时正文留着,改一改再试
       if ($('#input').value === raw) {
         $('#input').value = '';
+        syncInputHeight();
         store.mentionHits.clear();
         renderAttachments();
       }
@@ -10293,6 +10317,7 @@ async function send() {
      * 不用从会话草稿里找回来。请求期间用户又敲了新内容(draft 变了)就别动它。 */
     if ($('#input').value === raw) {
       $('#input').value = '';
+      syncInputHeight();
       store.mentionHits.clear(); // 正文清了,@ 引用的 chip 才跟着消失
       renderAttachments();
     }
