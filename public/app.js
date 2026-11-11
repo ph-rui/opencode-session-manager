@@ -11061,6 +11061,12 @@ function handleEvent(e) {
   // 断线重连后补一次(第一次连上不算,首屏的 loadMessages 已经在跑)
   const reconnect = t === 'server.connected' && sseConnectedOnce;
   if (t === 'server.connected') sseConnectedOnce = true;
+  if (reconnect && store.selected) {
+    // §8.111 断线期间丢掉的 form / permission 事件重连后不会重发 —— 手机上切后台
+    // EventSource 被挂起,问题选择框要等整页刷新才出现。重连时按当前会话补拉一次,
+    // 与消息 / 列表的补拉同一处收口。
+    loadAsks(store.selected);
+  }
   if ((msgWorthy && !(local && isStreamDelta(t))) || reconnect) {
     clearTimeout(msgTimer);
     msgTimer = setTimeout(() => {
@@ -11109,7 +11115,10 @@ function sseBusy() {
   if (store.pending || store.active.size) return true;
   const sel = store.selected;
   if (!sel) return false;
-  return isRunning(sel) || store.running || compactionRunning(sel) || !!openLiveForSid(sel);
+  // §8.111 有未答复的问询(问题 / 授权)时连接同样要紧:回答事件走同一条流,
+  // 半开断线时看门狗不能因为「会话空闲」而放弃重连。
+  return isRunning(sel) || store.running || compactionRunning(sel) || !!openLiveForSid(sel) ||
+    askCountFor(sel) > 0;
 }
 
 function sseWatchdog() {

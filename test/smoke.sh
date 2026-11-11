@@ -3120,6 +3120,18 @@ else
   echo "FAIL: §8.110 的高度同步接线 / CSS 上限 / 浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R48 组:断线重连补拉问询 + 未答复问询保活(§8.111)----
+# 手机切后台/锁屏时 EventSource 被挂起,form.created 丢了,重连后消息 / 列表都有
+# 补拉、唯独没有 asks —— 问题选择框要等整页刷新才出现。
+if has "$APPJS" 'if (reconnect && store.selected) {' &&
+   has "$APPJS" 'loadAsks(store.selected);' &&
+   has "$APPJS" 'askCountFor(sel) > 0' &&
+   has "$(cat "$(dirname "$0")/ui-controls.html")" '重连后补拉当前会话的 form / permission'; then
+  echo "PASS: §8.111 SSE 重连补拉当前会话问询 / 有未答复问询时看门狗照重连,浏览器断言都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.111 的重连补拉 / 连接保活接线缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

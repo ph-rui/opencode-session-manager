@@ -560,8 +560,39 @@
       var nIdle = made.length;
       sseWatchdog();
       T('没有活跃会话时不为了空转重连', made.length === nIdle, made.length);
+      /* §8.111 问题挂起时会话未必 busy,但连接断了就等不到答案:
+         有未答复问询时看门狗照样主动重连。 */
+      store.selected = 'ses_t';
+      store.asks.set(askKey('form', 'f_test'), { kind: 'form', id: 'f_test', sessionID: 'ses_t',
+        data: {}, busy: false, error: null });
+      lastSseAt = 0;
+      var nAsk = made.length;
+      sseWatchdog();
+      T('当前会话有未答复问询:连接半开时看门狗照重连', made.length === nAsk + 1, made.length);
+      store.asks.clear();
+      store.selected = null;
       if (made[1]) made[1].close();
       window.EventSource = class { constructor() {} close() {} };
+
+      /* §8.111 断线重连后补拉当前会话的问询:form.created 在断线期间丢了不会重发,
+         不补拉的话问题选择框要等整页刷新(或重进会话)才出现 —— 手机切后台必踩。 */
+      sseConnectedOnce = false;
+      store.asks.clear();
+      store.selected = SESSION.id;
+      handleEvent({ id: 'evt_conn0', type: 'server.connected', data: {} });
+      T('第一次连上不算重连:不补拉问询', reqs(/\/form$/).length === 0,
+        reqs(/\/form$/).length);
+      var askForm0 = reqs(/\/form$/).length;
+      var askPerm0 = reqs(/\/permission$/).length;
+      handleEvent({ id: 'evt_conn1', type: 'server.connected', data: {} });
+      for (var ai = 0; ai < 12; ai++) await Promise.resolve();
+      T('重连后补拉当前会话的 form / permission(问题框不用等刷新)',
+        reqs(/\/api\/session\/ses_t\/form$/).length === askForm0 + 1 &&
+        reqs(/\/api\/session\/ses_t\/permission$/).length === askPerm0 + 1,
+        { form: reqs(/\/api\/session\/ses_t\/form$/).length - askForm0,
+          perm: reqs(/\/api\/session\/ses_t\/permission$/).length - askPerm0 });
+      store.asks.clear();
+      store.selected = null;
 
       /* ---------------- 轻量提示 ---------------- */
       flash('提示内容', 'bad');
