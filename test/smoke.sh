@@ -3132,18 +3132,19 @@ else
   echo "FAIL: §8.111 的重连补拉 / 连接保活接线缺了一块"; fail=$((fail + 1))
 fi
 
-# ---- R49 组:代码块「复制」按钮(§8.112)----
-# 用户反馈:消息里的代码块(路径 / 命令段)想拿去用,只能手动选。md() 的围栏
-# 代码块统一带 .cbcopy,点击 document 级委托走 copyText(纯代码正文)。
+# ---- R49 组:代码块 header 条「复制」按钮(§8.112)----
+# 用户反馈:消息里的代码块(路径 / 命令段)想拿去用,只能手动选;右上角小按钮
+# 又反馈不好点,挪到代码块上方 header 条(语言名在左、按钮在右、常驻)。
+# 点击 document 级委托走 copyText(纯代码正文)。
 TOOLS_PAGE=$(cat "$(dirname "$0")/ui-tools.html")
 if has "$APPJS" 'function setupCodeCopy()' &&
    has "$APPJS" 'setupCodeCopy(); // §8.112' &&
-   has "$APPJS" "'<div class=\"codeblock\"><button type=\"button\" class=\"cbcopy\"" &&
+   has "$APPJS" "'<div class=\"codeblock\"><div class=\"cbhead\">'" &&
    has "$APPJS" 'copyText(code.textContent).then((good) => {' &&
-   has "$CSS" '.codeblock { position: relative; }' &&
-   has "$CSS" 'html.narrow .codeblock .cbcopy { opacity: 1; pointer-events: auto; }' &&
+   has "$CSS" '.codeblock .cbhead {' &&
+   has "$CSS" '.codeblock pre { margin-top: 0; border-radius: 0 0 5px 5px; }' &&
    has "$TOOLS_PAGE" '点「复制」交给 copyText 的是纯代码正文(不含按钮文案)'; then
-  echo "PASS: §8.112 代码块「复制」按钮(md 接线 / 委托复制 / 窄屏常驻)与浏览器断言都在"; pass=$((pass + 1))
+  echo "PASS: §8.112 代码块「复制」按钮(header 条接线 / 委托复制 / 常驻样式)与浏览器断言都在"; pass=$((pass + 1))
 else
   echo "FAIL: §8.112 的代码块复制接线 / 样式 / 浏览器断言缺了一块"; fail=$((fail + 1))
 fi

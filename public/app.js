@@ -2176,7 +2176,7 @@ async function copyText(text) {
 }
 
 /* §8.112 代码块「复制」按钮:document 级委托点击。md() 输出的
- * .codeblock > .cbcopy + pre code 形状统一,一处委托全场景生效
+ * .codeblock > .cbhead > .cbcopy + pre code 形状统一,一处委托全场景生效
  * (消息 / 思考块 / 压缩摘要 / What's new 对话框)。 */
 function setupCodeCopy() {
   if (typeof document === 'undefined' || document.documentElement.dataset.codeCopyWired === '1') return;
@@ -4754,10 +4754,14 @@ function md(text) {
         i++;
       }
       i++;
-      // §8.112 代码块右上角带「复制」按钮:点击由 setupCodeCopy() 在 document 上委托,
+      // §8.112 代码块 header 条:语言名在左、「复制」按钮在右(用户反馈右上角小按钮不好点,
+      // 挪到块上方一条 header,常驻不压代码);点击由 setupCodeCopy() 在 document 上委托,
       // 消息整批重建 / 流式与压缩摘要反复跑 md() 都不会丢接线
       html +=
-        '<div class="codeblock"><button type="button" class="cbcopy" title="复制代码" aria-label="复制代码">复制</button>' +
+        '<div class="codeblock"><div class="cbhead">' +
+        (lang ? '<span class="cblang">' + esc(lang) + '</span>' : '') +
+        '<button type="button" class="cbcopy" title="复制代码" aria-label="复制代码">复制</button>' +
+        '</div>' +
         '<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
         esc(buf.join('\n')) + '</code></pre></div>';
       continue;
