@@ -635,6 +635,30 @@ html.narrow #ctxInfo .ctxCompact { display: inline; }
   overflow-x: auto;
 }
 .content pre code { background: none; border: none; padding: 0; font-size: 0.92em; }
+/* §8.112 代码块「复制」按钮:悬停才露出(隐藏时 pointer-events:none,不挡选代码),
+   窄屏没有 hover 就常驻;不限定 .content —— What's new 等 md() 场景也一起生效 */
+.codeblock { position: relative; }
+.codeblock .cbcopy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 0.78em;
+  line-height: 1.6;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+.codeblock:hover .cbcopy,
+.codeblock .cbcopy:focus-visible { opacity: 1; pointer-events: auto; }
+.codeblock .cbcopy:hover { color: var(--accent); border-color: var(--accent); }
+.codeblock .cbcopy.ok { color: #1a7f37; border-color: #b7dfc3; }
+html.narrow .codeblock .cbcopy { opacity: 1; pointer-events: auto; }
 
 /* Markdown 表格 */
 .md-table-wrap { margin: 8px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 5px; }

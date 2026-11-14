@@ -3132,6 +3132,22 @@ else
   echo "FAIL: §8.111 的重连补拉 / 连接保活接线缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R49 组:代码块「复制」按钮(§8.112)----
+# 用户反馈:消息里的代码块(路径 / 命令段)想拿去用,只能手动选。md() 的围栏
+# 代码块统一带 .cbcopy,点击 document 级委托走 copyText(纯代码正文)。
+TOOLS_PAGE=$(cat "$(dirname "$0")/ui-tools.html")
+if has "$APPJS" 'function setupCodeCopy()' &&
+   has "$APPJS" 'setupCodeCopy(); // §8.112' &&
+   has "$APPJS" "'<div class=\"codeblock\"><button type=\"button\" class=\"cbcopy\"" &&
+   has "$APPJS" 'copyText(code.textContent).then((good) => {' &&
+   has "$CSS" '.codeblock { position: relative; }' &&
+   has "$CSS" 'html.narrow .codeblock .cbcopy { opacity: 1; pointer-events: auto; }' &&
+   has "$TOOLS_PAGE" '点「复制」交给 copyText 的是纯代码正文(不含按钮文案)'; then
+  echo "PASS: §8.112 代码块「复制」按钮(md 接线 / 委托复制 / 窄屏常驻)与浏览器断言都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.112 的代码块复制接线 / 样式 / 浏览器断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

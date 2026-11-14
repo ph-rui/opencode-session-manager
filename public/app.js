@@ -2175,6 +2175,27 @@ async function copyText(text) {
   }
 }
 
+/* §8.112 代码块「复制」按钮:document 级委托点击。md() 输出的
+ * .codeblock > .cbcopy + pre code 形状统一,一处委托全场景生效
+ * (消息 / 思考块 / 压缩摘要 / What's new 对话框)。 */
+function setupCodeCopy() {
+  if (typeof document === 'undefined' || document.documentElement.dataset.codeCopyWired === '1') return;
+  document.documentElement.dataset.codeCopyWired = '1';
+  document.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest ? e.target.closest('.cbcopy') : null;
+    if (!b) return;
+    const wrap = b.closest('.codeblock');
+    const code = wrap && wrap.querySelector('pre code');
+    if (!code) return;
+    copyText(code.textContent).then((good) => {
+      if (!good) return; // 失败时 copyText 已提示,按钮保持原样
+      b.textContent = '已复制';
+      b.classList.add('ok');
+      setTimeout(() => { b.textContent = '复制'; b.classList.remove('ok'); }, 1500);
+    });
+  });
+}
+
 async function copyTui() {
   const inp = $('#tuiCmd');
   const ok = await copyText(inp.value);
@@ -4733,9 +4754,12 @@ function md(text) {
         i++;
       }
       i++;
+      // §8.112 代码块右上角带「复制」按钮:点击由 setupCodeCopy() 在 document 上委托,
+      // 消息整批重建 / 流式与压缩摘要反复跑 md() 都不会丢接线
       html +=
+        '<div class="codeblock"><button type="button" class="cbcopy" title="复制代码" aria-label="复制代码">复制</button>' +
         '<pre><code' + (lang ? ' class="lang-' + esc(lang) + '"' : '') + '>' +
-        esc(buf.join('\n')) + '</code></pre>';
+        esc(buf.join('\n')) + '</code></pre></div>';
       continue;
     }
     if (isTableRow(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
@@ -11826,6 +11850,7 @@ function init() {
   setupUpdateBar(); // §8.103 OpenCode 新版提示条(照 TUI 的 /update)
   setupWhatsNew(); // §8.104 更新后的 What's new 弹窗
   setupReasonLazy(); // §8.99 折着的思考块:展开时再补正文
+  setupCodeCopy(); // §8.112 代码块「复制」按钮(document 级委托)
   setupTuiKeys(); // I 组:全局 Esc 中断 / Ctrl+P 命令面板 / Shift+Tab 切智能体
   setupPick(); // 选择框对话框(/models · /agents · /sessions)
   setupBrowse(); // §8.106 目录选择器(新建 / 导入的「浏览…」)

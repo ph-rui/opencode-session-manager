@@ -1881,6 +1881,59 @@
         rNewD.querySelector('.rbody').textContent.indexOf('这是一段很长的思考正文') >= 0,
         rNewD.querySelector('.rbody').children.length);
 
+      /* ================= §8.112 代码块「复制」按钮 ================= */
+      /* 用户反馈:消息里的代码块(如 API 路径列表)想拿去用,只能手动选中。
+         md() 的围栏代码块右上角带「复制」按钮:桌面悬停才露出、窄屏常驻,
+         点击走 copyText(纯代码正文),成功后「已复制」1.5s 复原。 */
+      setupCodeCopy(); // 测试页 init 被 DOMContentLoaded 桩挡住,手动接线(同 setupReasonLazy 的做法)
+      var cbHost = document.createElement('div');
+      cbHost.className = 'content';
+      cbHost.innerHTML = md('```\nalpha\nbeta\n```');
+      document.body.appendChild(cbHost);
+      var cbBtn = cbHost.querySelector('.cbcopy');
+      T('md() 代码块右上角带「复制」按钮',
+        !!cbBtn && cbBtn.textContent === '复制' &&
+        cbBtn.parentElement === cbHost.querySelector('.codeblock'),
+        cbBtn && cbBtn.outerHTML.slice(0, 80));
+      T('代码块正文仍是 pre code(复制内容不受按钮影响)',
+        cbHost.querySelector('.codeblock pre code').textContent === 'alpha\nbeta');
+      /* 剪贴板在无头环境拿不到权限,直接桩掉 copyText(它自己另有 §8.72 的回归锁):
+         这里验的是「按钮把正确的文本交给 copyText」这一环。 */
+      var realCopyText = window.copyText;
+      var copiedArg = null;
+      window.copyText = async function (t) { copiedArg = t; return true; };
+      var p1500_0 = window.__pending(1500);
+      cbBtn.click();
+      for (var cbi = 0; cbi < 8; cbi++) await Promise.resolve();
+      T('点「复制」交给 copyText 的是纯代码正文(不含按钮文案)',
+        copiedArg === 'alpha\nbeta', copiedArg);
+      T('复制成功后按钮变「已复制」并排 1500ms 复原',
+        cbBtn.textContent === '已复制' && cbBtn.classList.contains('ok') &&
+        window.__pending(1500) === p1500_0 + 1,
+        { text: cbBtn.textContent, added: window.__pending(1500) - p1500_0 });
+      window.copyText = realCopyText;
+      (function () {
+        var h2 = document.createElement('div');
+        h2.innerHTML = md('```a\nx\n```\nmid\n```b\ny\n```');
+        T('一段正文多个围栏代码块:各带一个「复制」按钮',
+          h2.querySelectorAll('.cbcopy').length === 2 &&
+          h2.querySelectorAll('.codeblock').length === 2,
+          h2.querySelectorAll('.cbcopy').length);
+      })();
+      T('非 md() 的 pre(工具卡输出)不带「复制」按钮',
+        toolOutputHtml({ content: [{ text: 'plain\noutput' }] }).indexOf('cbcopy') < 0);
+      document.documentElement.classList.add('narrow');
+      T('窄屏(没有 hover):「复制」按钮常驻可见',
+        getComputedStyle(cbBtn).opacity === '1' &&
+        getComputedStyle(cbBtn).pointerEvents === 'auto',
+        getComputedStyle(cbBtn).opacity);
+      document.documentElement.classList.remove('narrow');
+      T('桌面:未悬停时按钮隐藏且不挡选代码(pointer-events:none)',
+        getComputedStyle(cbBtn).opacity === '0' &&
+        getComputedStyle(cbBtn).pointerEvents === 'none',
+        getComputedStyle(cbBtn).opacity);
+      cbHost.remove();
+
       /* ================= §8.99 冷启分批渲染 ================= */
       function progMessages(n) {
         var m = new Map();
