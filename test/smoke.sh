@@ -3149,6 +3149,21 @@ else
   echo "FAIL: §8.112 的代码块复制接线 / 样式 / 浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R50 组:点选项不再清空自填框(§8.113)----
+# 用户反馈:问询卡片里打了自填文字,一点上面的选项就被清掉。改成保留文字、
+# 置灰提示不提交,答案以最后动的那一侧为准(选选项 → 选项;打字 → 取消选项)。
+ASKS_PAGE=$(cat "$(dirname "$0")/ui-asks.html")
+if has "$APPJS" 'function syncCustomDim(w, custom) {' &&
+   has "$APPJS" "custom.classList.toggle('inactive', off);" &&
+   has "$APPJS" 'if (r.checked) syncCustomDim(w, custom);' &&
+   has "$CSS" '.ask-field input.custom.inactive { opacity: 0.45; }' &&
+   has "$ASKS_PAGE" '选回选项后自填文字保留(不再清空)' &&
+   has "$ASKS_PAGE" 'string 单选:选中的选项以字符串进入答案'; then
+  echo "PASS: §8.113 点选项不清空自填框(置灰提示 / 最后动的一侧为准)与浏览器断言都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.113 的自填框保留 / 置灰 / 断言缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

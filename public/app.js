@@ -8042,6 +8042,17 @@ function refreshFields(el) {
   });
 }
 
+/* 单选字段:选了选项时自填框里的字保留但置灰 —— 提交以选项为准,免得以为它会带上。
+ * 文字与选中的选项一模一样时不用置灰(答案本来就一致)。 */
+function syncCustomDim(w, custom) {
+  if (!custom) return;
+  const r = w.querySelector('input[type=radio]:checked');
+  const txt = String(custom.value || '').trim();
+  const off = !!r && !!txt && txt !== r.value;
+  custom.classList.toggle('inactive', off);
+  custom.title = off ? '已选中上面的选项,这里填的字不会提交' : '';
+}
+
 function formCard(a) {
   const f = a.data || {};
   const fields = f.fields || [];
@@ -8065,7 +8076,10 @@ function formCard(a) {
   el.addEventListener('input', () => refreshFields(el));
   el.addEventListener('change', () => refreshFields(el));
 
-  /* 单选 + 自填:二者互斥(question 工具的单选即 string+options / multiselect+maxItems=1) */
+  /* 单选 + 自填(question 工具的单选即 string+options / multiselect+maxItems=1):
+   * 答案以「最后动的那一侧」为准 —— 点选项就按选项提交,往自填框里打字会取消选项。
+   * 点选项【不再清空】自填框:用户反馈「点一下选项,下面打的字就没了」;文字保留、
+   * 置灰提示不会提交,改主意时不用重打。 */
   el.querySelectorAll('.ask-field').forEach((w) => {
     const fld = fields[Number(w.dataset.idx)];
     const custom = w.querySelector('input.custom');
@@ -8077,13 +8091,15 @@ function formCard(a) {
     if (!single) return;
     w.querySelectorAll('input[type=radio]').forEach((r) =>
       r.addEventListener('change', () => {
-        if (r.checked) custom.value = '';
+        if (r.checked) syncCustomDim(w, custom);
       })
     );
     custom.addEventListener('input', () => {
       if (custom.value.trim())
         w.querySelectorAll('input[type=radio]').forEach((r) => (r.checked = false));
+      syncCustomDim(w, custom);
     });
+    syncCustomDim(w, custom);
   });
 
   el.querySelector('.ask-submit').addEventListener('click', () => submitForm(a, el));
@@ -8156,19 +8172,24 @@ function readFieldValue(w, f) {
       w.querySelectorAll('input[type=radio]:checked, input[type=checkbox]:checked')
     ).map((i) => i.value);
     const custom = w.querySelector('input.custom');
+    if (f.maxItems === 1) {
+      /* 单选(radio):选了选项就以选项为准,没选才用自填文字(与 string 那条同规则) */
+      if (arr.length) return arr;
+      return custom && custom.value.trim() ? [custom.value.trim()] : undefined;
+    }
     if (custom && custom.value.trim()) {
       const t = custom.value.trim();
-      if (f.maxItems === 1) return [t];
       if (arr.indexOf(t) < 0) arr.push(t);
     }
     return arr.length ? arr : undefined;
   }
   if (f.type === 'string' && w.querySelector('input[type=radio]')) {
-    /* 单选(选项行):选了就是那个字符串;自填优先,与选项互斥 */
-    const custom = w.querySelector('input.custom');
-    if (custom && custom.value.trim()) return custom.value.trim();
+    /* 单选(选项行):最后动的那一侧为准 —— 选了选项就是那个字符串;没选选项才用自填文字
+     * (往自填框里打字时 formCard 会把选项取消掉) */
     const r = w.querySelector('input[type=radio]:checked');
-    return r ? r.value : undefined;
+    if (r) return r.value;
+    const custom = w.querySelector('input.custom');
+    return custom && custom.value.trim() ? custom.value.trim() : undefined;
   }
   const inp = w.querySelector('input, select, textarea');
   if (!inp) return undefined;

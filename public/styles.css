@@ -964,6 +964,9 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
 }
 .ask-field select { max-width: 420px; }
 .ask-field input.custom { margin-top: 4px; }
+/* §8.113 单选已选中时,自填框留着字但置灰(提交以选项为准);点进去编辑就恢复正常 */
+.ask-field input.custom.inactive { opacity: 0.45; }
+.ask-field input.custom.inactive:focus { opacity: 1; }
 .ext { color: var(--accent); font-size: 1em; }
 .perm-act { font-family: var(--mono); font-size: 1em; }
 .perm-res { display: flex; flex-wrap: wrap; gap: 4px; }
