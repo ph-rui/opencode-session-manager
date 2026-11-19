@@ -3562,7 +3562,6 @@ function clearSelection() {
   $('#older').hidden = true;
   store.msgError = ''; // 没选中会话:失败提示也一并撤掉(否则它会跟着下一个会话)
   store.msgSeq++; // 在途的响应与重试就地作废
-  repinSeq++; // 「贴完底再跟几帧」那一轮也一起作废(不然它会去动下一个会话的位置)
   setMsgLoading(false);
   paintMsgState();
   updateJumpLatest(); // 没选中会话了 → 收起来
@@ -3836,53 +3835,17 @@ function jumpToMessage(id) {
   return true;
 }
 
-/* cvmany(content-visibility: auto)下 scrollHeight 是【估值】:贴完底之后浏览器才把
- * 离屏元素的估值落定 —— 估值一动 scrollHeight 就变,浏览器还会把 scrollTop 夹回去。
- * 于是「明明贴了底」变成停在最新消息上面几百像素(§8.35 实测竖屏 466px,桌面那档
- * 历史上 1473px),而且【不再有渲染来纠正它】:那条会话要是安静下来,就永远停在那儿。
- *
- * 贴完底之后补几帧,跟到 scrollHeight 稳住为止:
- *   - 只有真的变了才重新贴(干净时读 scrollHeight 是一次廉价读,不白贴);
- *   - 用户一往上滚就停手(store.nearBottom 被滚动监听翻成 false);
- *   - 又渲染/又切会话就作废(repinSeq,见 renderMessages 与 selectSession);
- *   - 短会话压根没有 cvmany,不走这条路。
- *
- * §8.46:原来还压着一个 800ms 的【时间】预算 —— 跟高度没关系,只是赌「估值落定会在
- * 800ms 内」。改成盯高度:
- *   ① 高度连续 REPIN_STABLE_FRAMES 帧没变就收手(估值落定实测 400ms 内,但没必要干等);
- *      REPIN_MAX_MS 只当自保 —— 内容一直在长时别把 rAF 挂到天荒地老;
- *   ② 真正「图迟一步撑开」那种跟时间赌不赢(解码可能几秒后才完):另起一个
- *      ResizeObserver 盯 #messages 里的内容元素 —— 高度一变(估值落定 / 图撑开),
- *      只要还贴着底就补贴一次。没有时间窗口,也不常驻 rAF(空闲时零开销);
- *   ③ 用户自己点开 <details> 也会让内容长高,那不是「迟到的东西」:刚点过的 400ms 内
- *      不抢着贴(以前的时间预算天然躲开了这一类,别在改成盯高度后把它弄丢)。 */
-const REPIN_STABLE_FRAMES = 2;
-const REPIN_MAX_MS = 3000;
+/* §8.114:旧「贴完底再跟几帧」采样循环(见设计文档 §8.36/§8.46①)是为离屏估值
+ * 贴底后才落定而设的;估值撤掉后 scrollHeight 一直是真实高度,
+ * 那套采样连同它的作废计数一并撤掉。留下的「盯内容高度」靠这只眼:
+ *   - 真正「图迟一步撑开」那种跟时间赌不赢(解码可能几秒后才完):ResizeObserver
+ *     盯 #messages 里的内容元素 —— 高度一变(图撑开 / <details> 展开),只要还贴着底
+ *     就补贴一次。没有时间窗口,也不常驻 rAF(空闲时零开销);
+ *   - 用户自己点开 <details> 也会让内容长高,那不是「迟到的东西」:刚点过的
+ *     REPIN_GESTURE_MS 内不抢着贴。 */
 const REPIN_GESTURE_MS = 400;
-let repinSeq = 0;
 
-function repinUntilStable(box) {
-  if (!box) return;
-  const seq = ++repinSeq;
-  const t0 = performance.now();
-  let prev = -1;
-  let stable = 0;
-  const step = () => {
-    if (seq !== repinSeq || !store.nearBottom) return;
-    const h = box.scrollHeight;
-    if (h !== prev) {
-      prev = h;
-      stable = 0;
-      pinBottom(box);
-    } else if (++stable >= REPIN_STABLE_FRAMES) {
-      return; // 高度稳住了:这一轮采样结束(不用等满 REPIN_MAX_MS)
-    }
-    if (performance.now() - t0 < REPIN_MAX_MS) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
-
-/* 「盯内容高度」的第二只眼(§8.46 ②):ResizeObserver 盯 #messages 的每个直接子元素。
+/* 「盯内容高度」(原 §8.46 ②):ResizeObserver 盯 #messages 的每个直接子元素。
  * renderMessages 收尾时 sync 一次(新建 / 换掉的节点跟着换);高度一变就补贴一次 ——
  * 判定仍旧只有「还贴着底」(store.nearBottom),用户翻上去了绝不把人拽下来。 */
 let repinObs = null;
@@ -4227,7 +4190,6 @@ async function selectSession(id) {
   clearQuietRetry(true);
   cancelSettle();
   store.msgSeq++; // 这一下就把在途的响应与重试作废(下面 loadMessages 还会再记一代)
-  repinSeq++; // 上一会话「贴完底再跟几帧」那一轮也作废
   setMsgLoading(false);
   paintMsgState();
   renderAsks();
@@ -6927,11 +6889,6 @@ function markTurnDone(sid, opts) {
   return closed;
 }
 
-/* content-visibility: auto 只对「真长」的会话开(见 styles.css 里 #messages.cvmany > .msg)。
-   条数少的时候离屏内容本来就没多少,省不下几个钱,却要拿 contain-intrinsic-size 的估值去
-   占位 —— 短会话「压根不用滚」的场景反而会被估值虚高撑出一条假滚动条。所以按条数挂开关,
-   阈值取 30:再少的话那次 flush 也就几毫秒,不值得引入估值这个变量。 */
-const CV_MIN_MSGS = 30;
 
 /* §8.99 冷启分批:一次要建的条数过这个门槛才分。
  * 60 条那档(测试里的「长会话」)照旧一次画完,行为一个字节都不变。 */
@@ -7075,9 +7032,6 @@ function renderMessages() {
   const box = $('#messages');
   cancelScheduledLivePaint(); // 整表重绘会覆盖这一帧的增量内容,排队的那一帧别再白跑
   const msgs = currentMessages();
-  repinSeq++; // 这一轮渲染一来,上一轮「贴完底再跟几帧」就地作废(免得它去动新会话说位置)
-  // 够长才让离屏消息跳过渲染(CV_MIN_MSGS);短会话维持原样,滚动行为一个字节都不变
-  box.classList.toggle('cvmany', msgs.length >= CV_MIN_MSGS);
   const force = store.forceBottom;
   store.forceBottom = false;
   const pending = store.restoreScroll; // 待还原的滚动锚点:有它就不许跳到底
@@ -7217,7 +7171,6 @@ function renderMessages() {
   // 布局。那次读正好落在刚改完 DOM 之后,是整个 renderMessages() 里最贵的一步
   // (脏树 atBottom 实测 23~29ms)。只有「还原了滚动锚点」这种位置不确定的情况才量一次。
   let atB = null;
-  let pinned = false;
   if (pending && msgs.length) {
     store.restoreScroll = null; // 消费掉:只在这次渲染还原一次
     if (pending.bottom) {
@@ -7225,7 +7178,6 @@ function renderMessages() {
       // 离开期间新到的消息会继续把底往下推,这里贴住的就是最新的底。
       pinBottom(box);
       atB = true;
-      pinned = true;
     } else {
       applyScrollAnchor(pending);
       atB = atBottom(box);
@@ -7233,15 +7185,12 @@ function renderMessages() {
   } else if (nearBottom) {
     pinBottom(box);
     atB = true;
-    pinned = true;
   } else if (!pending) {
     atB = false; // 没锚点要还原、也没跟底 → 就是不在底部
   }
   $('#older').hidden = !store.msgOlderCursor;
   // 内容高度刚变过,底部判定跟着变 —— 往上翻着的时候新内容进来,这里就把按钮露出来
   updateJumpLatest(atB);
-  // 贴完底之后再跟几帧:cvmany 的离屏估值是【贴完之后】才落定的,一落定就把底顶歪(见 repinUntilStable)
-  if (pinned && box.classList.contains('cvmany')) repinUntilStable(box);
   syncRepinWatch(); // §8.46:盯内容高度那只眼(新建/换掉的节点跟着换,晚了才撑开的图也接得住)
   observeLazyToolCards(); // §8.83:新出现的工具卡懒壳进入预加载范围后逐帧补正文
 

@@ -1565,24 +1565,21 @@ if has "$APPJS" "known === false ? '' : '(未指定工程目录)'"; then
 else
   echo "FAIL: paintPromptFooter 还把「还不知道」印成「(未指定工程目录)」"; fail=$((fail + 1))
 fi
-# 离屏消息跳过渲染(content-visibility:auto):只对长会话开,而且必须挂 .cvmany 这个开关
-if has "$CSS" '#messages.cvmany > .msg' && has "$CSS" 'content-visibility: auto' &&
-   has "$CSS" 'contain-intrinsic-size: auto'; then
-  echo "PASS: 长会话离屏消息跳过渲染(.cvmany + content-visibility + 估值高度)"; pass=$((pass + 1))
+# §8.114:content-visibility(离屏跳渲染 + 220px 估值)已撤 —— 估值与真实高度差太远,
+# 往上翻时浏览器滚动锚定把 scrollTop 顶回去,滚轮在转画面不动,估值落定后才「突然又能翻」。
+# 反向封锁:content-visibility / .cvmany / CV_MIN_MSGS 一个都不许回来。
+if printf '%s' "$CSS" | grep -q 'content-visibility\|\.cvmany' ||
+   printf '%s' "$APPJS" | grep -q 'classList\.toggle(.\?cvmany\|CV_MIN_MSGS'; then
+  echo "FAIL: §8.114 content-visibility / .cvmany 复活了(上翻卡住的病根)"; fail=$((fail + 1))
 else
-  echo "FAIL: 缺 content-visibility 优化或没挂 .cvmany 开关"; fail=$((fail + 1))
+  echo "PASS: §8.114 content-visibility 全撤(CSS 与 app.js 都没有估值高度)"; pass=$((pass + 1))
 fi
-# 反向封锁:不许无条件挂 —— 短会话拿估值占位会把「不用滚」的场景撑出假滚动条
-if printf '%s' "$CSS" | grep -qE '^[[:space:]]*#messages > \.msg[[:space:]]*\{'; then
-  echo "FAIL: content-visibility 挂成了无条件(#messages > .msg),短会话会被估值撑出假滚动条"; fail=$((fail + 1))
+if has "$APPJS" 'function syncRepinWatch()' && has "$APPJS" 'const REPIN_GESTURE_MS' &&
+   ! printf '%s' "$APPJS" | grep -q 'repinUntilStable\|repinSeq' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '§8.114'; then
+  echo "PASS: §8.114 跟估值落定的采样循环一并撤掉,ResizeObserver 盯高度那只眼留着"; pass=$((pass + 1))
 else
-  echo "PASS: content-visibility 没有无条件挂(短会话行为不变)"; pass=$((pass + 1))
-fi
-if has "$APPJS" 'const CV_MIN_MSGS' && has "$APPJS" "classList.toggle('cvmany'" &&
-   has "$(cat "$(dirname "$0")/ui-layout.html")" 'cvmany'; then
-  echo "PASS: 开关由 renderMessages() 按条数挂,ui-layout 有正反两面的断言"; pass=$((pass + 1))
-else
-  echo "FAIL: .cvmany 开关的接线不对(或缺 ui-layout 断言)"; fail=$((fail + 1))
+  echo "FAIL: §8.114 采样循环残留,或缺 ResizeObserver / ui-jump 断言"; fail=$((fail + 1))
 fi
 # §8.83 工具卡正文懒渲染:只对大正文工具卡出 summary 壳,进入预加载范围后一帧补一张。
 if has "$APPJS" 'const LAZY_TOOL_CARD_MIN' && has "$APPJS" 'const LAZY_TOOL_TOTAL_MIN' &&
@@ -2113,22 +2110,18 @@ else
   echo "FAIL: ui-jump.html 里没有页大小的断言"; fail=$((fail + 1))
 fi
 
-# ---- R13 组:贴完底再跟几帧(cvmany 的离屏估值是贴完之后才落定的;§8.36 / §8.46)----
-if has "$APPJS" 'function repinUntilStable(box)' && has "$APPJS" 'const REPIN_MAX_MS = 3000' &&
-   has "$APPJS" 'const REPIN_STABLE_FRAMES = 2' && has "$APPJS" 'requestAnimationFrame(step)' &&
-   has "$APPJS" "if (pinned && box.classList.contains('cvmany')) repinUntilStable(box)" &&
-   [ "$(printf '%s' "$APPJS" | grep -oF 'repinSeq++' | wc -l)" = 3 ]; then
-  echo "PASS: 贴完底再跟几帧:只在 cvmany 下、有自保上限,切会话/取消选中/再渲染三处都作废"; pass=$((pass + 1))
+# ---- R13 组:盯内容高度(§8.46)+ §8.114 估值采样循环撤除 ----
+if has "$APPJS" 'function syncRepinWatch()' && has "$APPJS" 'new ResizeObserver(' &&
+   ! printf '%s' "$APPJS" | grep -q 'repinUntilStable\|repinSeq\|REPIN_MAX_MS\|REPIN_STABLE_FRAMES'; then
+  echo "PASS: §8.114 repinUntilStable / repinSeq / REPIN_MAX_MS 随估值撤掉,ResizeObserver 这只眼留着"; pass=$((pass + 1))
 else
-  echo "FAIL: 「贴完底再跟几帧」没接对(或缺作废点/自保上限)"; fail=$((fail + 1))
+  echo "FAIL: §8.114 采样循环有残留,或缺 ResizeObserver 盯高度"; fail=$((fail + 1))
 fi
-if has "$APPJS" 'if (seq !== repinSeq || !store.nearBottom) return;' &&
-   has "$APPJS" '} else if (++stable >= REPIN_STABLE_FRAMES) {' &&
-   has "$(cat "$(dirname "$0")/ui-jump.html")" 'repinUntilStable' &&
-   has "$(cat "$(dirname "$0")/ui-jump.html")" 'REPIN_STABLE_FRAMES'; then
-  echo "PASS: 采样停下来有三条硬条件(又渲染了 / 用户往上滚了 / 高度稳住了),ui-jump 里有这组断言"; pass=$((pass + 1))
+if has "$(cat "$(dirname "$0")/ui-jump.html")" '(前置)长会话不再挂 cvmany(§8.114)' &&
+   has "$(cat "$(dirname "$0")/ui-jump.html")" '连续 20 次小步上滚不被弹回(stuck<=1)'; then
+  echo "PASS: ui-jump 锁住「cvmany 不再挂」与「上滚不被估值落定弹回」"; pass=$((pass + 1))
 else
-  echo "FAIL: 采样没有停手条件,或 ui-jump.html 里没有这组断言"; fail=$((fail + 1))
+  echo "FAIL: ui-jump.html 缺 §8.114 的断言"; fail=$((fail + 1))
 fi
 # §8.46:「图迟一步撑开」不再跟时间赌 —— ResizeObserver 盯内容高度,只要还贴着底就补
 if has "$APPJS" 'function syncRepinWatch()' && has "$APPJS" 'new ResizeObserver(' &&
@@ -2785,7 +2778,6 @@ if has "$APPJS" 'bottom: atBottom(box)' &&
    has "$APPJS" 'if (pending.bottom)' &&
    has "$APPJS" 'pinBottom(box);' &&
    has "$APPJS" 'atB = true;' &&
-   has "$APPJS" 'pinned = true;' &&
    has "$(cat "$(dirname "$0")/ui-layout.html")" '贴底时锚点记下 bottom=true' &&
    has "$(cat "$(dirname "$0")/ui-layout.html")" '切走前在底部 → 切回来仍贴底(新消息也顶不掉)'; then
   echo "PASS: §8.76 滚动锚点带 bottom 标记,切回底部的会话直接重新贴底(新消息也顶不掉)"; pass=$((pass + 1))

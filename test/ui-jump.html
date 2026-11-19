@@ -907,41 +907,24 @@
       await selectSession('ses_a');
       T('diff 视图 / 分栏宽窄变过 → 也不接旧 DOM', box.querySelector('.msg') !== nodeGen2, domGen);
 
-      /* ============ 10. 贴完底再跟几帧:估值落定不许把底顶歪(§8.36) ============
-       * cvmany 下 scrollHeight 是估值,浏览器是【贴完之后】才把它落定的 —— 一落定
-       * scrollTop 就被夹回去,而这时往往已经没有下一次渲染来纠正(事件不来就永远停着)。
-       * 这一段用「内容突然变高」模拟那次落定:老写法里没人管,于是停在最新消息上面一截。 */
-      T('有 repinUntilStable,收手条件是「高度稳定」+ 一道自保上限(§8.46:不再盯时间)',
-        typeof repinUntilStable === 'function' && REPIN_STABLE_FRAMES >= 2 && REPIN_MAX_MS >= 1000,
-        typeof repinUntilStable + '/' + REPIN_STABLE_FRAMES + '/' + REPIN_MAX_MS);
+      /* ============ 10. 盯内容高度(ResizeObserver)+ §8.114 去掉估值后上滚不再被弹回 ============
+      * 旧版「贴完底再跟几帧」的 repinUntilStable 采样循环是为 cvmany 的离屏估值
+      * 贴底后才落定而设的;§8.114 撤掉 content-visibility 后 scrollHeight 一直是
+      * 真实高度,那套循环连同 repinSeq 一并撤掉,「内容变高要贴底」只剩
+      * ResizeObserver 这只眼(图迟一步撑开 / <details> 展开),判据照旧是
+      * 「还贴着底」,用户翻上去了绝不拽。 */
+      T('repinUntilStable 已随 §8.114 撤掉(不再需要跟估值落定)', typeof repinUntilStable === 'undefined');
       // §8.66 起进入会话会恢复上次阅读位置;这一组要先造出「第一次打开」的落底状态。
       sessionStorage.removeItem('ocs.scroll');
-      await selectSession('ses_long'); // 60 条 → cvmany 挂着
+      await selectSession('ses_long'); // 60 条(§8.114:不再挂 cvmany,高度全是真的)
       await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
-      T('(前置)长会话挂着 cvmany', box.classList.contains('cvmany'));
+      T('(前置)长会话不再挂 cvmany(§8.114)', box.classList.contains('cvmany') === false);
       T('(前置)此刻在底部', maxTop() - box.scrollTop < 2, box.scrollTop + '/' + maxTop());
       /* 「盯内容高度」那只眼:每次渲染收尾都把 #messages 的子元素交给 ResizeObserver */
       T('renderMessages 收尾时把内容元素全交给 ResizeObserver(不是常驻 rAF)',
         typeof syncRepinWatch === 'function' && typeof setupRepinWatch === 'function' &&
         repinSeen.size === box.children.length,
         repinSeen.size + '/' + box.children.length);
-      /* 高度稳的时候两帧就收手,不再一路跟满 REPIN_MAX_MS。
-       * 先等高度真的稳住:刚切进这条 60 条的会话时,估值还在落定。 */
-      var hPrev = -1;
-      var hSame = 0;
-      for (var gi9 = 0; gi9 < 30 && hSame < 3; gi9++) {
-        await tick();
-        if (box.scrollHeight === hPrev) hSame++;
-        else { hSame = 0; hPrev = box.scrollHeight; }
-      }
-      T('(前置)高度已经稳住(估值落定完了)', hSame >= 3, hSame);
-      var pins = 0;
-      var realPin = pinBottom;
-      pinBottom = function (b) { pins++; return realPin(b); };
-      repinUntilStable(box);
-      await tick(); await tick(); await tick(); await tick(); await tick();
-      pinBottom = realPin;
-      T('高度连续两帧没变就收手(以前是白等满 800ms)', pins === 1, pins);
       var grow = document.createElement('div');
       grow.style.height = '600px';
       box.appendChild(grow);
@@ -993,10 +976,25 @@
       box.scrollTop = box.scrollHeight;
       await tick();
 
-      /* 新一轮渲染要把上一轮采样作废 —— 否则它会在新内容上乱贴位置 */
-      var seq0 = repinSeq;
-      await loadMessages();
-      T('每一次渲染都把上一轮采样作废(repinSeq 涨了)', repinSeq > seq0, seq0 + '→' + repinSeq);
+      /* ============ 11. §8.114:去掉 content-visibility 后,上滚不再被「估值落定」弹回 ============
+      * 根因:content-visibility:auto 用 220px 估值占位,往上翻时离屏消息第一次排版、
+      * 高度突变,浏览器滚动锚定把 scrollTop 顶回去 —— 滚轮在转画面却不动,等估值
+      * 落定后「突然又能翻」(无头浏览器实测一次回弹 2380px)。 */
+      T('§8.114 .msg 不再有 content-visibility:auto(估值高度撤了)',
+        getComputedStyle(box.querySelector('.msg')).contentVisibility !== 'auto');
+      box.scrollTop = box.scrollHeight;
+      await waitUntil(function () { return maxTop() - box.scrollTop < 2; });
+      var stuck = 0;
+      for (var k11 = 0; k11 < 20; k11++) {
+        var want = Math.max(0, box.scrollTop - 120);
+        box.scrollTop = want;
+        await tick();
+        if (box.scrollTop - want > 4) stuck++;
+      }
+      T('§8.114 连续 20 次小步上滚不被弹回(stuck<=1)', stuck <= 1, stuck);
+      box.scrollTop = box.scrollHeight;
+      await tick();
+
 
       document.getElementById('results').textContent = out.join('\n');
       document.title = 'FAIL=' + out.filter(function (l) { return l.indexOf('FAIL') === 0; }).length + ' TOTAL=' + out.length;
