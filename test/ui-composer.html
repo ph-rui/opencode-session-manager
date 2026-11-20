@@ -544,6 +544,29 @@
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       inputUserH = 0;
 
+      /* §8.115 输入路径不再读主文档排版:自动长高改用离屏镜像量,且高度没变不写回。
+         起因:长会话(3000+ 节点)下每条输入先 height:auto 再读 scrollHeight,一次
+         15~17ms 的整篇强制排版,打字慢半拍。 */
+      T('L8 §8.115 自动长高走离屏镜像', typeof inputMirrorEl === 'function');
+      var shReads = 0;
+      Object.defineProperty(inp, 'scrollHeight', {
+        configurable: true,
+        get: function () { shReads++; return 15; },
+      });
+      inp.value = '第一行\n第二行\n第三行\n第四行';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      T('L9 §8.115 输入时不再读 textarea.scrollHeight(不强制整篇排版)', shReads === 0, shReads);
+      var hMirror = inp.clientHeight;
+      T('L10 §8.115 镜像量出来的高度仍然跟正文走', hMirror > hBase + 2, { h: hMirror, base: hBase });
+      var styleWrites = 0;
+      var moH = new MutationObserver(function (recs) { styleWrites += recs.length; });
+      moH.observe(inp, { attributes: true, attributeFilter: ['style'] });
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+      moH.disconnect();
+      T('L11 §8.115 高度没变就不写 style.height(不触发排版)', styleWrites === 0, styleWrites);
+      delete inp.scrollHeight;
+
       window.matchMedia = realMM;
 
       document.getElementById('results').textContent = out.join('\n');

@@ -116,7 +116,7 @@
     var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
     var AID = 'msg_a1';
     var ev = function (type, data) { return { id: 'evt_x', type: type, data: data }; };
-    var feed = function (type, data) { handleEvent(ev(type, data)); paintLiveDelta(); };
+    var feed = function (type, data) { handleEvent(ev(type, data)); paintLiveDelta(); flushRenderMessages(); };
     var view = function (id) { return liveView(id); };
     var el = function (id) { var r = msgEls.get(id); return r && r.el; };
     var lkNode = function (t, o) { var e = el(AID); return e && e.querySelector('[data-lk="' + t + ':' + o + '"]'); };
@@ -341,10 +341,12 @@
       T('带 diff 的 progress 仍不算结构变化', rpDiff === false);
       T('指纹把 metadata 算进去了', toolMetaSig(view(AID).byKey['tool:call_e']).length > 0);
       handleEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: filesMeta }));
+      flushRenderMessages();
       T('progress 送来的 diff 立刻上屏(消息被重绘)', el(AID) !== elBeforeDiff);
       T('diff 行渲染进 DOM', !!el(AID).querySelector('.diff .dl.add') && !!el(AID).querySelector('.diff .dl.del'));
       var elAfterDiff = el(AID);
       handleEvent(ev('session.tool.progress', { sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: filesMeta }));
+      flushRenderMessages();
       T('metadata 没变的 progress 不重建 DOM', el(AID) === elAfterDiff);
 
       /* ---------------- step.ended:用量 ---------------- */
@@ -1153,6 +1155,7 @@
         q('#messages').innerHTML = '';
         handleEvent(ev('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_raf', started: 1 }));
         handleEvent(ev('session.text.started', { sessionID: 'ses_a', assistantMessageID: 'msg_raf', ordinal: 0 }));
+        flushRenderMessages(); // §8.115:结构重绘改成按帧合并,这里先让它落地再数局部绘制
         var realPaint = paintLiveDelta;
         var paints = 0;
         paintLiveDelta = function () { paints++; return realPaint.apply(this, arguments); };
@@ -1467,6 +1470,63 @@
         el(AD4) && el(AD4).textContent.indexOf('服务端全文的思考过程') >= 0 &&
         el(AD4).textContent.indexOf('本地流式的思考') < 0);
       T('带全文的收工消息:思考块照常画', !!el(AD4).querySelector('details.reasoning'));
+
+      /* ---------------- §8.115 结构重绘节流:一阵工具增量只画一两帧 ----------------
+       * 用户报长会话运行中整页像 PPT、面板标签 8.6% CPU。每条 session.tool.progress
+       * 都整表重绘一次(实测 7~10ms),工具跑动期间这类事件很密;改成按帧合并,最快
+       * ~90ms 一次,尾随一帧保证最后状态落地。 */
+      var waitMs = function (ms) {
+        return new Promise(function (res) {
+          var t0 = performance.now();
+          var step = function () {
+            if (performance.now() - t0 >= ms) res();
+            else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        });
+      };
+      store.live.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      handleEvent(ev('session.step.started', { sessionID: 'ses_a', assistantMessageID: 'msg_thr', started: 1 }));
+      handleEvent(ev('session.tool.input.started', { sessionID: 'ses_a', assistantMessageID: 'msg_thr', id: 'call_thr', name: 'edit' }));
+      flushRenderMessages();
+      await waitMs(140);
+      T('(前置)节流用例的流式消息已在屏上', !!el('msg_thr'));
+
+      var rmThr = 0;
+      var origThr = window.renderMessages;
+      window.renderMessages = function () { rmThr++; return origThr.apply(this, arguments); };
+      for (var ti = 0; ti < 8; ti++) {
+        handleEvent(ev('session.tool.progress', {
+          sessionID: 'ses_a', assistantMessageID: 'msg_thr', id: 'call_thr',
+          metadata: { files: [{ file: 'a.txt', status: 'modified', additions: ti + 1, deletions: 0,
+            patch: '@@ -1 +1 @@\n-a\n+b' + ti + '\n' }], truncated: false },
+        }));
+      }
+      var rmBurstNow = rmThr;
+      T('§8.115 一阵 8 条结构事件不会同步画 8 次', rmBurstNow <= 1, rmBurstNow);
+      await waitMs(260);
+      var rmBurstEnd = rmThr;
+      window.renderMessages = origThr;
+      T('§8.115 一阵结构事件最终只落地 1~2 次重绘', rmBurstEnd >= 1 && rmBurstEnd <= 2, rmBurstEnd);
+      T('§8.115 尾随那一帧把最后的状态画上屏',
+        !!el('msg_thr') && !!el('msg_thr').querySelector('.tadd') &&
+          el('msg_thr').querySelector('.tadd').textContent.indexOf('8') >= 0,
+        el('msg_thr') && el('msg_thr').querySelector('.tadd') && el('msg_thr').querySelector('.tadd').textContent);
+      T('§8.115 flushRenderMessages 能把排队的重绘立刻落地',
+        typeof flushRenderMessages === 'function' &&
+          (function () {
+            var before = q('#messages').textContent;
+            handleEvent(ev('session.tool.progress', {
+              sessionID: 'ses_a', assistantMessageID: 'msg_thr', id: 'call_thr',
+              metadata: { files: [{ file: 'a.txt', status: 'modified', additions: 9, deletions: 0, patch: 'x' }], truncated: false },
+            }));
+            flushRenderMessages();
+            return q('#messages').textContent !== before;
+          })());
 
       /* 取消选中 → 收起 */
       store.live.clear();

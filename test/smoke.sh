@@ -3101,7 +3101,7 @@ COMP_PAGE=$(cat "$(dirname "$0")/ui-composer.html")
 if has "$APPJS" 'function syncInputHeight()' &&
    has "$APPJS" 'let inputUserH = 0;' &&
    has "$APPJS" "inp.addEventListener('input', () => { disarmInterrupt(); syncInputHeight(); });" &&
-   has "$APPJS" "inp.addEventListener('resize', () => { inputUserH = inp.clientHeight; });" &&
+   has "$APPJS" "inp.addEventListener('resize', () => { inputUserH = inp.clientHeight; refreshInputMetrics(inp); });" &&
    has "$APPJS" 'if (el) { el.value = draftText(sid); syncInputHeight(); }' &&
    has "$CSS" 'max-height: 45vh;' &&
    has "$COMP_PAGE" 'L2 六行输入自动长到放得下(框内无需滚动)' &&
@@ -3154,6 +3154,32 @@ if has "$APPJS" 'function syncCustomDim(w, custom) {' &&
   echo "PASS: §8.113 点选项不清空自填框(置灰提示 / 最后动的一侧为准)与浏览器断言都在"; pass=$((pass + 1))
 else
   echo "FAIL: §8.113 的自填框保留 / 置灰 / 断言缺了一块"; fail=$((fail + 1))
+fi
+
+# ---- R51 组:长会话运行中的 CPU / 输入延迟(§8.115)----
+# 用户报长会话运行中整页像 PPT、面板标签 8.6% CPU、打字慢半拍。三处改动:
+# 结构重绘按 ~90ms 合并、流式期间 ResizeObserver 不重复贴底、输入框自动长高改
+# 离屏镜像量(不再读 textarea.scrollHeight)、草稿合并写 sessionStorage。
+STREAM_PAGE=$(cat "$(dirname "$0")/ui-stream.html")
+JUMP_PAGE=$(cat "$(dirname "$0")/ui-jump.html")
+COMPOSER_PAGE=$(cat "$(dirname "$0")/ui-composer.html")
+if has "$APPJS" 'function renderMessagesSoon()' &&
+   has "$APPJS" 'const REPAINT_MIN_GAP_MS = 90' &&
+   has "$APPJS" 'if (repaint && liveForSid(store.selected)) renderMessagesSoon();' &&
+   has "$APPJS" 'function flushRenderMessages()' &&
+   has "$APPJS" 'if (openLiveForSid(store.selected)) return;' &&
+   has "$APPJS" 'function inputMirrorEl()' &&
+   has "$APPJS" 'mirror.textContent = el.value' &&
+   has "$APPJS" 'if (Math.abs(h - inputAppliedH) < 0.5) return;' &&
+   has "$APPJS" 'function flushDraft()' &&
+   has "$APPJS" 'if (!draftTimer) draftTimer = setTimeout(flushDraft, DRAFT_WRITE_MS);' &&
+   has "$CSS" '.cinput-mirror {' &&
+   has "$STREAM_PAGE" '§8.115 一阵结构事件最终只落地 1~2 次重绘' &&
+   has "$JUMP_PAGE" '§8.115 流式缓冲开着时 RO 长高不再重复贴底' &&
+   has "$COMPOSER_PAGE" '§8.115 输入时不再读 textarea.scrollHeight'; then
+  echo "PASS: §8.115 结构重绘合并 / 流式期间 RO 让路 / 镜像量高 / 草稿合并写都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.115 的性能改动或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
 echo

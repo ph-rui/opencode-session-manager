@@ -3689,6 +3689,10 @@ function setupScrollMemory() {
   window.addEventListener('pagehide', saveScrollAnchor); // 关页/刷新前兜一次,避免节流丢掉最后一个位置
   // 刷新 / 关页也把输入框正文存一次:程序化补全(选命令、选 @ 引用)不走 input 事件
   window.addEventListener('pagehide', () => saveCurrentDraft(store.selected));
+  // 手机上切后台 / 直接锁屏不一定有 pagehide:一藏起来就把草稿刷下去
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) saveCurrentDraft(store.selected);
+  });
 }
 
 /* ---------------- 窄屏「滚到顶自动拉更旧」 ----------------
@@ -3857,6 +3861,9 @@ function syncRepinWatch() {
   if (!repinObs) {
     repinObs = new ResizeObserver(() => {
       if (!store.selected || !store.nearBottom) return;
+      /* §8.115 流式缓冲开着:长高的就是流式正文,paintLiveDelta() 每帧已经贴过底。
+       * 这里再贴一次等于同一份排版成本付两遍;收工后(缓冲关掉)照旧接住迟到的撑开。 */
+      if (openLiveForSid(store.selected)) return;
       // 刚点过(多半是点开 <details> / 点消息里的按钮):内容长高是用户自己要的,别抢
       if (Date.now() - (store.gestureAt || 0) < REPIN_GESTURE_MS) return;
       pinBottom(box);
@@ -7027,7 +7034,49 @@ function flushProgRender() {
   syncRepinWatch();
 }
 
+/* §8.115 结构重绘合并:流式期间的高频事件不再一条一画。
+ *
+ * 用户报长会话运行中整页像 PPT、面板标签占 8.6% CPU。一条 session.tool.progress
+ * 只改 metadata,却按「指纹变了」整条重绘一次(实测 7~10ms);工具跑动期间这类事件
+ * 很密,单这一项就吃掉几个百分点。流式正文仍走 paintLiveText() 的局部重绘,这里
+ * 只合并「新建节点 / 工具状态 / 元数据」这类结构重绘:最快 ~90ms 一次,尾随一帧
+ * 保证最后状态一定落地;切会话 / 用户操作这类直接调用 renderMessages() 的路径不受影响。 */
+const REPAINT_MIN_GAP_MS = 90;
+let repaintRaf = 0;
+let repaintedAt = 0;
+
+function renderMessagesSoon() {
+  if (repaintRaf) return;
+  const run = () => {
+    repaintRaf = 0;
+    if (Date.now() - repaintedAt < REPAINT_MIN_GAP_MS) {
+      repaintRaf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(run) : setTimeout(run, 16);
+      return;
+    }
+    renderMessages();
+  };
+  repaintRaf = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(run) : setTimeout(run, 16);
+}
+
+function cancelScheduledRender() {
+  if (!repaintRaf) return;
+  if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(repaintRaf);
+  else clearTimeout(repaintRaf);
+  repaintRaf = 0;
+}
+
+/* 手动落地:测试,以及「切会话 / 收工」这类必须立刻看到结果的路径。 */
+function flushRenderMessages() {
+  if (!repaintRaf) return;
+  cancelScheduledRender();
+  renderMessages();
+}
+
 function renderMessages() {
+  repaintedAt = Date.now(); // §8.115 节流窗口的起点(直接调用也算一次重绘)
+  cancelScheduledRender(); // 已经有整表重绘在跑:排队那一帧不用再来一次
   flushProgRender(); // §8.99 上一轮还没补完的冷启分批先补完:这次重绘要照完整集合比对
   const box = $('#messages');
   cancelScheduledLivePaint(); // 整表重绘会覆盖这一帧的增量内容,排队的那一帧别再白跑
@@ -9862,13 +9911,30 @@ function commandKey(e) {
 const DRAFT_KEY = 'ocs.drafts';
 const DRAFT_MAX = 20;
 
+let draftCache = null;   // §8.115 内存权威:输入时只改这一份,不再每键 parse/stringify
+let draftTimer = null;
+const DRAFT_WRITE_MS = 250;
+
 function readDraftMap() {
+  if (draftCache) return draftCache;
   try {
     const m = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}');
-    return m && typeof m === 'object' ? m : {};
+    draftCache = m && typeof m === 'object' ? m : {};
   } catch (_) {
-    return {};
+    draftCache = {};
   }
+  return draftCache;
+}
+
+/* 合并写:Chromium 的 sessionStorage 写走的是同步路径,每键写一次等于每键一次
+ * 存储调用;打字期间只记在内存里,尾随 250ms 落一次,切会话 / 关页 / 发送时立刻刷。
+ * 读走内存缓存,所以「存完马上读」(草稿回填、测试)拿到的永远是最新值。 */
+function flushDraft() {
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+  if (!draftCache) return;
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draftCache));
+  } catch (_) {}
 }
 
 function draftText(sid) {
@@ -9885,9 +9951,7 @@ function saveDraft(sid, text) {
   if (t.trim()) m[sid] = t;
   const keys = Object.keys(m);
   for (let i = 0; i < keys.length - DRAFT_MAX; i++) delete m[keys[i]];
-  try {
-    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(m));
-  } catch (_) {}
+  if (!draftTimer) draftTimer = setTimeout(flushDraft, DRAFT_WRITE_MS);
 }
 
 // 当前输入框里的「真草稿」:在历史里翻的时候,显出来的是旧消息,真正的草稿在 histDraft。
@@ -9895,6 +9959,7 @@ function saveCurrentDraft(sid) {
   if (!sid) return;
   const el = $('#input');
   saveDraft(sid, store.histAt >= 0 ? store.histDraft : (el ? el.value : ''));
+  flushDraft(); // 切会话 / 回列表 / 关页:这一下必须落盘
 }
 
 function restoreDraft(sid) {
@@ -10060,14 +10125,75 @@ async function runCommand(parsed, sid, files, busy) {
  * 高度时记一笔(resize 事件),自动调整只会比用户的高度更大、不会把它缩回去;
  * 浏览器不发 resize 时 inputUserH 一直是 0,自动调整全权负责,互不影响。 */
 let inputUserH = 0;
+let inputMirror = null;   // 离屏镜像:内容高度只在它身上排版
+let inputMetrics = null;  // 宽度 / 字体 / 内边距缓存:输入路径不再读主文档布局
+let inputAppliedH = 0;    // 上次写回的高度,没变就不写(不写就不触发排版)
+let inputObs = null;
+
+/* §8.115 自动长高不再「先 height:auto 再读自己的 scrollHeight」。
+ * 那条老写法每敲一个字都把文档弄脏再强制排版一次:长会话实测 15~17ms/键,
+ * 打字看着慢半拍,而且这段排版正好和流式重绘抢主线程。现在把正文抄进一个离屏
+ * 镜像 div 量高度 —— 只排镜像那一小块;宽度 / 字体只在 ResizeObserver 说输入框
+ * 尺寸变了时重量一次。高度没变就一个字节都不写回。 */
+function inputMirrorEl() {
+  if (!inputMirror) {
+    inputMirror = document.createElement('div');
+    inputMirror.className = 'cinput-mirror';
+    inputMirror.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(inputMirror);
+  }
+  return inputMirror;
+}
+
+function inputPx(v) {
+  const n = parseFloat(v);
+  return isFinite(n) ? n : 0;
+}
+
+function refreshInputMetrics(el) {
+  const inp = el || $('#input');
+  if (!inp || !inp.offsetWidth) { inputMetrics = null; return null; }
+  const cs = getComputedStyle(inp);
+  const pL = inputPx(cs.paddingLeft);
+  const pR = inputPx(cs.paddingRight);
+  inputMetrics = {
+    w: Math.max(0, inp.clientWidth - pL - pR), // content-box 宽:镜像自己补内边距
+    pT: inputPx(cs.paddingTop),
+    pB: inputPx(cs.paddingBottom),
+    bT: inputPx(cs.borderTopWidth),
+    bB: inputPx(cs.borderBottomWidth),
+    font: cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + '/' + cs.lineHeight + ' ' + cs.fontFamily,
+    ls: cs.letterSpacing,
+    ws: cs.wordSpacing,
+  };
+  return inputMetrics;
+}
+
+function inputMirrorCss(m) {
+  return 'position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none;' +
+    'box-sizing:content-box;margin:0;padding:0;border:0;' +
+    'white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;' +
+    'font:' + m.font + ';letter-spacing:' + m.ls + ';word-spacing:' + m.ws + ';' +
+    'width:' + m.w + 'px;';
+}
+
 function syncInputHeight() {
   const el = $('#input');
-  if (!el || !el.offsetWidth) return; // 底板收起(display:none)量不到高度,别把高度写成 0
-  const cs = getComputedStyle(el);
-  const border = parseFloat(cs.borderTopWidth || '0') + parseFloat(cs.borderBottomWidth || '0');
-  el.style.height = 'auto';
-  // scrollHeight 与 inputUserH 都是【内高】口径,写回 style 时补上边框(border-box)
-  const h = Math.max(el.scrollHeight, inputUserH) + border;
+  if (!el) return;
+  const m = inputMetrics || refreshInputMetrics(el);
+  if (!m) return; // 底板收起时量不到宽度:等 ResizeObserver 在展开后再重量
+  const mirror = inputMirrorEl();
+  mirror.style.cssText = inputMirrorCss(m);
+  mirror.textContent = el.value;
+  const contentH = mirror.scrollHeight;
+  // 空框 / 单行的下限:输入框默认两行高(rows=2),别让底板自己缩成一行
+  mirror.textContent = 'x\nx';
+  const minH = mirror.scrollHeight;
+  // scrollHeight / inputUserH 都是【内高】口径,写回 style 时补上内边距与边框(border-box)
+  const pad = m.pT + m.pB + m.bT + m.bB;
+  const h = Math.max(contentH + pad, minH + pad, inputUserH);
+  if (Math.abs(h - inputAppliedH) < 0.5) return;
+  inputAppliedH = h;
   el.style.height = h + 'px';
 }
 
@@ -10077,7 +10203,14 @@ function setupComposerKeys() {
   /* 输入框一有动静就把「Esc 上膛」收掉(照 TUI 的 handleInputClear:改了输入就等于
    * 放弃这次中断),免得几秒前的半次 Esc 突然把回合砍了。顺手把高度量到全文。 */
   inp.addEventListener('input', () => { disarmInterrupt(); syncInputHeight(); });
-  inp.addEventListener('resize', () => { inputUserH = inp.clientHeight; });
+  inp.addEventListener('resize', () => { inputUserH = inp.clientHeight; refreshInputMetrics(inp); });
+  /* §8.115 宽度 / 字体变了才重量一次(展开底板、拖分栏、窗口缩放、窄屏翻面);
+   * 输入路径里既不读 #input.clientWidth,也不读它的 scrollHeight。 */
+  refreshInputMetrics(inp);
+  if (!inputObs && typeof ResizeObserver === 'function') {
+    inputObs = new ResizeObserver(() => { refreshInputMetrics(inp); });
+    inputObs.observe(inp);
+  }
   inp.addEventListener('keydown', (e) => {
     /* Ctrl+C = TUI 的 prompt.clear:输入框有内容就清掉。只在【输入框聚焦 + 没有
      * 选中文本】时接管 —— 有选区时 Ctrl+C 仍是浏览器的复制,不能把网页复制弄坏;
@@ -10283,6 +10416,7 @@ async function send() {
         renderAttachments();
       }
       saveDraft(sid, ''); // §8.71:命令确实执行了,这份草稿就完成了使命
+      flushDraft();
       dropSessionSkills(sid); // §8.77:正文已经清空,技能选择也作废(面板命令同样)
       if (!parsed.cmd.panel) dropSessionAttachments(sid); // 服务端命令确实消费了附件,才清空
     }
@@ -10322,6 +10456,7 @@ async function send() {
     dropSessionAttachments(sid); // 发送成功才清空(失败还能原样重发)
     dropSessionSkills(sid); // §8.77:技能也随正文一起消费掉
     saveDraft(sid, ''); // §8.71:发送成功,草稿功成身退;失败则留着,切回来还能接着改
+    flushDraft();
   } catch (e) {
     alert('发送失败:' + sendErrorText(e));
     store.pending = false;
@@ -11034,8 +11169,8 @@ function handleEvent(e) {
   // diff / 诊断,这时状态没变、parts 也没变,只有 metadata 变了。
   const rec = L ? msgEls.get(L.id) : null;
   const repaint = structural || (!!L && !!rec && rec.fp !== liveSig(L));
-  // 结构变化(新 part / 工具状态 / 元数据)立刻重绘;纯文本变化只刷局部节点
-  if (repaint && liveForSid(store.selected)) renderMessages();
+  // 结构变化(新 part / 工具状态 / 元数据)按帧合并重绘(§8.115);纯文本变化只刷局部节点
+  if (repaint && liveForSid(store.selected)) renderMessagesSoon();
   else if (local) scheduleLivePaint();
   else if (closedLive) renderMessages();
 

@@ -176,7 +176,7 @@
     var qa = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
     var AID = 'msg_t1';
     var ev = function (type, data) { return { id: 'evt_x', type: type, data: data }; };
-    var feed = function (type, data) { handleEvent(ev(type, data)); };
+    var feed = function (type, data) { handleEvent(ev(type, data)); flushRenderMessages(); };
     var view = function (id) { return liveView(id); };
     var el = function (id) { var r = msgEls.get(id); return r && r.el; };
 
@@ -629,6 +629,7 @@
       handleEvent(ev('session.tool.progress', {
         sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: { files: files, truncated: false },
       }));
+      flushRenderMessages();
       T('tool.progress 之后消息被重绘(diff 立刻上屏)', el(AID) !== elBefore);
       T('diff 真的渲染进了 DOM', !!el(AID).querySelector('.diff .dl.add'));
       T('文件头也渲染进了 DOM', !!el(AID).querySelector('.dfile .dpath'));
@@ -643,6 +644,7 @@
       handleEvent(ev('session.tool.progress', {
         sessionID: 'ses_a', assistantMessageID: AID, id: 'call_e', metadata: { files: files, truncated: false },
       }));
+      flushRenderMessages();
       T('metadata 没变的 progress 不重建 DOM', el(AID) === elAfter);
 
       /* success 把状态推到已完成,摘要同时保留 diff */

@@ -1125,6 +1125,15 @@ html.narrow .diff.split .dl.pair > .side.empty { display: none; }
   max-height: 45vh;
   overflow-y: auto;
 }
+/* §8.115 自动长高的离屏镜像:正文只在它身上排版,不把主文档弄脏再强制重排。
+   宽度 / 字体 / 内边距由 app.js 按输入框的 computed style 内联写入。 */
+.cinput-mirror {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
 #send {
   /* §8.110 输入框长高时发送钮不再跟着长,与正文垂直居中(与 📎 同一规矩) */
   align-self: center;

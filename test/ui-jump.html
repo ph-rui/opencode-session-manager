@@ -976,6 +976,45 @@
       box.scrollTop = box.scrollHeight;
       await tick();
 
+      /* ============ 10b. §8.115:流式期间 ResizeObserver 不重复贴底 ============
+      * 流式增量由 paintLiveDelta() 负责贴底;同一帧内容长高又触发 ResizeObserver,
+      * 再贴一次只是把同一份排版成本付两遍。流式缓冲开着时这只眼让路,收工后照旧接住
+      * 「图迟到撑开」。 */
+      store.gestureAt = 0;
+      store.live.set('live_ro', {
+        id: 'live_ro', sid: store.selected, started: Date.now(),
+        agent: null, model: null, byKey: {}, tokens: null, cost: null,
+        finish: null, open: true,
+        parts: [{ kind: 'block', type: 'text', ordinal: 0, text: '流式正文' }],
+      });
+      renderMessages();
+      updateJumpLatest(true);
+      await tick(); await tick(); await tick(); // 先结算按钮显隐这类附带的高度变化
+      var pinCalls = 0;
+      var realPinBottom = pinBottom;
+      pinBottom = function (b) { pinCalls++; return realPinBottom.apply(null, arguments); };
+      var grow2 = document.createElement('div');
+      grow2.style.height = '300px';
+      box.appendChild(grow2);
+      syncRepinWatch();
+      pinCalls = 0;
+      await tick(); await tick();
+      T('§8.115 流式缓冲开着时 RO 长高不再重复贴底(交给增量绘制)', pinCalls === 0, pinCalls);
+      store.live.delete('live_ro');
+      renderMessages();
+      updateJumpLatest(true);
+      await tick(); await tick();
+      pinCalls = 0;
+      grow2.style.height = '500px';
+      await tick(); await tick(); await tick();
+      T('§8.115 流式结束后 RO 照旧贴底(图迟到撑开不漏)',
+        pinCalls > 0 && maxTop() - box.scrollTop < 2,
+        pinCalls + '/' + box.scrollTop + '/' + maxTop());
+      pinBottom = realPinBottom;
+      grow2.remove();
+      box.scrollTop = box.scrollHeight;
+      await tick();
+
       /* ============ 11. §8.114:去掉 content-visibility 后,上滚不再被「估值落定」弹回 ============
       * 根因:content-visibility:auto 用 220px 估值占位,往上翻时离屏消息第一次排版、
       * 高度突变,浏览器滚动锚定把 scrollTop 顶回去 —— 滚轮在转画面却不动,等估值
