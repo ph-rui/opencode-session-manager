@@ -3182,6 +3182,24 @@ else
   echo "FAIL: §8.115 的性能改动或浏览器断言缺了一块"; fail=$((fail + 1))
 fi
 
+# ---- R52 组:长会话窗口 / 长隐藏自愈 / 删会话清缓存(§8.116)----
+# 自动对账只并新消息从不替换,同一个会话开久了常驻消息数一路涨(100 条约 10ms、
+# 1200 条约 71ms)。贴着底时只留最新一页;往上翻历史不裁;长隐藏 10 分钟后丢快照。
+if has "$APPJS" 'function trimMessageWindow(page)' &&
+   has "$APPJS" 'if (!store.nearBottom || store.restoreScroll) return 0;' &&
+   has "$APPJS" 'if (!opts.older) trimMessageWindow(j.data);' &&
+   has "$APPJS" 'function shedHiddenCachesIfStale(hiddenAt, now)' &&
+   has "$APPJS" 'const HIDDEN_SHED_MS = 10 * 60 * 1000;' &&
+   has "$APPJS" 'store.history.delete(id);' &&
+   has "$STREAM_PAGE" '§8.116 贴底对账只保留最新一页' &&
+   has "$STREAM_PAGE" '§8.116 用户往上翻时不裁剪' &&
+   has "$STREAM_PAGE" '§8.116 隐藏超过 10 分钟:清掉 DOM / 消息快照' &&
+   has "$STREAM_PAGE" '§8.116 删会话清输入历史 / 附件 / 技能 / DOM 快照'; then
+  echo "PASS: §8.116 贴底窗口 / 长隐藏自愈 / 删会话清缓存都在"; pass=$((pass + 1))
+else
+  echo "FAIL: §8.116 的窗口、自愈或缓存清理缺了一块"; fail=$((fail + 1))
+fi
+
 echo
 echo "结果: $pass 通过, $fail 失败"
 [ "$fail" = 0 ]

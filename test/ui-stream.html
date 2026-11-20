@@ -1528,6 +1528,79 @@
             return q('#messages').textContent !== before;
           })());
 
+      /* ---------------- §8.116 长会话窗口 / 长隐藏自愈 / 删会话清缓存 ----------------
+       * 自动对账原来只往 store.messages 里并、从不替换:同一个会话开一整天或往上翻过
+       * 很多页,常驻消息数一路涨,每次结构重绘的成本跟着线性涨(实测 100 条约 10ms、
+       * 1200 条约 71ms)。贴着底时只保留最新一页;往上翻历史时一律不裁。 */
+      store.live.clear();
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      store.selected = 'ses_a';
+      store.restoreScroll = null;
+      var WINDOW_ALL = [];
+      for (var wi = 0; wi < 250; wi++) {
+        WINDOW_ALL.push({ id: 'msg_w' + wi, type: 'user', time: { created: 2000 + wi }, text: '历史 ' + wi });
+      }
+      WINDOW_ALL.forEach(function (m) { store.messages.set(m.id, m); });
+      renderMessages();
+      store.nearBottom = true;
+      window.SERVER['ses_a'] = WINDOW_ALL.slice(-100); // 服务端最新一页
+      await loadMessages({ older: false });
+      T('§8.116 贴底对账只保留最新一页', store.messages.size === 100, store.messages.size);
+      T('§8.116 被裁掉的消息 DOM 一并删除',
+        !msgEls.has('msg_w0') && q('#messages').textContent.indexOf('历史 0') < 0,
+        q('#messages').textContent.indexOf('历史 0'));
+      T('§8.116 最新一页一条不少', store.messages.has('msg_w249') && msgEls.has('msg_w249'));
+
+      /* 往上翻着的时候不裁:读历史不能被抽走 */
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      WINDOW_ALL.forEach(function (m) { store.messages.set(m.id, m); });
+      renderMessages();
+      store.nearBottom = false;
+      window.SERVER['ses_a'] = WINDOW_ALL.slice(-100);
+      await loadMessages({ older: false });
+      T('§8.116 用户往上翻时不裁剪', store.messages.size === 250, store.messages.size);
+
+      /* 待还原锚点时不裁(切回会话那一趟) */
+      store.messages.clear();
+      msgEls.clear();
+      q('#messages').innerHTML = '';
+      WINDOW_ALL.forEach(function (m) { store.messages.set(m.id, m); });
+      renderMessages();
+      store.nearBottom = true;
+      store.restoreScroll = { id: 'msg_w3', top: 0 };
+      await loadMessages({ older: false });
+      T('§8.116 待还原锚点时也不裁剪', store.messages.size === 250, store.messages.size);
+      store.restoreScroll = null;
+
+      /* 长隐藏自愈:10 分钟内不动,超过就丢掉快照 */
+      msgDomCache.clear();
+      store.msgCache.clear();
+      msgDomCache.set('ses_x', {});
+      store.msgCache.set('ses_x', { messages: new Map() });
+      T('§8.116 隐藏不足 10 分钟:不清缓存',
+        shedHiddenCachesIfStale(Date.now() - 1000, Date.now()) === 0 &&
+          msgDomCache.size === 1 && store.msgCache.size === 1);
+      T('§8.116 隐藏超过 10 分钟:清掉 DOM / 消息快照',
+        shedHiddenCachesIfStale(Date.now() - HIDDEN_SHED_MS - 1000, Date.now()) === 2 &&
+          msgDomCache.size === 0 && store.msgCache.size === 0);
+
+      /* 删会话时把按会话的缓存一起清掉 */
+      store.history.set('ses_del', ['一句话']);
+      attachCache.set('ses_del', [{ id: 'a' }]);
+      skillCache.set('ses_del', new Map([['k', 'v']]));
+      msgDomCache.set('ses_del', {});
+      store.active.set('ses_del', 'busy');
+      store.asks.set('form:ask_del', { kind: 'form', id: 'ask_del', sessionID: 'ses_del', data: {} });
+      handleEvent(ev('session.deleted', { info: { id: 'ses_del' } }));
+      T('§8.116 删会话清输入历史 / 附件 / 技能 / DOM 快照',
+        !store.history.has('ses_del') && !attachCache.has('ses_del') &&
+          !skillCache.has('ses_del') && !msgDomCache.has('ses_del'));
+      T('§8.116 删会话清未答复的问询', !store.asks.has('form:ask_del'));
+
       /* 取消选中 → 收起 */
       store.live.clear();
       store.messages.clear();

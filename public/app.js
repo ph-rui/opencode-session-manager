@@ -4333,6 +4333,30 @@ function msgPageSize() {
     : MSG_PAGE_WIDE;
 }
 
+/* §8.116 长会话窗口:贴着底时自动对账只保留最新一页。
+ * loadMessages 原来只往 store.messages 里并、从不删:同一个会话开一整天,或者往上翻过
+ * 很多页,常驻消息数会一路涨。实测渲染 / 对账成本约 0.3ms 一条 —— 100 条约 10ms、
+ * 400 条约 25ms、1200 条约 71ms(DOM 5.3 万节点),每次结构事件都要付一遍,越用越慢。
+ * 这里只裁「用户没在看的那一头」:必须在底部(nearBottom)且没有待还原的锚点;往上翻
+ * 历史时一律不动。裁掉的消息仍能按 msgOlderCursor 逐页拉回 —— 游标就是这次整页对账
+ * 响应里的下一页游标,正好接着最新一页的边界。 */
+const MSG_WINDOW_PAGES = 1;
+
+function trimMessageWindow(page) {
+  if (!page || !page.length) return 0;
+  if (!store.nearBottom || store.restoreScroll) return 0;
+  const cap = msgPageSize() * MSG_WINDOW_PAGES;
+  if (store.messages.size <= cap) return 0;
+  const keep = new Set(page.map((m) => m && m.id));
+  let dropped = 0;
+  for (const mid of Array.from(store.messages.keys())) {
+    if (keep.has(mid) || store.live.has(mid)) continue;
+    store.messages.delete(mid); // DOM 由 renderMessages 的「已不存在」清理一并删掉
+    dropped++;
+  }
+  return dropped;
+}
+
 function msgFetchTimeout() {
   return slowLink() ? MSG_FETCH_TIMEOUT_SLOW_MS : MSG_FETCH_TIMEOUT_MS;
 }
@@ -4515,6 +4539,7 @@ async function loadMessages(opts) {
         });
         store.msgOlderCursor = (j.cursor && j.cursor.next) || null;
         pruneLive();
+        if (!opts.older) trimMessageWindow(j.data); // §8.116 贴底时只保留最新一页
         if (!opts.older) dropGhostLive(id); // 只认整页对账:翻旧页那趟拿不到最新一段
         store.msgError = '';
         if (!opts.older) {
@@ -11109,6 +11134,16 @@ function handleControlEvent(e) {
       store.subs.delete(id);
       store.inbox.delete(id);
       for (const [mid, L] of store.live) if (L.sid === id) store.live.delete(mid);
+      /* §8.116 按会话留着的几份缓存(输入历史 / 待发附件 / 技能 / DOM 快照 / 未答复问询)
+       * 以前删会话不跟着清,长开页面里只增不减。 */
+      for (const [k, a] of store.asks) if (a && a.sessionID === id) store.asks.delete(k);
+      store.history.delete(id);
+      store.compacting.delete(id);
+      store.compactSince.delete(id);
+      store.compactText.delete(id);
+      attachCache.delete(id);
+      skillCache.delete(id);
+      msgDomCache.delete(id);
       if (store.selected === id) clearSelection();
       store.msgCache.delete(id); // §8.55 删掉的会话不再留快照
       dirty = true;
@@ -11262,6 +11297,21 @@ function sseWatchdog() {
   openEvents();
 }
 
+/* §8.116 长时间隐藏后自愈:标签页在后台挂起几个小时后回来,页面里为「切回来快一点」
+ * 留着的快照(消息页 / 整棵消息 DOM)可能已经放了很久。隐藏超过 10 分钟就把这些看不见的
+ * 部分丢掉,当前会话和滚动位置不动;回来后照常安静对账一次,顺手让 pruneLive 回收幽灵缓冲。 */
+const HIDDEN_SHED_MS = 10 * 60 * 1000;
+let hiddenSince = 0;
+
+function shedHiddenCachesIfStale(hiddenAt, now) {
+  if (!hiddenAt) return 0;
+  if ((now || Date.now()) - hiddenAt < HIDDEN_SHED_MS) return 0;
+  const n = msgDomCache.size + store.msgCache.size;
+  msgDomCache.clear();
+  store.msgCache.clear();
+  return n;
+}
+
 function setupEvents() {
   openEvents();
   if (sseWatchTimer) clearInterval(sseWatchTimer);
@@ -11269,7 +11319,14 @@ function setupEvents() {
   if (!sseWatchWired && typeof document !== 'undefined') {
     sseWatchWired = true;
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) sseWatchdog();
+      if (document.hidden) {
+        hiddenSince = Date.now();
+        return;
+      }
+      const shed = shedHiddenCachesIfStale(hiddenSince, Date.now());
+      hiddenSince = 0;
+      if (shed && store.selected) loadMessages({ older: false, auto: true, now: true });
+      sseWatchdog();
     });
   }
 }
